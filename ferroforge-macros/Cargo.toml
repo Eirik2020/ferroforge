@@ -1,0 +1,19 @@
+[package]
+name = "ferroforge-macros"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Procedural macros for the FerroForge RTIC-like application model"
+license = "MIT OR Apache-2.0"
+keywords = ["embedded", "rtic", "proc-macro"]
+categories = ["development-tools", "embedded"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+ferroforge-contracts = { path = "../ferroforge-contracts" }
+heck = "0.5"
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "visit"] }

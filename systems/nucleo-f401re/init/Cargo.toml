@@ -1,0 +1,19 @@
+[package]
+name = "ferroforge-system-nucleo-f401re-init"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+test = false
+bench = false
+
+[dependencies]
+cortex-m = "0.7.7"
+ferroforge = { path = "../../../ferroforge" }
+stm32f4xx-hal = { version = "0.23.0", default-features = false, features = ["stm32f401"] }
+
+[package.metadata.ferroforge]
+check-only-dependencies = ["ferroforge"]
+
+[workspace]

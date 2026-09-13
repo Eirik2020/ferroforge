@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+
+members = [
+    "composer",
+    "ferroforge",
+    "ferroforge-contracts",
+    "ferroforge-macros",
+    "ferroforge-renderer",
+    "systems/nucleo-f401re/app_composition",
+    "systems/nucleo-f401re-fast-blink/app_composition",
+]
+
+exclude = [
+    "embedded",
+    "generated/nucleo-f401re",
+]

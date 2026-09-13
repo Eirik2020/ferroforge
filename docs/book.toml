@@ -1,0 +1,19 @@
+[book]
+title = "FerroForge"
+description = "Architecture, current implementation, and the task-composition plan"
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+create-missing = false
+
+[rust]
+edition = "2024"
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+
+[output.html.playground]
+runnable = false

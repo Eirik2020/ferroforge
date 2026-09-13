@@ -1,0 +1,15 @@
+cargo:rustc-check-cfg=cfg(armv6m)
+cargo:rustc-check-cfg=cfg(armv7em)
+cargo:rustc-check-cfg=cfg(armv7m)
+cargo:rustc-check-cfg=cfg(armv8m)
+cargo:rustc-check-cfg=cfg(armv8m_base)
+cargo:rustc-check-cfg=cfg(armv8m_main)
+cargo:rustc-check-cfg=cfg(cortex_m)
+cargo:rustc-check-cfg=cfg(has_fpu)
+cargo:rustc-cfg=cortex_m
+cargo:rustc-cfg=armv7m
+cargo:rustc-cfg=armv7em
+cargo:rustc-cfg=has_fpu
+cargo:rustc-link-search=C:\ws\rtic-app-builder-v4\ferroforge-renderer\tests\fixtures\init-diagnostics\target\thumbv7em-none-eabihf\debug\build\cortex-m-rt-9431ca063262e924\out
+cargo:rerun-if-changed=build.rs
+cargo:rerun-if-changed=link.x.in

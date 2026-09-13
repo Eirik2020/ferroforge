@@ -1,0 +1,3 @@
+cargo::rustc-check-cfg=cfg(implementation, values("cortex-m-source-masking","cortex-m-source-masking","cortex-m-basepri","cortex-m-basepri","riscv-esp32c3","riscv-esp32c6","riscv-slic","riscv-slic"))
+cargo::rustc-cfg=implementation="cortex-m-basepri"
+cargo::rerun-if-changed=build.rs

@@ -1,0 +1,10 @@
+{
+    "rust-analyzer.diagnostics.disabled": [
+        "inactive-code"
+    ],
+    "rust-analyzer.linkedProjects": [
+        "./Cargo.toml",
+        "./embedded/Cargo.toml",
+        "./generated/nucleo-f401re/Cargo.toml"
+    ]
+}

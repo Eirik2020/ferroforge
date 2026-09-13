@@ -1,0 +1,7 @@
+# Historical documentation requires explicit user permission to access.
+/archive/
+
+# Generated output is not active documentation or source.
+/docs/book/
+/target/
+**/target/
