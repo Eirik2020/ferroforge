@@ -1,3 +1,0 @@
-cargo:rustc-link-search=C:\ws\rtic-app-builder-v4\ferroforge-renderer\tests\fixtures\rtic-layout\target\thumbv7em-none-eabihf\debug\build\defmt-f96c44db12dfe787\out
-cargo:rustc-check-cfg=cfg(c_variadic)
-cargo:rustc-check-cfg=cfg(no_cas)

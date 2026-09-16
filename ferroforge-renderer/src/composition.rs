@@ -7,12 +7,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use ferroforge_contracts::identifier_key;
+pub use ferroforge_contracts::TaskKind;
 use quote::ToTokens;
 use syn::{Expr, Ident, Type};
 
 use crate::{
     RenderError,
-    source::{DefinitionId, TaskInstance, TaskSources},
+    source::{DefinitionId, TaskInstance, TaskPackage, TaskSources, select_across},
 };
 
 pub const INITIAL_SYSTICK_TICK_HZ: u32 = 1_000;
@@ -65,6 +66,9 @@ pub struct TaskSelection {
     pub instance: String,
     pub definition: DefinitionId,
     pub priority: u8,
+    /// The interrupt this instance binds, for hardware tasks only. Per G3 a
+    /// hardware task requires one and a software task must not have one.
+    pub interrupt: Option<String>,
     pub local: Vec<ResourceBinding>,
     pub shared: Vec<ResourceBinding>,
     pub configuration: Vec<ConfigurationBinding>,
@@ -81,10 +85,17 @@ pub struct StandaloneComposition {
 pub struct ValidatedTask<'sources> {
     pub source: TaskInstance<'sources>,
     pub priority: u8,
+    pub interrupt: Option<String>,
     pub local: Vec<ResourceBinding>,
     pub shared: Vec<ResourceBinding>,
     pub configuration: Vec<ConfigurationBinding>,
     pub spawn: Vec<SpawnBinding>,
+}
+
+impl ValidatedTask<'_> {
+    pub fn kind(&self) -> TaskKind {
+        self.source.definition.contract.kind
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -93,16 +104,40 @@ pub struct ValidatedComposition<'sources> {
     pub monotonic: Option<MonotonicProfile>,
 }
 
+/// Validate a composition whose definitions all come from one package.
 pub fn validate_composition<'sources>(
     sources: &'sources TaskSources,
     composition: &StandaloneComposition,
 ) -> Result<ValidatedComposition<'sources>, RenderError> {
-    let selections = composition
+    let selections = selections(composition);
+    let instances = sources.select(&selections)?;
+    validate_selected(instances, composition)
+}
+
+/// Validate a composition drawing definitions from several packages, so a
+/// firmware can select portable software tasks and HAL-specific hardware tasks
+/// in one graph.
+pub fn validate_composition_across<'sources>(
+    packages: &[&'sources TaskPackage],
+    composition: &StandaloneComposition,
+) -> Result<ValidatedComposition<'sources>, RenderError> {
+    let selections = selections(composition);
+    let instances = select_across(packages, &selections)?;
+    validate_selected(instances, composition)
+}
+
+fn selections(composition: &StandaloneComposition) -> Vec<(&str, DefinitionId)> {
+    composition
         .tasks
         .iter()
         .map(|task| (task.instance.as_str(), task.definition.clone()))
-        .collect::<Vec<_>>();
-    let instances = sources.select(&selections)?;
+        .collect()
+}
+
+fn validate_selected<'sources>(
+    instances: Vec<TaskInstance<'sources>>,
+    composition: &StandaloneComposition,
+) -> Result<ValidatedComposition<'sources>, RenderError> {
     validate_monotonic(&instances, composition.monotonic.as_ref())?;
 
     let mut by_name = BTreeMap::new();
@@ -111,6 +146,7 @@ pub fn validate_composition<'sources>(
         by_name.insert(name, instance);
     }
     let mut resource_categories = BTreeMap::new();
+    let mut interrupt_owners: BTreeMap<String, String> = BTreeMap::new();
     let mut tasks = Vec::with_capacity(instances.len());
 
     for (selection, instance) in composition.tasks.iter().zip(&instances) {
@@ -122,9 +158,16 @@ pub fn validate_composition<'sources>(
         )?;
         validate_configuration(instance.name.as_str(), instance, selection)?;
         validate_spawns(instance.name.as_str(), instance, selection, &by_name)?;
+        validate_interrupt(
+            instance.name.as_str(),
+            instance,
+            selection,
+            &mut interrupt_owners,
+        )?;
         tasks.push(ValidatedTask {
             source: instance.clone(),
             priority: selection.priority,
+            interrupt: selection.interrupt.clone(),
             local: selection.local.clone(),
             shared: selection.shared.clone(),
             configuration: selection.configuration.clone(),
@@ -136,6 +179,34 @@ pub fn validate_composition<'sources>(
         tasks,
         monotonic: composition.monotonic.clone(),
     })
+}
+
+/// G3: hardware tasks require an interrupt binding, software tasks do not.
+/// Two instances cannot own the same interrupt.
+fn validate_interrupt(
+    instance_name: &str,
+    instance: &TaskInstance<'_>,
+    selection: &TaskSelection,
+    owners: &mut BTreeMap<String, String>,
+) -> Result<(), RenderError> {
+    match (instance.definition.contract.kind, &selection.interrupt) {
+        (TaskKind::Hardware, None) => Err(invalid(format!(
+            "hardware task instance `{instance_name}` requires an interrupt binding"
+        ))),
+        (TaskKind::Software, Some(interrupt)) => Err(invalid(format!(
+            "software task instance `{instance_name}` cannot bind interrupt `{interrupt}`"
+        ))),
+        (TaskKind::Software, None) => Ok(()),
+        (TaskKind::Hardware, Some(interrupt)) => {
+            if let Some(owner) = owners.get(interrupt) {
+                return Err(invalid(format!(
+                    "interrupt `{interrupt}` is bound by both `{owner}` and `{instance_name}`"
+                )));
+            }
+            owners.insert(interrupt.clone(), instance_name.to_owned());
+            Ok(())
+        }
+    }
 }
 
 fn validate_monotonic(
@@ -386,6 +457,13 @@ fn validate_spawns(
                 binding.target
             ))
         })?;
+        // A hardware task is entered by its interrupt, so nothing can spawn it.
+        if target.definition.contract.kind == TaskKind::Hardware {
+            return Err(invalid(format!(
+                "task instance `{instance_name}` spawn alias `{alias}` targets hardware task `{}`, which only its interrupt can enter",
+                binding.target
+            )));
+        }
         let outgoing = declaration
             .inputs
             .as_ref()

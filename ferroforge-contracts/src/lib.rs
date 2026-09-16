@@ -388,9 +388,21 @@ impl Parse for LegacyTaskArguments {
     }
 }
 
+/// Which RTIC task shape a definition was authored as. RTIC itself makes the
+/// same distinction by signature, so the authored `fn` versus `async fn` is
+/// what decides it here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TaskKind {
+    /// `async fn` - dispatched in software, may take inputs and diverge.
+    Software,
+    /// `fn` - bound to an interrupt by composition, takes only its context.
+    Hardware,
+}
+
 #[derive(Clone, Debug)]
 pub struct TaskContract {
     pub arguments: TaskArguments,
+    pub kind: TaskKind,
     pub context: Ident,
     pub inputs: Vec<Parameter>,
     pub diverges: bool,
@@ -500,8 +512,7 @@ fn simple_type(ty: &Type, expected: &str) -> bool {
 impl TaskContract {
     pub fn new(arguments: TaskArguments, signature: &Signature) -> syn::Result<Self> {
         arguments.validate_standalone()?;
-        if signature.asyncness.is_none()
-            || signature.unsafety.is_some()
+        if signature.unsafety.is_some()
             || signature.abi.is_some()
             || signature.constness.is_some()
             || !signature.generics.params.is_empty()
@@ -510,9 +521,14 @@ impl TaskContract {
         {
             return Err(Error::new(
                 signature.span(),
-                "initial standalone tasks must be safe async functions without generics or an ABI",
+                "standalone tasks must be safe functions without generics or an ABI",
             ));
         }
+        let kind = if signature.asyncness.is_some() {
+            TaskKind::Software
+        } else {
+            TaskKind::Hardware
+        };
         let mut parameters = signature.inputs.iter();
         let context = parameter(
             parameters
@@ -550,8 +566,25 @@ impl TaskContract {
                 }
             },
         };
+        if kind == TaskKind::Hardware {
+            // An interrupt handler is entered by the hardware, so there is no
+            // caller to supply inputs and nowhere for a `!` return to go.
+            if let Some(extra) = inputs.first() {
+                return Err(Error::new(
+                    extra.name.span(),
+                    "hardware tasks take only their context; an interrupt has no caller to pass inputs",
+                ));
+            }
+            if diverges {
+                return Err(Error::new(
+                    signature.span(),
+                    "hardware tasks must return `()`; an interrupt handler has to return",
+                ));
+            }
+        }
         Ok(Self {
             arguments,
+            kind,
             context: context.name,
             inputs,
             diverges,
@@ -712,9 +745,31 @@ mod tests {
     }
 
     #[test]
+    fn accepts_synchronous_hardware_handlers() {
+        let task = contract("", "fn on_tick(cx: on_tick::Context) {}").unwrap();
+        assert_eq!(task.kind, TaskKind::Hardware);
+        assert!(task.inputs.is_empty());
+        assert!(!task.diverges);
+
+        let task = contract("", "async fn run(cx: run::Context) {}").unwrap();
+        assert_eq!(task.kind, TaskKind::Software);
+    }
+
+    #[test]
+    fn rejects_hardware_handlers_that_cannot_be_entered_by_an_interrupt() {
+        for source in [
+            // an interrupt has no caller to supply inputs
+            "fn on_tick(cx: on_tick::Context, value: u32) {}",
+            // an interrupt handler has to return
+            "fn on_tick(cx: on_tick::Context) -> ! { loop {} }",
+        ] {
+            assert!(contract("", source).is_err(), "{source}");
+        }
+    }
+
+    #[test]
     fn rejects_unsupported_task_signatures() {
         for source in [
-            "fn run(cx: run::Context) {}",
             "async fn run() {}",
             "async fn run(cx: other::Context) {}",
             "async fn run(cx: run::Context<'static>) {}",

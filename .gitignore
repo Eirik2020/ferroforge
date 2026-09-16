@@ -1,2 +1,4 @@
-/target/
+# Unanchored, so nested fixture and firmware build directories are ignored too,
+# not only the workspace root.
+target/
 /docs/book/

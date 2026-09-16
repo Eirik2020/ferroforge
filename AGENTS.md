@@ -19,8 +19,11 @@ review items, and implementation plans in the book. Root and crate READMEs
 are brief entry points, not parallel documentation sets.
 
 Read `docs/src/governing-requirements.md` for the governing requirements. That
-document states its own size limit. Keep implementation details, acceptance
-evidence, progress, and discussion history in the linked book chapters.
+document states its own size limit. Implementation details belong in the linked
+book chapters. Acceptance evidence, progress, and discussion history do not:
+the repair plan keeps one acceptance table keyed to G1-G7 because it doubles as
+a requirements checklist, and everything else of that kind belongs in commit
+messages or nowhere.
 
 Keep agreed design, current implementation, and open proposals distinct.
 Follow the current discussion recorded in `docs/src/review.md`. Keep remaining
@@ -32,28 +35,50 @@ introduce the next open discussion point in the same response.
 
 ## Documentation Map
 
-Read the smallest thing that answers the question. Line counts flag the cost;
-prefer a named section over a whole file.
+Start from the task, not the chapter. Read the named sections, not whole files.
 
-- `governing-requirements.md` (62) - G1-G7 and the authority order. Loaded at
-  launch for Claude; read it first otherwise.
-- `composition-repair-plan.md` (691) - the active repair: unified target
-  contract, agreed workspace layout, implementation sequence, acceptance
-  evidence. Read when doing or planning current work.
-- `prototype.md` (515) - what the code does today, component by component.
-  Prefer this over `architecture.md` for questions about current behavior.
-- `architecture.md` (1176) - the agreed source-transplant model, validation
-  stages, and transplant boundary. Read only when changing the model or
-  checking a design invariant.
-- `review.md` (204) - "Current Decision" holds the live decisions and the next
-  open point; "Binding Decisions Carried Forward" holds older decisions that
-  still govern. Both are in force. History is archived, not here.
-- `implementation-plan.md` (964) - phase gates and acceptance criteria at
-  "Phase 1" onward. The "Progress Record" sections are historical.
-- `dependencies.md` (223) - manifest-based requirements, check-only metadata,
-  merge and conflict policy.
-- `workflow.md` (295) - commands for checking, rendering, building, and
+| Task | Read |
+| --- | --- |
+| Authoring or changing a software task | `architecture.md` Reusable Task Workspaces |
+| Hardware tasks and interrupt binding | G3 and G4; `composition-repair-plan.md` Unified Target Contract |
+| Firmware composition or init | G5; `architecture.md` System-Owned Initialization and App Composition |
+| Renderer, transplant, source boundary | `architecture.md` Renderer Responsibilities and Source-Transplant Boundary; `prototype.md` Renderer |
+| Dependencies and manifests | `dependencies.md` |
+| Running or verifying the pipeline | `workflow.md`; `implementation-plan.md` Verification and Completion Rules |
+| What the code does today | `prototype.md` |
+| The active repair | `composition-repair-plan.md` |
+| Checking whether something was already decided | `review.md` |
+
+One topic, one owner. Specify a topic in its owning chapter; every other mention
+links there instead of restating it.
+
+| Topic | Owner |
+| --- | --- |
+| Requirements G1-G7 | `governing-requirements.md` |
+| Task authoring, checking expansion, init, supporting source, logging, coverage policy | `architecture.md` |
+| Dependency requirements, check-only metadata, merge policy | `dependencies.md` |
+| What the code does today | `prototype.md` |
+| Commands | `workflow.md` |
+| The active repair and its sequence | `composition-repair-plan.md` |
+| What was decided, and where it is specified | `review.md` (index only) |
+
+Whole-file scope and cost, when a section is not enough:
+
+- `governing-requirements.md` (62) - G1-G7. Loaded at launch for Claude.
+- `architecture.md` (1099) - the agreed model. Owns the canonical
+  task-authoring design; other chapters link here rather than restate it.
+- `composition-repair-plan.md` (691) - active repair: target contract,
+  workspace layout, sequence, acceptance criteria.
+- `prototype.md` (527) - current behavior, split into Shared Machinery,
+  Standalone Path (active), and Legacy Path. Check which path a statement
+  describes before relying on it.
+- `implementation-plan.md` (340) - goal, workspace/task/init design, the
+  acceptance bar, verification and completion rules.
+- `workflow.md` (306) - commands for checking, rendering, building, and
   Rust Analyzer setup.
+- `dependencies.md` (223) - manifest policy, check-only metadata, merge rules.
+- `review.md` (101) - current decisions, the next open point, and an index of
+  older decisions still in force.
 
 ## Always-Loaded Context Budget
 
@@ -61,7 +86,7 @@ prefer a named section over a whole file.
 each session before any work starts. Their combined line count is one shared
 budget, not a per-file allowance:
 
-- **At 250 lines combined**, stop and ask the user how to resolve it before
+- **At 300 lines combined**, stop and ask the user how to resolve it before
   adding anything further. Offer the alternatives: move the content into a
   path-scoped rule under `.claude/rules/`, into a skill, or into an on-demand
   chapter; or trim what is no longer earning its place.
@@ -114,6 +139,24 @@ handled differently:
 Never archive before promoting. Archived material needs explicit permission to
 read, so a binding decision left behind is lost in practice. Do not rewrite
 spent material to look current, and do not delete it instead of archiving.
+
+Verify any move or archive, before and after. A successful `mdbook build` and a
+correct-looking heading list prove nothing about content survival:
+
+- **Before**, find what links into the sections you are moving or removing:
+  `rg -o '<file>\.md#[a-z0-9-]+' --glob '!archive/**'`. Anchors come from
+  heading text, so moving a heading is safe but renaming, retitling, or
+  replacing one with a table is not. Repoint every hit in the same change.
+  `mdbook build` does not validate anchors; after any such edit, check every
+  link in the book against the built HTML rather than trusting the build.
+- **After**, diff sorted content against a copy taken before the edit:
+  `diff <(sort <backup>) <(sort <file>) | grep '^<'`. The only lines listed
+  must be ones you deliberately changed. Anything else is content you dropped
+  without noticing.
+
+Both checks exist because both failures happened: archiving `review.md` orphaned
+six inbound links, and reordering `prototype.md` silently deleted its workspace
+table while still building cleanly.
 
 ## Restricted Archive - Explicit User Permission Required
 

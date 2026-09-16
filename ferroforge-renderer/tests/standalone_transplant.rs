@@ -48,6 +48,7 @@ fn selection(instance: &str, definition: DefinitionId, resource: &str) -> TaskSe
         instance: instance.to_owned(),
         definition,
         priority: 1,
+        interrupt: None,
         local: Vec::new(),
         shared: vec![ResourceBinding {
             requirement: "sample".to_owned(),
@@ -165,6 +166,7 @@ fn spawn_composition(sources: &TaskSources, producer_definition: &str) -> Standa
                 instance: "caller".to_owned(),
                 definition: id(sources, &["layout"], producer_definition),
                 priority: 1,
+                interrupt: None,
                 local: Vec::new(),
                 shared: Vec::new(),
                 configuration: Vec::new(),
@@ -174,6 +176,7 @@ fn spawn_composition(sources: &TaskSources, producer_definition: &str) -> Standa
                 instance: "sink".to_owned(),
                 definition: id(sources, &["layout"], "consumer"),
                 priority: 1,
+                interrupt: None,
                 local: Vec::new(),
                 shared: Vec::new(),
                 configuration: Vec::new(),
@@ -183,6 +186,7 @@ fn spawn_composition(sources: &TaskSources, producer_definition: &str) -> Standa
                 instance: "idle".to_owned(),
                 definition: id(sources, &["layout"], "no_args"),
                 priority: 1,
+                interrupt: None,
                 local: Vec::new(),
                 shared: Vec::new(),
                 configuration: Vec::new(),
@@ -192,6 +196,7 @@ fn spawn_composition(sources: &TaskSources, producer_definition: &str) -> Standa
                 instance: "join".to_owned(),
                 definition: id(sources, &["layout"], "pair_inputs"),
                 priority: 1,
+                interrupt: None,
                 local: Vec::new(),
                 shared: Vec::new(),
                 configuration: Vec::new(),
@@ -234,6 +239,7 @@ fn monotonic_composition(sources: &TaskSources, definition: &str) -> StandaloneC
             instance: "timed".to_owned(),
             definition: id(sources, &["layout"], definition),
             priority: 1,
+            interrupt: None,
             local: Vec::new(),
             shared: Vec::new(),
             configuration,
@@ -301,6 +307,54 @@ fn check_arm_source(source: &str) {
         .status()
         .unwrap();
     assert!(status.success(), "renderer-owned RTIC layout must check");
+}
+
+fn hardware_shell() -> RticAppShell {
+    RticAppShell {
+        crate_imports: vec!["use panic_probe as _;".to_owned()],
+        device: "stm32f4xx_hal::pac".to_owned(),
+        app_module: "app".to_owned(),
+        dispatchers: vec!["USART1".to_owned()],
+        shared: "struct Shared {}".to_owned(),
+        local: "struct Local { tick_count: u32 }".to_owned(),
+        init: "fn init(_cx: init::Context) -> (Shared, Local) {
+            (Shared {}, Local { tick_count: 0 })
+        }"
+        .to_owned(),
+    }
+}
+
+/// A synchronous hardware task must reach real RTIC as `#[task(binds = ...)]`
+/// and link against the chip's interrupt, not merely render as text.
+#[test]
+fn renderer_emits_a_compiling_hardware_task_bound_to_an_interrupt() {
+    let package = discover_task_package(&sw_manifest()).unwrap();
+    let composition = StandaloneComposition {
+        tasks: vec![TaskSelection {
+            instance: "tick".to_owned(),
+            definition: id(&package.sources, &["interrupts"], "on_tick"),
+            priority: 2,
+            interrupt: Some("TIM2".to_owned()),
+            local: vec![ResourceBinding {
+                requirement: "ticks".to_owned(),
+                resource: "tick_count".to_owned(),
+            }],
+            shared: Vec::new(),
+            configuration: Vec::new(),
+            spawn: Vec::new(),
+        }],
+        monotonic: None,
+    };
+    let validated = validate_composition(&package.sources, &composition).unwrap();
+    let source = render_rtic_app(&package.sources, &validated, &hardware_shell()).unwrap();
+
+    assert!(source.contains("binds = TIM2"), "{source}");
+    // RTIC distinguishes the kinds by signature, and so must the output.
+    assert!(source.contains("fn tick"), "{source}");
+    assert!(!source.contains("async fn tick"), "{source}");
+    assert!(source.contains("local = [tick_count]"), "{source}");
+
+    check_arm_source(&source);
 }
 
 #[test]
@@ -461,6 +515,7 @@ fn renderer_transplants_checked_native_init_into_the_real_rtic_app() {
                 instance: "status".to_owned(),
                 definition: id(&tasks.sources, &["layout"], "no_args"),
                 priority: 1,
+                interrupt: None,
                 local: Vec::new(),
                 shared: Vec::new(),
                 configuration: Vec::new(),
@@ -470,6 +525,7 @@ fn renderer_transplants_checked_native_init_into_the_real_rtic_app() {
                 instance: "telemetry".to_owned(),
                 definition: id(&tasks.sources, &["layout"], "consumer"),
                 priority: 1,
+                interrupt: None,
                 local: Vec::new(),
                 shared: Vec::new(),
                 configuration: Vec::new(),

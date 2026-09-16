@@ -116,9 +116,10 @@ wires that result to generated manifest output for the bounded crates.io-only
 scope. This does not imply that the prototype registry has been replaced or
 that broader source/feature handling is complete.
 
-## Registry and Task Requirements
+## Legacy Path: Registry and Task Requirements
 
-This section describes the current prototype, not the agreed replacement API.
+This section and its subsection describe the legacy app-backed prototype, not
+the agreed replacement API and not the standalone path.
 
 The embedded app owns a registry through `dependency_registry!`. Its current
 contents are included from `embedded/src/dependencies.rs`:
@@ -164,11 +165,11 @@ and common validation are now shared through `ferroforge-contracts`; broader
 shared validation remains part of the
 [implementation plan](implementation-plan.md#development-order).
 
-## Final Manifest Construction
+### Final Manifest Construction
 
-The renderer collects dependencies from selected tasks, resolves them through
-the registry, groups them by package, and unions the registry's base features
-with task-requested features. For example:
+The legacy renderer collects dependencies from selected tasks, resolves them
+through the registry, groups them by package, and unions the registry's base
+features with task-requested features. For example:
 
 | Requirement | Features |
 | --- | --- |
@@ -177,20 +178,20 @@ with task-requested features. For example:
 | Task B | `["alloc"]` |
 | Generated `serde` dependency | `["alloc", "derive"]` |
 
-HAL, RTIC, monotonic, Cortex-M, logging transport, and panic crates are currently
-backend-owned dependencies. The renderer rejects conflicting version strings
-or default-feature settings for a package it has already inserted. This is
-not a general semver compatibility resolver.
+HAL, RTIC, monotonic, Cortex-M, logging transport, and panic crates are
+backend-owned dependencies on this path. The legacy renderer rejects conflicting
+version strings or default-feature settings for a package it has already
+inserted. This is not a general semver compatibility resolver, and its output
+is driven by backend dependencies and selected-task registry requirements.
 
-The implemented registry describes package names, versions, default features,
-and feature lists. The standalone collector deliberately diagnoses
-path/git/renamed runtime dependencies in its initial scope. It conservatively
-includes every supported normal dependency from a participating task package,
-including one used only by retained or unused support. Init package collection
-uses the same collector. The new standalone project writer merges both package
-inputs with explicit system runtime selections and emits the result. The legacy
-renderer's actual output is still driven by backend dependencies and selected-
-task registry requirements.
+## Standalone Path: Collection and Emission
+
+No registry. The collector reads each participating package's Cargo manifest,
+conservatively including every supported normal dependency, including one used
+only by retained or unused support, and diagnosing path, git, and renamed
+runtime dependencies as outside the initial scope. Init packages use the same
+collector. The standalone project writer merges the task and init inputs with
+the firmware's explicit runtime selections and emits the generated manifest.
 
 ## Cargo and Independent Checks
 

@@ -3,6 +3,7 @@
 pub mod indicators;
 pub mod layout;
 pub mod layout_other;
+pub mod interrupts;
 
 const ROOT_STEP: u32 = 1;
 

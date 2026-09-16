@@ -11,7 +11,7 @@ use syn::{Attribute, FnArg};
 
 use crate::{
     RenderError,
-    composition::{MonotonicProfile, ValidatedComposition},
+    composition::{MonotonicProfile, TaskKind, ValidatedComposition},
     source::{InitPackage, InitSource},
 };
 
@@ -69,9 +69,13 @@ pub fn render_init_check_interface(
 ) -> Result<String, RenderError> {
     require_initial_profile(composition)?;
     require_initial_source_scope(&package.init)?;
+    // Only software tasks get a spawn entry point. A hardware task is entered
+    // by its interrupt, so offering init a `spawn` for one would let authored
+    // init call something real RTIC never generates.
     let spawn_modules = composition
         .tasks
         .iter()
+        .filter(|task| task.kind() == TaskKind::Software)
         .map(render_spawn_module)
         .collect::<Result<Vec<_>, RenderError>>()?;
     let tokens = quote! {

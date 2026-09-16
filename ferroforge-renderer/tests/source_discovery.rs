@@ -28,8 +28,8 @@ fn id(root: &ModuleId, module: &[&str], name: &str) -> DefinitionId {
 #[test]
 fn discovers_root_inline_file_and_mod_rs_sources_without_compiling_them() {
     let sources = discover_tasks(&fixture()).unwrap();
-    assert_eq!(sources.modules.len(), 7);
-    assert_eq!(sources.files.len(), 6);
+    assert_eq!(sources.modules.len(), 8);
+    assert_eq!(sources.files.len(), 7);
     let selected = sources
         .select(&[
             ("root", id(&sources.root, &[], "root_task")),
@@ -85,7 +85,7 @@ fn resolves_the_task_package_and_library_root_through_cargo() {
         package.check_only_dependencies.iter().collect::<Vec<_>>(),
         ["ferroforge"]
     );
-    assert_eq!(package.sources.modules.len(), 7);
+    assert_eq!(package.sources.modules.len(), 8);
 }
 
 #[test]

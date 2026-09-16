@@ -100,6 +100,17 @@ pub struct TaskInstance<'a> {
     pub name: String,
     pub definition: &'a TaskSource,
     pub support_module: &'a ModuleSource,
+    /// The package this definition came from. `None` on the single-package
+    /// path, where the caller already knows which package it selected from.
+    pub package: Option<&'a TaskPackage>,
+}
+
+impl<'a> TaskInstance<'a> {
+    /// Stable, non-machine-specific package identity for generated names.
+    /// Falls back to the library target when no package is attached.
+    pub fn package_key(&self) -> Option<&'a str> {
+        self.package.map(|package| package.library_target.as_str())
+    }
 }
 
 impl TaskSources {
@@ -133,10 +144,73 @@ impl TaskSources {
                     name: (*name).to_owned(),
                     definition: task,
                     support_module: module,
+                    package: None,
                 })
             })
             .collect()
     }
+}
+
+impl TaskPackage {
+    /// A definition names the crate root it came from, so package ownership is
+    /// already decidable without a separate package field on the selection.
+    pub fn owns(&self, definition: &DefinitionId) -> bool {
+        definition.module.crate_root == self.sources.root.crate_root
+    }
+}
+
+/// Select instances across every participating package. Definitions carry the
+/// crate root they came from, so one composition can draw software tasks from a
+/// portable crate and hardware tasks from a HAL-specific one.
+pub fn select_across<'a>(
+    packages: &[&'a TaskPackage],
+    selections: &[(&str, DefinitionId)],
+) -> Result<Vec<TaskInstance<'a>>, RenderError> {
+    let mut roots = BTreeSet::new();
+    for package in packages {
+        if !roots.insert(&package.sources.root.crate_root) {
+            return Err(invalid(format!(
+                "package `{}` is supplied more than once",
+                package.name
+            )));
+        }
+    }
+    let mut names = BTreeSet::new();
+    selections
+        .iter()
+        .map(|(name, definition)| {
+            let identifier = syn::parse_str::<syn::Ident>(name)
+                .map_err(|_| invalid(format!("invalid task instance name `{name}`")))?;
+            if !names.insert(identifier_key(&identifier)) {
+                return Err(invalid(format!("duplicate task instance `{name}`")));
+            }
+            let package = packages
+                .iter()
+                .find(|package| package.owns(definition))
+                .ok_or_else(|| {
+                    invalid(format!(
+                        "task instance `{name}` selects `{}` from a package the composition does not supply",
+                        definition.name
+                    ))
+                })?;
+            let module = package
+                .sources
+                .modules
+                .get(&definition.module)
+                .ok_or_else(|| invalid(format!("unknown source module for `{name}`")))?;
+            let task = module
+                .tasks
+                .iter()
+                .find(|task| task.id == *definition)
+                .ok_or_else(|| invalid(format!("unknown task definition `{}`", definition.name)))?;
+            Ok(TaskInstance {
+                name: (*name).to_owned(),
+                definition: task,
+                support_module: module,
+                package: Some(package),
+            })
+        })
+        .collect()
 }
 
 /// Discover standard `mod name;` / `mod name { ... }` declarations starting at

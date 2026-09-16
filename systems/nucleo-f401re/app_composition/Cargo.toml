@@ -5,4 +5,5 @@ edition = "2024"
 publish = false
 
 [dependencies]
+ferroforge-pipeline = { path = "../../../ferroforge-pipeline" }
 ferroforge-renderer = { path = "../../../ferroforge-renderer" }

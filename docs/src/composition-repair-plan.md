@@ -100,7 +100,7 @@ RTIC checks/builds. A mock check alone is not a firmware correctness proof.
 | `systems/nucleo-f401re/app_composition/src/lib.rs` | A profile feeds a hardcoded blink/report graph, target/runtime settings, and pipeline implementation | Move generic machinery into the framework; author the actual graph in the system |
 | `systems/nucleo-f401re-fast-blink/app_composition/Cargo.toml` | The second system depends on the first system's composer | Both systems depend directly on shared framework tooling |
 | `ferroforge-renderer/src/composition.rs` | Validation consumes one task-source collection; selections have no hardware interrupt binding | Resolve multiple packages and represent software/hardware scheduling |
-| `ferroforge-contracts/src/lib.rs` | Standalone task contracts require safe async functions | Support and independently check synchronous hardware handlers |
+| `ferroforge-renderer/src/init_check.rs` (interrupts) | Generated init interfaces expose spawn entry points for every selected instance | Expose spawning only for software tasks, since nothing can spawn a hardware handler |
 | `ferroforge-renderer/src/transplant.rs` | Generated module namespace names encode module paths but not package identity | Preserve package-qualified identity and isolate colliding source modules |
 | `ferroforge-renderer/src/init_check.rs` | Initial context generation contains STM32F401-specific types and creates spawn interfaces for selected tasks | Derive context from the selected target; expose spawning only for spawnable software tasks |
 | `ferroforge-renderer/src/standalone.rs` and the first system composer | Target files, PAC path, runtime requirements, and build target are assembled in separate places | Consume one resolved target throughout checking, generation, and building |
@@ -556,6 +556,32 @@ checking workflow before claiming the workspace design is settled.
 
 Exit gate: an agreed complete example and ownership table, without placeholder
 target data or unresolved choices hidden inside implementation tasks.
+
+#### Baseline Contract - What Composition Expresses Today
+
+Recorded 2026-09-16 from the implemented host model, as the comparison point for
+the frozen grammar. Any proposed syntax must express at least this, and the
+grammar review should say explicitly what it adds and what it drops.
+
+Per composition: an ordered set of task selections, and an optional monotonic
+profile (source, tick rate, counter bits; only 1 kHz/32-bit SysTick is accepted).
+
+Per task selection:
+
+| Field | Meaning |
+| --- | --- |
+| `instance` | the name this selection is known by in generated RTIC |
+| `definition` | which authored definition it instantiates, by module and name |
+| `priority` | RTIC priority |
+| `local` / `shared` | requirement-name to system-resource-name mappings |
+| `configuration` | name, Rust type, and value expression per key |
+| `spawn` | alias-name to target-instance-name mappings |
+
+Not expressible today, and required by the confirmed scope: an interrupt binding
+for hardware tasks, task kind, dispatcher selection, the selected target, the
+init reference, and the participating source packages. The first four are
+model gaps; the last two are currently supplied as separate arguments to the
+host pipeline rather than declared in the composition.
 
 ### R1 - Implement the Single Target Source and Its Consumers
 

@@ -215,6 +215,19 @@ versus divergent SW task shape. It checks declaration structure, not body
 semantics or compatibility with actual system bindings. `InitContract` validates
 the bounded standalone init name, context, synchronous shape, and return pair.
 
+`TaskContract` reads the task kind from the authored signature, as RTIC does:
+an `async fn` is a software task and a plain `fn` is a hardware task. A hardware
+handler takes only its context and returns `()`, because an interrupt has no
+caller to supply inputs and the handler has to return. The definition never
+names an interrupt; composition supplies it, so one handler can be bound to
+different interrupts by different firmware.
+
+Composition enforces the G3 rule against the declared kind: a hardware task
+requires an interrupt binding, a software task must not carry one, two instances
+cannot own the same interrupt, and nothing can spawn a hardware task. The
+transplant emits the binding as RTIC's `#[task(binds = TIM2, ...)]`, keeping the
+synchronous signature, and the result is ARM-checked as real RTIC.
+
 The app-backed loader still uses its `LegacyTaskArguments` adapter, while the
 task macro selects the standalone expansion for typed declarations. Names-only
 prototype syntax still works. Repeated task argument keys,

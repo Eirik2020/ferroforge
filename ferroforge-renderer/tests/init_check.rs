@@ -38,6 +38,7 @@ fn task(instance: &str, definition: DefinitionId) -> TaskSelection {
         instance: instance.to_owned(),
         definition,
         priority: 1,
+        interrupt: None,
         local: Vec::new(),
         shared: Vec::new(),
         configuration: Vec::new(),

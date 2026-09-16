@@ -12,8 +12,9 @@ and the host/embedded targets used by this repository. The documented Windows
 host is `x86_64-pc-windows-msvc`; the current firmware target is
 `thumbv7em-none-eabihf`.
 
-The commands assume Cargo is on `PATH`. In this Windows environment, an
-explicit fallback is `C:\Users\xoonz\.cargo\bin\cargo.exe`.
+The commands assume Cargo is on `PATH`. Where it is not, invoke it through the
+`CARGO` environment variable, which the pipeline itself uses, or by the absolute
+path to `cargo` in your rustup installation.
 
 ## Check the Host Tooling
 

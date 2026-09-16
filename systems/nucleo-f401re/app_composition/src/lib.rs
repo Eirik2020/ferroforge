@@ -1,11 +1,17 @@
+//! System-owned composition for the Nucleo-F401RE blinky firmware.
+//!
+//! Stage order, failure reporting, and Cargo invocation belong to
+//! `ferroforge-pipeline`. What stays here is what this firmware authors: its
+//! instance and resource names, its task graph, and its runtime selections.
+
 use std::{
     collections::BTreeSet,
-    env,
-    error::Error,
-    ffi::OsString,
-    fmt,
     path::{Path, PathBuf},
-    process::Command,
+};
+
+use ferroforge_pipeline::{CommandExecutor, PipelineInputs, ProcessExecutor};
+pub use ferroforge_pipeline::{
+    PipelineError, PipelineStage, RenderedFirmware as RenderedNucleoF401re,
 };
 
 use ferroforge_renderer::{
@@ -15,7 +21,7 @@ use ferroforge_renderer::{
         StandaloneComposition, TaskSelection, ValidatedComposition, validate_composition,
     },
     dependencies::{DependencyContributor, DependencyRequirement, DependencySource},
-    init_check::{InitCheckOptions, RenderedInitCheck, render_init_check},
+    init_check::{InitCheckOptions, render_init_check},
     source::{
         DefinitionId, InitPackage, TaskPackage, TaskSources, discover_init_package,
         discover_task_package,
@@ -28,12 +34,6 @@ use ferroforge_renderer::{
 };
 
 const CRATES_IO_SOURCE: &str = "registry+https://github.com/rust-lang/crates.io-index";
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RenderedNucleoF401re {
-    pub init_check: RenderedInitCheck,
-    pub firmware: RenderedStandaloneProject,
-}
 
 /// System-owned names and values for the bounded reusable blinky composition
 /// on the Nucleo-F401RE target.
@@ -64,111 +64,12 @@ impl BlinkyNucleoF401reProfile {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PipelineStage {
-    ReusableTaskCheck,
-    CompositionValidation,
-    InitInterfaceGeneration,
-    InitCheck,
-    FirmwareGeneration,
-    FirmwareDependencyResolution,
-    FirmwareCheck,
-    FirmwareBuild,
+pub fn task_manifest(repository_root: &Path) -> PathBuf {
+    repository_root.join("tasks/blinky/Cargo.toml")
 }
 
-impl fmt::Display for PipelineStage {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::ReusableTaskCheck => "reusable task check",
-            Self::CompositionValidation => "composition validation",
-            Self::InitInterfaceGeneration => "init interface generation",
-            Self::InitCheck => "system init check",
-            Self::FirmwareGeneration => "firmware generation",
-            Self::FirmwareDependencyResolution => "firmware dependency resolution",
-            Self::FirmwareCheck => "generated firmware check",
-            Self::FirmwareBuild => "generated firmware release build",
-        })
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct PipelineError {
-    pub stage: PipelineStage,
-    pub message: String,
-}
-
-impl PipelineError {
-    fn new(stage: PipelineStage, message: impl Into<String>) -> Self {
-        Self {
-            stage,
-            message: message.into(),
-        }
-    }
-
-    fn render(stage: PipelineStage, error: RenderError) -> Self {
-        Self::new(stage, error.to_string())
-    }
-}
-
-impl fmt::Display for PipelineError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{} failed: {}", self.stage, self.message)
-    }
-}
-
-impl Error for PipelineError {}
-
-struct CargoCommand {
-    current_dir: PathBuf,
-    args: Vec<OsString>,
-}
-
-trait CommandExecutor {
-    fn execute(
-        &mut self,
-        stage: PipelineStage,
-        command: &CargoCommand,
-    ) -> Result<(), PipelineError>;
-}
-
-struct ProcessExecutor {
-    cargo: OsString,
-}
-
-struct PipelineSources {
-    task_manifest: PathBuf,
-    init_manifest: PathBuf,
-}
-
-impl PipelineSources {
-    fn blinky(repository_root: &Path, init_manifest: &Path) -> Self {
-        Self {
-            task_manifest: repository_root.join("tasks/blinky/Cargo.toml"),
-            init_manifest: init_manifest.to_path_buf(),
-        }
-    }
-}
-
-impl CommandExecutor for ProcessExecutor {
-    fn execute(
-        &mut self,
-        stage: PipelineStage,
-        command: &CargoCommand,
-    ) -> Result<(), PipelineError> {
-        let status = Command::new(&self.cargo)
-            .args(&command.args)
-            .current_dir(&command.current_dir)
-            .status()
-            .map_err(|error| PipelineError::new(stage, error.to_string()))?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(PipelineError::new(
-                stage,
-                format!("Cargo exited with {status}"),
-            ))
-        }
-    }
+fn init_manifest(repository_root: &Path) -> PathBuf {
+    repository_root.join("systems/nucleo-f401re/init/Cargo.toml")
 }
 
 /// Run the complete first-system pipeline without linking target code into the
@@ -180,7 +81,7 @@ pub fn run_nucleo_f401re_pipeline(
 ) -> Result<RenderedNucleoF401re, PipelineError> {
     run_blinky_nucleo_f401re_pipeline(
         repository_root,
-        &repository_root.join("systems/nucleo-f401re/init/Cargo.toml"),
+        &init_manifest(repository_root),
         init_check_dir,
         firmware_dir,
         &BlinkyNucleoF401reProfile::primary(),
@@ -196,123 +97,55 @@ pub fn run_blinky_nucleo_f401re_pipeline(
     firmware_dir: &Path,
     profile: &BlinkyNucleoF401reProfile,
 ) -> Result<RenderedNucleoF401re, PipelineError> {
-    let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let sources = PipelineSources::blinky(repository_root, init_manifest);
-    run_pipeline_with_executor(
+    run_blinky_pipeline_with_executor(
         repository_root,
-        &sources,
+        &task_manifest(repository_root),
+        init_manifest,
         init_check_dir,
         firmware_dir,
         profile,
-        &mut ProcessExecutor { cargo },
+        &mut ProcessExecutor::from_env(),
     )
 }
 
-fn run_pipeline_with_executor(
+/// The same pipeline with an explicit executor, so tests can inject failures
+/// at a chosen stage without running Cargo.
+pub fn run_blinky_pipeline_with_executor(
     repository_root: &Path,
-    sources: &PipelineSources,
+    task_manifest: &Path,
+    init_manifest: &Path,
     init_check_dir: &Path,
     firmware_dir: &Path,
     profile: &BlinkyNucleoF401reProfile,
     executor: &mut impl CommandExecutor,
 ) -> Result<RenderedNucleoF401re, PipelineError> {
     let target = StandaloneTarget::stm32f401re();
-
-    executor.execute(
-        PipelineStage::ReusableTaskCheck,
-        &CargoCommand {
-            current_dir: repository_root.to_path_buf(),
-            args: args_with_path(
-                &[
-                    "check",
-                    "--lib",
-                    "--target",
-                    &target.rust_target,
-                    "--manifest-path",
-                ],
-                &sources.task_manifest,
-                &["--locked", "--offline"],
-            ),
-        },
-    )?;
-
-    let task_package = discover_task_package(&sources.task_manifest)
-        .map_err(|error| PipelineError::render(PipelineStage::CompositionValidation, error))?;
-    let init_package = discover_init_package(&sources.init_manifest)
-        .map_err(|error| PipelineError::render(PipelineStage::CompositionValidation, error))?;
-    let composition = composition(&task_package.sources, profile);
-    let validated = validate_composition(&task_package.sources, &composition)
-        .map_err(|error| PipelineError::render(PipelineStage::CompositionValidation, error))?;
-
-    let init_check = render_init_check(
-        &init_package,
-        &validated,
-        InitCheckOptions {
-            package_name: &profile.init_check_package_name,
-            output_dir: init_check_dir,
-        },
-    )
-    .map_err(|error| PipelineError::render(PipelineStage::InitInterfaceGeneration, error))?;
-    executor.execute(
-        PipelineStage::InitCheck,
-        &CargoCommand {
-            current_dir: init_check.root.clone(),
-            args: args_with_path(
-                &["check", "--lib", "--manifest-path"],
-                &init_check.manifest,
-                &["--locked", "--offline"],
-            ),
-        },
-    )?;
-
-    let firmware = render_firmware(
-        &task_package,
-        &init_package,
-        &validated,
+    let inputs = PipelineInputs {
+        repository_root,
+        task_manifest,
+        init_manifest,
+        init_check_dir,
         firmware_dir,
-        &target,
-        profile,
-    )
-    .map_err(|error| PipelineError::render(PipelineStage::FirmwareGeneration, error))?;
-    executor.execute(
-        PipelineStage::FirmwareDependencyResolution,
-        &CargoCommand {
-            current_dir: firmware.root.clone(),
-            args: strings(&["generate-lockfile", "--offline"]),
-        },
-    )?;
-    executor.execute(
-        PipelineStage::FirmwareCheck,
-        &CargoCommand {
-            current_dir: firmware.root.clone(),
-            args: strings(&[
-                "check",
-                "--bin",
-                &profile.firmware_package_name,
-                "--locked",
-                "--offline",
-            ]),
-        },
-    )?;
-    executor.execute(
-        PipelineStage::FirmwareBuild,
-        &CargoCommand {
-            current_dir: firmware.root.clone(),
-            args: strings(&[
-                "build",
-                "--release",
-                "--bin",
-                &profile.firmware_package_name,
-                "--locked",
-                "--offline",
-            ]),
-        },
-    )?;
+        init_check_package_name: &profile.init_check_package_name,
+        firmware_package_name: &profile.firmware_package_name,
+        rust_target: &target.rust_target,
+    };
 
-    Ok(RenderedNucleoF401re {
-        init_check,
-        firmware,
-    })
+    ferroforge_pipeline::run(
+        &inputs,
+        |sources| composition(sources, profile),
+        |task_package, init_package, validated| {
+            render_firmware(
+                task_package,
+                init_package,
+                validated,
+                firmware_dir,
+                &target,
+                profile,
+            )
+        },
+        executor,
+    )
 }
 
 pub fn render_nucleo_f401re(
@@ -322,7 +155,7 @@ pub fn render_nucleo_f401re(
 ) -> Result<RenderedNucleoF401re, RenderError> {
     render_blinky_nucleo_f401re(
         repository_root,
-        &repository_root.join("systems/nucleo-f401re/init/Cargo.toml"),
+        &init_manifest(repository_root),
         init_check_dir,
         firmware_dir,
         &BlinkyNucleoF401reProfile::primary(),
@@ -336,7 +169,7 @@ pub fn render_blinky_nucleo_f401re(
     firmware_dir: &Path,
     profile: &BlinkyNucleoF401reProfile,
 ) -> Result<RenderedNucleoF401re, RenderError> {
-    let task_package = discover_task_package(&repository_root.join("tasks/blinky/Cargo.toml"))?;
+    let task_package = discover_task_package(&task_manifest(repository_root))?;
     let init_package = discover_init_package(init_manifest)?;
     let composition = composition(&task_package.sources, profile);
     let validated = validate_composition(&task_package.sources, &composition)?;
@@ -407,6 +240,7 @@ fn composition(
                 instance: profile.blink_instance.clone(),
                 definition: definition(sources, "blink"),
                 priority: 1,
+                interrupt: None,
                 local: vec![
                     resource("led", &profile.led_resource),
                     resource("count", &profile.count_resource),
@@ -426,6 +260,7 @@ fn composition(
                 instance: profile.report_instance.clone(),
                 definition: definition(sources, "report"),
                 priority: 1,
+                interrupt: None,
                 local: Vec::new(),
                 shared: Vec::new(),
                 configuration: Vec::new(),
@@ -501,26 +336,17 @@ fn system_dependencies() -> Vec<DependencyRequirement> {
     ]
 }
 
-fn strings(values: &[&str]) -> Vec<OsString> {
-    values.iter().map(OsString::from).collect()
-}
-
-fn args_with_path(prefix: &[&str], path: &Path, suffix: &[&str]) -> Vec<OsString> {
-    prefix
-        .iter()
-        .map(OsString::from)
-        .chain(std::iter::once(path.as_os_str().to_owned()))
-        .chain(suffix.iter().map(OsString::from))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use std::{
+        env,
+        ffi::OsString,
         fs,
         process::Command,
         sync::atomic::{AtomicU64, Ordering},
     };
+
+    use ferroforge_pipeline::CargoCommand;
 
     use super::*;
 
@@ -620,31 +446,31 @@ mod tests {
         repository_root.join(relative).join("Cargo.toml")
     }
 
+    const COMMAND_STAGES: [PipelineStage; 5] = [
+        PipelineStage::ReusableTaskCheck,
+        PipelineStage::InitCheck,
+        PipelineStage::FirmwareDependencyResolution,
+        PipelineStage::FirmwareCheck,
+        PipelineStage::FirmwareBuild,
+    ];
+
     #[test]
     fn command_failure_stops_every_later_pipeline_stage() {
         let repository_root = repository_root();
         let profile = BlinkyNucleoF401reProfile::primary();
-        let sources = PipelineSources::blinky(
-            &repository_root,
-            &repository_root.join("systems/nucleo-f401re/init/Cargo.toml"),
-        );
-        let command_stages = [
-            PipelineStage::ReusableTaskCheck,
-            PipelineStage::InitCheck,
-            PipelineStage::FirmwareDependencyResolution,
-            PipelineStage::FirmwareCheck,
-            PipelineStage::FirmwareBuild,
-        ];
+        let task = task_manifest(&repository_root);
+        let init = init_manifest(&repository_root);
 
-        for (index, fail_at) in command_stages.iter().copied().enumerate() {
+        for (index, fail_at) in COMMAND_STAGES.iter().copied().enumerate() {
             let output = TempOutput::new();
             let mut executor = FakeExecutor {
                 fail_at,
                 seen: Vec::new(),
             };
-            let error = run_pipeline_with_executor(
+            let error = run_blinky_pipeline_with_executor(
                 &repository_root,
-                &sources,
+                &task,
+                &init,
                 &output.0.join(format!("init-check-{index}")),
                 &output.0.join(format!("gen-app-{index}")),
                 &profile,
@@ -653,7 +479,7 @@ mod tests {
             .unwrap_err();
 
             assert_eq!(error.stage, fail_at);
-            assert_eq!(executor.seen, command_stages[..=index]);
+            assert_eq!(executor.seen, COMMAND_STAGES[..=index]);
         }
     }
 
@@ -661,104 +487,84 @@ mod tests {
     fn real_failures_stop_at_their_pipeline_boundaries() {
         let repository_root = repository_root();
         let profile = BlinkyNucleoF401reProfile::primary();
-        let default_sources = PipelineSources::blinky(
-            &repository_root,
-            &repository_root.join("systems/nucleo-f401re/init/Cargo.toml"),
-        );
+        let default_task = task_manifest(&repository_root);
+        let default_init = init_manifest(&repository_root);
         let output = TempOutput::new();
         let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-        let command_stages = [
-            PipelineStage::ReusableTaskCheck,
-            PipelineStage::InitCheck,
-            PipelineStage::FirmwareDependencyResolution,
-            PipelineStage::FirmwareCheck,
-            PipelineStage::FirmwareBuild,
-        ];
         let cases = [
             (
                 "source-check",
-                PipelineSources {
-                    task_manifest: fixture(
-                        &repository_root,
-                        "ferroforge-renderer/tests/fixtures/ra-diagnostics",
-                    ),
-                    init_manifest: default_sources.init_manifest.clone(),
-                },
+                fixture(
+                    &repository_root,
+                    "ferroforge-renderer/tests/fixtures/ra-diagnostics",
+                ),
+                default_init.clone(),
                 PipelineStage::ReusableTaskCheck,
                 1,
                 false,
             ),
             (
                 "composition",
-                PipelineSources {
-                    task_manifest: fixture(
-                        &repository_root,
-                        "ferroforge-renderer/tests/fixtures/sw",
-                    ),
-                    init_manifest: default_sources.init_manifest.clone(),
-                },
+                fixture(&repository_root, "ferroforge-renderer/tests/fixtures/sw"),
+                default_init.clone(),
                 PipelineStage::CompositionValidation,
                 1,
                 false,
             ),
             (
                 "init-check",
-                PipelineSources {
-                    task_manifest: default_sources.task_manifest.clone(),
-                    init_manifest: fixture(
-                        &repository_root,
-                        "ferroforge-renderer/tests/fixtures/init-diagnostics",
-                    ),
-                },
+                default_task.clone(),
+                fixture(
+                    &repository_root,
+                    "ferroforge-renderer/tests/fixtures/init-diagnostics",
+                ),
                 PipelineStage::InitCheck,
                 2,
                 false,
             ),
             (
                 "firmware-generation",
-                PipelineSources {
-                    task_manifest: default_sources.task_manifest.clone(),
-                    init_manifest: fixture(
-                        &repository_root,
-                        "systems/nucleo-f401re/app_composition/tests/fixtures/init-check-only-leak",
-                    ),
-                },
+                default_task.clone(),
+                fixture(
+                    &repository_root,
+                    "systems/nucleo-f401re/app_composition/tests/fixtures/init-check-only-leak",
+                ),
                 PipelineStage::FirmwareGeneration,
                 2,
                 false,
             ),
             (
                 "firmware-check",
-                PipelineSources {
-                    task_manifest: default_sources.task_manifest.clone(),
-                    init_manifest: fixture(
-                        &repository_root,
-                        "systems/nucleo-f401re/app_composition/tests/fixtures/init-wrong-resource",
-                    ),
-                },
+                default_task.clone(),
+                fixture(
+                    &repository_root,
+                    "systems/nucleo-f401re/app_composition/tests/fixtures/init-wrong-resource",
+                ),
                 PipelineStage::FirmwareCheck,
                 4,
                 false,
             ),
             (
                 "firmware-link",
-                default_sources,
+                default_task.clone(),
+                default_init.clone(),
                 PipelineStage::FirmwareBuild,
                 5,
                 true,
             ),
         ];
 
-        for (name, sources, expected_stage, command_count, corrupt_memory) in cases {
+        for (name, task, init, expected_stage, command_count, corrupt_memory) in cases {
             let mut executor = TestProcessExecutor {
                 cargo: cargo.clone(),
                 target_dir: output.0.join("target"),
                 corrupt_memory_before_build: corrupt_memory,
                 seen: Vec::new(),
             };
-            let error = run_pipeline_with_executor(
+            let error = run_blinky_pipeline_with_executor(
                 &repository_root,
-                &sources,
+                &task,
+                &init,
                 &output.0.join(format!("{name}-init-check")),
                 &output.0.join(format!("{name}-gen-app")),
                 &profile,
@@ -772,7 +578,7 @@ mod tests {
             );
             assert_eq!(
                 executor.seen,
-                command_stages[..command_count],
+                COMMAND_STAGES[..command_count],
                 "later command ran after {name} failed",
             );
         }

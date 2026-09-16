@@ -892,12 +892,28 @@ fn render_handler(
         &task.priority.to_string(),
         task.source.definition.function.span(),
     );
+    // A hardware task carries `binds`; RTIC takes the bare interrupt name.
+    let binds = task
+        .interrupt
+        .as_deref()
+        .map(|interrupt| {
+            syn::parse_str::<Ident>(interrupt)
+                .map(|ident| quote!(binds = #ident,))
+                .map_err(|_| {
+                    invalid(format!(
+                        "task instance `{}` binds `{interrupt}`, which is not a valid interrupt identifier",
+                        task.source.name
+                    ))
+                })
+        })
+        .transpose()?
+        .unwrap_or_default();
     let attribute = match (local.is_empty(), shared.is_empty()) {
-        (true, true) => quote!(#[task(priority = #priority)]),
-        (false, true) => quote!(#[task(priority = #priority, local = [#(#local),*])]),
-        (true, false) => quote!(#[task(priority = #priority, shared = [#(#shared),*])]),
+        (true, true) => quote!(#[task(#binds priority = #priority)]),
+        (false, true) => quote!(#[task(#binds priority = #priority, local = [#(#local),*])]),
+        (true, false) => quote!(#[task(#binds priority = #priority, shared = [#(#shared),*])]),
         (false, false) => quote! {
-            #[task(priority = #priority, local = [#(#local),*], shared = [#(#shared),*])]
+            #[task(#binds priority = #priority, local = [#(#local),*], shared = [#(#shared),*])]
         },
     };
     Ok(quote! {

@@ -1,12 +1,16 @@
+//! Second standalone-system proof: the same reusable tasks and board target as
+//! `systems/nucleo-f401re`, with this firmware's own instance names, resource
+//! names, and blink period.
+
 use std::{
     error::Error,
     path::{Path, PathBuf},
 };
 
 use ferroforge_nucleo_f401re_composer::{
-    BlinkyNucleoF401reProfile, PipelineError, RenderedNucleoF401re, render_blinky_nucleo_f401re,
-    run_blinky_nucleo_f401re_pipeline,
+    BlinkyNucleoF401reProfile, render_blinky_nucleo_f401re, run_blinky_nucleo_f401re_pipeline,
 };
+pub use ferroforge_pipeline::{PipelineError, RenderedFirmware as RenderedNucleoF401re};
 
 pub fn profile() -> BlinkyNucleoF401reProfile {
     BlinkyNucleoF401reProfile {

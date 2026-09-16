@@ -48,6 +48,7 @@ dependencies = [
 name = "ferroforge-nucleo-f401re-composer"
 version = "0.1.0"
 dependencies = [
+ "ferroforge-pipeline",
  "ferroforge-renderer",
 ]
 
@@ -56,6 +57,14 @@ name = "ferroforge-nucleo-f401re-fast-blink-composer"
 version = "0.1.0"
 dependencies = [
  "ferroforge-nucleo-f401re-composer",
+ "ferroforge-pipeline",
+]
+
+[[package]]
+name = "ferroforge-pipeline"
+version = "0.1.0"
+dependencies = [
+ "ferroforge-renderer",
 ]
 
 [[package]]
