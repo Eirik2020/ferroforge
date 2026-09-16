@@ -787,10 +787,13 @@ impl TaskSources {
 
 fn is_task(attribute: &Attribute) -> bool {
     let path = attribute.path();
-    path.is_ident("task")
+    // `reusable` is the call-through form; both declare a task definition and
+    // carry the same arguments, so discovery treats them alike.
+    let names = ["task", "reusable"];
+    names.iter().any(|name| path.is_ident(name))
         || (path.segments.len() == 2
             && path.segments[0].ident == "ferroforge"
-            && path.segments[1].ident == "task")
+            && names.iter().any(|name| path.segments[1].ident == name))
 }
 
 fn is_init(attribute: &Attribute) -> bool {

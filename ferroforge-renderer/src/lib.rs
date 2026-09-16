@@ -1,5 +1,6 @@
 //! Renders a FerroForge application declaration as a standalone RTIC project.
 
+pub mod callthrough;
 pub mod composition;
 pub mod dependencies;
 pub mod init_check;

@@ -1,0 +1,18 @@
+[package]
+name = "blinky-tasks"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+test = false
+bench = false
+
+[dependencies]
+defmt = { version = "1.0.1", default-features = true, features = [] }
+embedded-hal = { version = "1.0.0", default-features = true, features = [] }
+fugit = { version = "0.3.9", default-features = true, features = [] }
+rtic = { version = "2.3.1", default-features = false, features = ["thumbv7-backend"] }
+rtic-monotonics = { version = "2.2.1", default-features = false, features = ["cortex-m-systick"] }
+
+[workspace]

@@ -169,7 +169,7 @@ fn render_manifest(
     Ok(manifest)
 }
 
-fn render_cargo_config(target: &StandaloneTarget) -> String {
+pub(crate) fn render_cargo_config(target: &StandaloneTarget) -> String {
     let runner = format!("probe-rs run --chip {}", target.probe_rs_chip);
     format!(
         "[build]\ntarget = {}\n\n[target.{}]\nrunner = {}\nrustflags = [\n    \"-C\", \"link-arg=-L.\",\n    \"-C\", \"link-arg=-Tlink.x\",\n    \"-C\", \"link-arg=-Tdefmt.x\",\n]\n\n[env]\nDEFMT_LOG = {}\n",
@@ -180,7 +180,7 @@ fn render_cargo_config(target: &StandaloneTarget) -> String {
     )
 }
 
-fn render_memory_layout(target: &StandaloneTarget) -> String {
+pub(crate) fn render_memory_layout(target: &StandaloneTarget) -> String {
     format!(
         "MEMORY\n{{\n  FLASH : ORIGIN = {:#010X}, LENGTH = {}K\n  RAM   : ORIGIN = {:#010X}, LENGTH = {}K\n}}\n\n_stext = ORIGIN(FLASH) + {:#X};\n",
         target.flash_origin,
@@ -191,14 +191,14 @@ fn render_memory_layout(target: &StandaloneTarget) -> String {
     )
 }
 
-fn render_embed_config(target: &StandaloneTarget) -> String {
+pub(crate) fn render_embed_config(target: &StandaloneTarget) -> String {
     format!(
         "[default.general]\nchip = {}\n\n[default.rtt]\nenabled = true\nup_channels = [\n    {{ channel = 0, mode = \"BlockIfFull\", format = \"Defmt\" }},\n]\n",
         toml_string(&target.probe_rs_chip),
     )
 }
 
-fn validate_package_name(package_name: &str) -> Result<(), RenderError> {
+pub(crate) fn validate_package_name(package_name: &str) -> Result<(), RenderError> {
     if valid_identifier_like(package_name) {
         Ok(())
     } else {
@@ -208,7 +208,7 @@ fn validate_package_name(package_name: &str) -> Result<(), RenderError> {
     }
 }
 
-fn validate_target(target: &StandaloneTarget) -> Result<(), RenderError> {
+pub(crate) fn validate_target(target: &StandaloneTarget) -> Result<(), RenderError> {
     for (role, value) in [
         ("Rust target", target.rust_target.as_str()),
         ("probe-rs chip", target.probe_rs_chip.as_str()),
@@ -243,7 +243,7 @@ fn valid_identifier_like(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
-fn toml_string(value: &str) -> String {
+pub(crate) fn toml_string(value: &str) -> String {
     let mut quoted = String::with_capacity(value.len() + 2);
     quoted.push('"');
     for character in value.chars() {

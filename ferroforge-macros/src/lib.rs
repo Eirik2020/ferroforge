@@ -1,3 +1,5 @@
+mod reusable;
+
 use std::collections::{BTreeSet, HashSet};
 
 use ferroforge_contracts::{
@@ -279,6 +281,25 @@ fn expand_dependency_registry(registry: DependencyRegistryInput) -> Result<Token
                 #(#catalog_entries),*
             ];
     })
+}
+
+/// Call-through reusable task: expands to a real generic context and an
+/// ordinary generic function, with no mock layer. The firmware depends on this
+/// crate and its RTIC handler calls the function, so nothing is transplanted.
+///
+/// Runs alongside `task` during migration; `task` keeps the mock expansion.
+#[proc_macro_attribute]
+pub fn reusable(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let args = parse_macro_input!(attr as TaskArguments);
+    let function = parse_macro_input!(item as ItemFn);
+
+    let output = TaskContract::new(args, &function.sig)
+        .and_then(|contract| reusable::expand(contract, function));
+
+    match output {
+        Ok(output) => output.into(),
+        Err(error) => error.to_compile_error().into(),
+    }
 }
 
 #[proc_macro_attribute]

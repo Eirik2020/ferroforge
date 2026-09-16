@@ -15,7 +15,9 @@ use core::{
     ops::{Deref, DerefMut},
 };
 
-pub use ferroforge_macros::{app, composition, dependency_registry, firmware, init, task};
+pub use ferroforge_macros::{
+    app, composition, dependency_registry, firmware, init, reusable, task,
+};
 pub use fugit::{ExtU64, MillisDurationU64};
 
 /// Compile-only interfaces used by standalone reusable source checks.
