@@ -26,10 +26,20 @@ synchronous handler bound to `TIM2`. Its reusable tasks live in
 `tasks/blinky`, which checks independently for the
 same target with no FerroForge machinery beyond the `reusable` attribute.
 
-Both sit in the layout G5 requires. Two opt-in tests in `ferroforge-macros`
-assert this rather than leaving it to be run by hand: one checks the task crate
-independently, the other builds the firmware and asserts the binary links. Run
-them with `cargo test -p ferroforge-macros --test firmware -- --ignored`.
+`firmware/nucleo-f401re-beacon` is a second application on the same board,
+selecting the same definitions with none of the same bindings. It instantiates
+`blink` twice - different names, pins, counters, gates and periods - and binds
+`on_tick` to `TIM3`, which is what a definition that never names an interrupt is
+for. Adding it required no edit to `tasks/blinky`. It is a build, not a
+hardware result: only PA5 carries an LED, and the second pin is a bare header
+pin.
+
+All three sit in the layout G5 requires, and opt-in tests in `ferroforge-macros`
+assert it rather than leaving it to be run by hand: the task crate checks
+independently, both firmwares link, and four defects planted in a copy of one
+are each rejected for their own reason. Because those defects are applied to the
+real firmware, they cannot drift into testing nothing. See
+[workflow](workflow.md) for how to run them.
 
 ## Implemented
 
@@ -42,7 +52,9 @@ them with `cargo test -p ferroforge-macros --test firmware -- --ignored`.
   adapter per instance.
 - Configuration is an associated-const trait, so values stay compile-time and
   work in const positions such as array lengths.
-- Interrupt bindings are checked by RTIC against the device's own enum.
+- Interrupt bindings are checked by RTIC against the device's own enum, and
+  `compose!` rejects an `async` task that binds one, which RTIC would otherwise
+  report only as a signature complaint.
 - Chip-family data is one TOML file per chip under `backends/`, read by the CLI
   and depended on by nothing. It yields `memory.x`, `.cargo/config.toml`,
   `Embed.toml` and the platform crates in a firmware's manifest, so no chip fact
@@ -56,10 +68,11 @@ them with `cargo test -p ferroforge-macros --test firmware -- --ignored`.
 - **Project conventions and the library marker.** G7 is untouched: no project
   recognition, no new-project helper, and no check for
   `library = true` under `[package.metadata.ferroforge]`.
-- **A second firmware** demonstrating reuse across applications.
-- **Broader coverage.** The two opt-in tests prove the example builds. Negative
-  cases do not exist yet: a hardware task given inputs, a software task given an
-  interrupt, or a configuration type disagreeing with its definition.
+- **A choice of tick rate.** `reusable` fixes the monotonic bound at
+  `fugit::Duration<u32, 1, 1000>`, so every firmware selecting a task that
+  delays must declare `monotonic_hz = 1000`. The declaration reads like a choice
+  and is not one; a different rate fails to unify rather than being rejected on
+  the authored line.
 
 ## Superseded Macros
 

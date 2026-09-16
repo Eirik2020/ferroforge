@@ -59,16 +59,16 @@ links there instead of restating it.
 | What is left to build | `implementation-plan.md` |
 | What was decided, and where it is specified | `review.md` (index only) |
 
-The whole book is 726 lines, so read a chapter when a section is not enough:
+The whole book is 738 lines, so read a chapter when a section is not enough:
 
-- `governing-requirements.md` (66) - G1-G7. Loaded at launch for Claude.
+- `governing-requirements.md` (64) - G1-G7. Loaded at launch for Claude.
 - `architecture.md` (144) - the agreed call-through model. Owns the canonical
   authoring design; other chapters link here rather than restate it.
 - `review.md` (122) - current decisions, the next open point, an index of
   older decisions still in force, and what the call-through model superseded.
-- `implementation-plan.md` (83) - what is left, in unblocking order.
-- `workflow.md` (83) - the two commands, and what is still hand-written.
-- `prototype.md` (65) - what exists today and what does not.
+- `implementation-plan.md` (41) - what is left, in unblocking order.
+- `workflow.md` (123) - every command, including the opt-in cross-compiles.
+- `prototype.md` (81) - what exists today and what does not.
 - `dependencies.md` (52) - where requirements live now that Cargo resolves them.
 
 Superseded transplant-era chapters are under `archive/2026-09-16/`, and the code

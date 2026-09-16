@@ -18,8 +18,25 @@ From the repository root:
 cargo test --workspace --locked
 ```
 
-This covers task declaration parsing and macro expansion. It does not build any
-firmware.
+This covers task declaration parsing, macro expansion, and the backend data the
+CLI emits from. It does not build any firmware.
+
+The tests that do are opt-in, because each drives a cross-compile:
+
+```text
+cargo test -p ferroforge-macros -- --ignored
+```
+
+That checks `tasks/blinky` on its own, links both firmwares, and plants four
+defects in a copy of one - a hardware task given inputs, an `async` task
+given an interrupt, a configuration type disagreeing with its
+definition, and a binding naming a resource that does not exist - asserting the
+message each one must fail with. The unmutated copy is checked first, so a
+broken harness cannot pass as a rejection.
+
+Run them when changing an expansion. A case that starts failing with the wrong
+message is the point: it means a defect stopped being diagnosable at the
+authored line.
 
 ## Emit a Firmware's Target Files
 
@@ -39,9 +56,9 @@ than a guess. `--defmt-log <level>` sets `DEFMT_LOG`; it defaults to `info`.
 `ferroforge platform-deps <backend.toml>` prints the same dependency lines
 without writing anything.
 
-Re-emitting is how drift is caught: if the output differs from what the firmware
+Re-emitting is how drift is caught: if the output differs from what a firmware
 holds, a chip fact was edited in the wrong place. `cargo test -p ferroforge-cli`
-asserts exactly that against `firmware/nucleo-f401re`.
+asserts exactly that, against every application it finds under `firmware/`.
 
 ## Check a Reusable Task Crate
 
@@ -69,6 +86,10 @@ Run these from the firmware directory so Cargo picks up its
 `.cargo/config.toml`, which selects the target and linker arguments;
 `--manifest-path` alone does not change configuration discovery. See the
 [Cargo configuration reference](https://doc.rust-lang.org/cargo/reference/config.html).
+
+Each application under `firmware/` is its own workspace and builds the same way;
+substitute its directory and bin name. They do not share a target directory, so
+building one does not rebuild another.
 
 A successful build does not imply the firmware has been flashed or tested on
 hardware.

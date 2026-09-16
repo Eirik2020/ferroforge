@@ -257,6 +257,26 @@ fn render_instance(instance: &Instance) -> syn::Result<TokenStream> {
         .priority
         .clone()
         .unwrap_or_else(|| LitInt::new("1", name.span()));
+    // Per G3 the binding is what makes a task a hardware task, and RTIC runs a
+    // bound handler synchronously. The contradiction is visible in the authored
+    // declaration alone, so it is caught here rather than surfacing later as
+    // RTIC's generic complaint about the handler's signature.
+    if let (Some(asyncness), Some(interrupt)) = (&signature.asyncness, &attribute.binds) {
+        let interrupt = interrupt
+            .segments
+            .last()
+            .map(|segment| segment.ident.to_string())
+            .unwrap_or_default();
+        return Err(syn::Error::new(
+            asyncness.span,
+            format!(
+                "an `async` task cannot bind an interrupt: `binds = {interrupt}` makes \
+                 `{name}` a hardware task. Drop `async` and select a hardware definition, \
+                 or remove `binds` to leave it a software task"
+            ),
+        ));
+    }
+
     let binds = attribute
         .binds
         .as_ref()
@@ -331,4 +351,39 @@ pub fn expand(composition: Composition) -> syn::Result<TokenStream> {
             #(#body)*
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn expand_source(tasks: &str) -> syn::Result<TokenStream> {
+        let source =
+            format!("device = chip::pac, dispatchers = [SPARE], monotonic_hz = 1000,\n{tasks}");
+        expand(syn::parse_str::<Composition>(&source)?)
+    }
+
+    /// Nothing here reads the task crate, so the rejection has to come from the
+    /// authored declaration alone.
+    #[test]
+    fn rejects_an_async_task_bound_to_an_interrupt() {
+        let error =
+            expand_source("#[task(from = blink, binds = TIM2)] async fn led(cx: led::Context);")
+                .expect_err("an async task binding an interrupt must be rejected")
+                .to_string();
+        assert!(error.contains("cannot bind an interrupt"), "{error}");
+        assert!(
+            error.contains("TIM2"),
+            "the interrupt must be named: {error}"
+        );
+        assert!(error.contains("led"), "the instance must be named: {error}");
+    }
+
+    /// The control: the same binding on a synchronous task is an ordinary
+    /// hardware task and must pass through.
+    #[test]
+    fn accepts_a_synchronous_task_bound_to_an_interrupt() {
+        expand_source("#[task(from = on_tick, binds = TIM2)] fn tick(cx: tick::Context);")
+            .expect("a synchronous bound task is a hardware task");
+    }
 }

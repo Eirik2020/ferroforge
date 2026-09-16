@@ -64,30 +64,51 @@ fn emit(backend: &Path, into: &Path) {
     );
 }
 
-/// Regenerating must not change what the firmware builds with. If this fails, a
-/// chip fact has drifted between the backend data and the firmware - the whole
+/// Every firmware for this chip, so a second application cannot quietly drift
+/// from the first. Discovered rather than listed: a new firmware is covered by
+/// existing, not by remembering to add it here.
+fn firmwares_for_the_shipped_chip() -> Vec<PathBuf> {
+    let mut found = fs::read_dir(repository_root().join("firmware"))
+        .expect("the project must have a firmware directory")
+        .filter_map(|entry| {
+            let path = entry.ok()?.path();
+            path.join("Cargo.toml").is_file().then_some(path)
+        })
+        .collect::<Vec<_>>();
+    found.sort();
+    assert!(
+        found.len() >= 2,
+        "reuse is only demonstrated by a second firmware; found {found:?}"
+    );
+    found
+}
+
+/// Regenerating must not change what a firmware builds with. If this fails, a
+/// chip fact has drifted between the backend data and that firmware - the whole
 /// failure mode the backend exists to prevent.
 #[test]
-fn emitted_files_match_the_firmware() {
+fn emitted_files_match_every_firmware() {
     let emitted_into = scaffold("backend-emit-test");
     emit(&shipped_backend(), &emitted_into);
 
-    let firmware = repository_root().join("firmware/nucleo-f401re");
-    for file in EMITTED_FILES {
-        let emitted = fs::read_to_string(emitted_into.join(file)).unwrap();
-        let in_use = fs::read_to_string(firmware.join(file))
-            .unwrap_or_else(|_| panic!("firmware is missing {file}"));
+    for firmware in firmwares_for_the_shipped_chip() {
+        let name = firmware.file_name().unwrap().to_string_lossy().into_owned();
+        for file in EMITTED_FILES {
+            let emitted = fs::read_to_string(emitted_into.join(file)).unwrap();
+            let in_use = fs::read_to_string(firmware.join(file))
+                .unwrap_or_else(|_| panic!("{name} is missing {file}"));
+            assert_eq!(
+                emitted, in_use,
+                "{name}/{file} differs from what the backend data says"
+            );
+        }
+
         assert_eq!(
-            emitted, in_use,
-            "{file} differs between the backend data and the firmware"
+            platform_block(&emitted_into.join("Cargo.toml")),
+            platform_block(&firmware.join("Cargo.toml")),
+            "{name}'s platform crates differ from the ones its chip declares"
         );
     }
-
-    assert_eq!(
-        platform_block(&emitted_into.join("Cargo.toml")),
-        platform_block(&firmware.join("Cargo.toml")),
-        "the firmware's platform crates differ from the ones its chip declares"
-    );
 }
 
 /// The other half of the gate: every emitted file must be derived, so selecting
