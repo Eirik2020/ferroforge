@@ -1,7 +1,7 @@
 # Build and Development Workflow
 
-Commands below describe the current prototype. The bounded two-system pipeline
-are covered in the [implementation plan](implementation-plan.md). The required
+Commands below describe the current prototype, including the bounded two-system
+pipeline. The required
 [composition and unified-target repair](composition-repair-plan.md) is still
 planning work; its proposed interfaces are not executable commands yet.
 
@@ -32,9 +32,9 @@ fixture. Its compile-fail harness verifies that invalid resource, spawn,
 configuration, shared-borrow, and monotonic uses fail for the intended compiler
 reason. Manifest tests also exercise conservative normal-dependency
 collection, explicit check-only exclusion, feature merging, and conflict
-diagnostics. See
-[Phase 2 progress](implementation-plan.md#progress-record---phase-2-independent-sw-checking)
-for the implemented slice and remaining gates.
+diagnostics. See the
+[standalone discovery foundation](prototype.md#standalone-discovery-foundation)
+for what this slice currently covers.
 
 To check only the standalone portable SW package from the repository root:
 
@@ -118,9 +118,11 @@ arity and startup clock type are reported on their authored init lines.
 
 The initial checker accepts one qualified crate-root `#[ferroforge::init]` with
 self-contained root support. It does not yet provide configuration access,
-`cx.cs`, init-local storage, child support modules, targets beyond STM32F401, or
-generated-manifest/orchestration integration. The bounded Phase 4 renderer does
-transplant that initial checked scope into a real-RTIC ARM program.
+`cx.cs`, init-local storage, child support modules, or targets beyond STM32F401.
+Manifest and orchestration integration do exist: `render_standalone_project`
+merges init dependencies into the generated manifest, and both Nucleo pipelines
+run the init check as a stage. The renderer transplants that initial checked
+scope into a real-RTIC ARM program.
 
 ## Check the Bounded Standalone Project
 
@@ -207,9 +209,8 @@ memory layout, and probe selection with the Nucleo system, while
 name and prevents all dependent later stages. The default regressions simulate
 failure at each command boundary and exercise real invalid task, composition,
 init, firmware-generation, generated-check, and linker cases. They assert both
-the reported stage and that later Cargo stages were not executed. Together with
-the second system's successful command and unchanged-source regression, this
-closes the bounded Phase 5 and Phase 6 gates.
+the reported stage and that later Cargo stages were not executed. The second
+system's command and its unchanged-source regression cover reuse.
 
 ## Check Embedded Source
 
@@ -264,9 +265,18 @@ been flashed or tested on hardware.
 
 ## Rust Analyzer
 
-`.vscode/settings.json` links the host, `embedded`, and generated workspace
-manifests. Each embedded workspace has its own `.cargo/config.toml`. The
-generated `src/main.rs` is ordinary source that the editor can index directly.
+`.vscode/settings.json` links only three manifests: the host root, `embedded`,
+and `generated/nucleo-f401re`. `tasks/blinky`, both `systems/*/init`, and both
+`systems/*/gen_app` are not linked, so the editor does not index them without
+opening them as their own projects. The generated `src/main.rs` is ordinary
+source that the editor can index directly.
+
+Committed `.cargo/config.toml` files exist only for `embedded`,
+`generated/nucleo-f401re`, and the two `gen_app` directories. `tasks/blinky` and
+the init packages have none: init's configuration is generated under
+`.ferroforge/init-check`, which is also where `FERROFORGE_INIT_INTERFACES` is
+set. Checking init from the editor therefore requires that generated directory
+to exist and to be current.
 
 The focused command above checks diagnostic span mapping through the standalone
 task attribute. It is ignored in the default suite because the Rust Analyzer

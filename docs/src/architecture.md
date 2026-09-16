@@ -1,10 +1,15 @@
 # Source-Transplant Architecture
 
-The one-page [governing requirements](governing-requirements.md) take precedence
-over earlier design wording in this chapter. This chapter explains the
-architecture and its implementation status under those requirements. The
-interrupt enum is required; which task kind receives the binding remains
-unresolved in the [current decision record](review.md#current-decision---governing-requirements-2026-09-15).
+The [governing requirements](governing-requirements.md) take precedence over
+earlier design wording in this chapter. This chapter explains the architecture
+and its implementation status under those requirements. Per G3 and G4, the
+typed interrupt enum is required and hardware tasks carry the interrupt
+binding; software tasks do not.
+
+**Size note:** this is the largest chapter in the book and is a candidate for
+splitting once documentation consolidation is complete. Until then, add new
+material to the section it belongs to rather than starting a parallel chapter,
+so the eventual split follows real seams.
 
 This document records the agreed direction: complete reusable task bodies and
 system-owned init bodies are checked through mock RTIC interfaces and
@@ -127,23 +132,12 @@ systems/
     `-- gen_app/
 ```
 
-The required target layout is:
-
-```text
-firmware/
-`-- <name>/                     # Independent Cargo workspace
-    |-- Cargo.toml              # Authored package and workspace
-    |-- src/
-    |   |-- lib.rs
-    |   |-- composition.rs
-    |   `-- init.rs
-    `-- gen_app/                # Excluded, generated standalone build package
-```
-
-Composition and init share one target-checked authored package. Shared host
-tooling performs generation; reusable common and chip-family task crates live
-outside individual firmware applications. This layout remains to be implemented;
-detailed Cargo plumbing and checking-interface refresh remain open.
+The required target layout is fixed by G5 in the
+[governing requirements](governing-requirements.md) and is not restated here.
+Composition and init share one target-checked authored package; shared host
+tooling performs generation, and reusable common and chip-family task crates
+live outside individual firmware applications. This layout remains to be
+implemented; detailed Cargo plumbing and checking-interface refresh remain open.
 
 The generated firmware is a separate workspace because it has a different
 purpose from the mock check workspaces. It contains the complete
@@ -267,7 +261,7 @@ Those decisions belong to the system and its app composition.
 
 The initial resource, configuration, input/spawn, and SysTick directions are
 agreed. The remaining grammar details and implementation proofs are tracked
-in [review item 1](review.md#1-typed-contract-for-independent-task-checking).
+in [software task clarifications](architecture.md#software-task-clarifications).
 
 The contract must provide enough information to check the task before a system
 selects it. A resource name such as `led` or a spawn alias such as `report`
@@ -836,9 +830,11 @@ The agreed term is now **firmware**, replacing "system" in the new design.
 One `firmware/` grouping directory contains all firmware targets; it is not a
 compiled Cargo crate. Each target has its own workspace containing app composition
 and handwritten native hardware init, with Rust Analyzer checking of authored code
-as a requirement. The agreed layout places `composition.rs` and `init.rs` in
-one target-checked authoring package and uses shared host generation tooling;
-`gen_app` is an excluded, generated standalone build package. Checking-interface
+as a requirement. Per G5 the authored package holds one `composition!`
+declaration carrying target selection, task wiring, and the handwritten init
+with its `Shared` and `Local` resources; file layout within that package is the
+author's choice. Generation uses shared host tooling, and `gen_app` is an
+excluded, generated standalone build package. Checking-interface
 refresh and detailed Cargo plumbing remain open; current `systems/` paths still
 describe the checkout. See the
 [agreed logical hierarchy](composition-repair-plan.md#family-backends-and-firmware-workspaces).
@@ -848,10 +844,10 @@ and contains that family's reusable hardware tasks and helpers (functions,
 structs, and supporting code). Common reusable crates contain software tasks.
 Firmware selects the chip definition from the backend rather than maintaining
 another copy. Both task kinds use the same RTIC-like definition and composition
-model. Interrupt selection requires an enum covering supported-chip interrupts
-and validation against the selected chip. The task kind receiving the required
-binding awaits the clarification recorded in the
-[governing requirements](governing-requirements.md).
+model. Per G4, interrupt selection uses a typed enum per chip owned by that
+chip's platform backend, so an interrupt the selected chip does not have is a
+type error in the authored package. Per G3, hardware tasks carry the interrupt
+binding and software tasks do not.
 Enum representation and helper sharing details remain open. Concrete target
 availability and helper type identity must be preserved through checking and
 transplantation.
@@ -883,30 +879,15 @@ The composition is responsible for:
 - selecting the target and final dependency versions or features.
 
 Final dependency selections must be compatible with the transplanted source.
-Task and init crates' ordinary Cargo manifests are the agreed source of
-dependency requirements for independent checks and firmware generation; no
-duplicate per-task dependency list or Rust version registry is required in the
-new design. Initially carry participating source crates' applicable normal
-dependencies conservatively, including dependencies of retained unused support,
-while excluding explicitly identified check-only dependencies. Precise pruning
-is deferred. See [dependency management](dependencies.md#agreed-manifest-based-requirements).
-Check-only entries are explicitly listed using `check-only-dependencies` under
-`[package.metadata.ferroforge]`; collection, validation, and dependency exclusion
-are implemented. Source cleanup currently recognizes the literal `ferroforge`
-crate name and translates supported checking references; it does not use the
-metadata list to remove arbitrary check-only imports. General cleanup or
-diagnostics for those references remain work.
-The agreed initial merge rule combines requested features only for matching
-package sources, version requirement strings, and effective default-feature
-settings. Differences require alignment and a diagnostic identifying their
-contributors; system choices cannot silently override source requirements.
-This conservative collection and merge policy now drives the bounded standalone
-manifest writer and both centralized Nucleo systems, whose generated projects
-pass ARM checks and release links. Legacy migration and generalized frontend
-syntax remain open. Matching requirements do not prove identical resolved
+[Dependency management](dependencies.md) owns that policy: Cargo manifests as
+the source of requirements, conservative inclusion, the
+[check-only setting](dependencies.md#agreed-check-only-dependency-setting), and
+the [merge and conflict rules](dependencies.md#agreed-initial-merging-and-conflict-policy).
+
+The architectural constraint is narrower: source validated against one HAL
+version is not automatically validated against a different version chosen
+during composition, and matching requirements do not prove identical resolved
 graphs or valid feature combinations.
-Source validated against one HAL version is not automatically validated
-against a different version chosen during composition.
 
 Task-definition identity and task-instance identity must remain separate. For
 example, one reusable `blink` definition may produce `status_blink` and
@@ -1059,7 +1040,7 @@ The boundary and discovery are implemented, and the renderer-owned sibling-modul
 ARM layout has focused collision and contained-relative-path proofs.
 Overlapping-module, relative-import/macro, and cross-boundary reference handling
 remain work in
-[review item 4](review.md#4-supporting-source-and-reference-scope). Rewrites must
+the [source-transplant boundary](#source-transplant-boundary). Rewrites must
 preserve literals and unrelated identifiers; arbitrary string replacement in
 macro token text cannot provide that guarantee.
 
@@ -1086,64 +1067,9 @@ compiling that package for the host.
 
 ## Current Prototype
 
-The current `embedded` workspace demonstrates the basic lifecycle in a single
-package:
-
-- `src/tasks.rs` contains RTIC-shaped task bodies checked through FerroForge
-  mock contexts.
-- `src/lib.rs` contains real HAL imports, resources, init code, target data,
-  and check-time task configuration.
-- `composer` applies host-owned scheduling and configuration.
-- `ferroforge-renderer` extracts the source and writes the standalone project
-  under `generated/nucleo-f401re`.
-
-The legacy prototype successfully checks and builds the generated STM32F401RE
-RTIC firmware. The separate standalone path now discovers task workspaces,
-preserves the initial supporting-source boundary, distinguishes definitions
-from instances, rewrites resource/configuration/spawn/clock/logging uses, and
-ARM-checks emitted RTIC source. A separate composition-generated checker now
-ARM-checks the native system init body, and the bounded Phase 4 path transplants
-that authored init into the real-RTIC output. The same path now emits a merged
-manifest and the complete initial STM32F401RE target package, then checks and
-release-links the generated project. Its initial explicit-Rust frontend now
-lives under `systems/nucleo-f401re` and `systems/nucleo-f401re-fast-blink`, where
-init, composition, and generated firmware have separate owned directories.
-Both reuse `tasks/blinky`; the second composer uses the first composer's pipeline
-implementation. These paths do not replace the legacy composer or implement the
-required `firmware/` hierarchy and family backend repair.
-
-On 2026-09-13, all 81 default top-level workspace tests passed, with two
-additional Rust Analyzer diagnostic tests opt-in/ignored. Strict Clippy, the ARM
-source library check, and the existing generated firmware release build also
-passed offline. These are historical results. On 2026-09-15,
-`cargo test --workspace --locked --offline` passed 83 tests with two Rust Analyzer
-tests ignored, and both current Nucleo pipelines passed ARM checks and release
-links. That verification did not rerun strict Clippy or the opt-in Rust Analyzer
-tests. The workspace suite includes an independently checked
-standalone SW package, eight expected compiler failures with authored-source
-locations, a fixed real-RTIC ARM layout, and renderer-emitted ARM source with
-repeated per-instance configuration and zero/one/multiple-input spawn
-translation plus the real 1 kHz SysTick backend. The emitted ARM cases also
-cover mapped arguments in qualified and aliased native logging calls while
-preserving lookalike literal text, and one combines the independently checked
-native init with selected real RTIC tasks. Another emits the merged manifest,
-linker memory map, Cargo runner/linker settings, and probe configuration, then
-checks and release-links that generated project on ARM. First-system frontend
-regressions also render the centralized Nucleo init/composition/task selection
-and prove command-stage failure short-circuiting.
-The
-opt-in Rust Analyzer 1.98.0 test locates E0599/E0308 at authored task-body lines.
-These checks close the bounded Phase 2 gate and preserve the existing prototype.
-The default init tests add a
-native-HAL ARM check plus expected stale-interface/spawn/startup/profile
-failures. A second opt-in Rust Analyzer 1.98.0 regression locates the focused
-E0107/E0308 errors on authored init lines, closing the bounded Phase 3 gate. The
-new system composer now provides the first one-command pipeline: child Cargo
-processes check reusable tasks and init, then check and release-build the
-rendered firmware. Command-stage failures stop later stages;
-`real_failures_stop_at_their_pipeline_boundaries` also covers the required
-injected source, render, and link failure classes, closing the bounded Phase 5
-gate. The second same-board pipeline supplies Phase 6 reuse evidence.
+[Current prototype](prototype.md) owns the description of what exists today,
+separated into the active standalone path and the legacy app-backed path. This
+chapter describes the agreed model, not its implementation status.
 
 ## Core Design Principle
 

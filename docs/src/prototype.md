@@ -8,6 +8,24 @@ same unchanged task package.
 The [architecture](architecture.md) and [review](review.md) distinguish the
 planned independent task/init design from this example.
 
+## Two Paths
+
+Two implementations exist side by side, and almost every statement below is
+true of only one of them. Check which section you are in.
+
+- **Standalone path** - the active one. Typed task declarations check
+  independently, composition is an owned host-side model, init is checked
+  against generated interfaces, and the transplant emits real RTIC. Used by
+  `tasks/blinky` and both `systems/nucleo-f401re*` pipelines.
+- **Legacy path** - the 2026-09-05 app-backed prototype. Tasks depend on a
+  surrounding `app!` in the same crate, `composer` renders
+  `generated/nucleo-f401re`, and several capabilities the standalone path has
+  are absent or latently broken here. Retained as a working example; the
+  [repair plan](composition-repair-plan.md) supersedes it.
+
+The sections under Shared Machinery describe declarations and target support
+that both paths use, with the per-path differences called out inline.
+
 ## Workspace Map
 
 | Location | Role |
@@ -16,7 +34,7 @@ planned independent task/init design from this example.
 | `ferroforge` | `no_std` API, mock resource/clock types, metadata, macro re-exports |
 | `ferroforge-contracts` | Shared task declaration parser and structural validation; no HAL dependency |
 | `ferroforge-macros` | Procedural macros for tasks, apps, composition, and dependencies |
-| `ferroforge-renderer` | Host source loader and RTIC firmware renderer |
+| `ferroforge-renderer` | Host source loader, standalone discovery, composition validation, init-check generation, transplant, dependency merge, and project emission |
 | `composer` | Example host executable and its composition |
 | `embedded` | Separate ARM library checking real HAL init, resources, and task bodies |
 | `generated/nucleo-f401re` | Separate generated RTIC firmware project |
@@ -34,55 +52,15 @@ projects are separate Cargo workspaces. The two `app_composition` packages join
 the host workspace; they read target source and metadata without importing
 target packages as host dependencies.
 
-## Legacy System Source
+## Shared Machinery
 
-`embedded/src/lib.rs` currently groups target selection, shared/local
-resources, initialization, and the default composition needed for checking.
-These defaults are replaced by host composition where supported. The source
-does not contain an executable firmware entry point.
+Declarations, spawn aliases, and target support that both paths use. Where the
+two diverge, the difference is named inline.
 
-The following is included from the actual source so it stays current:
-
-```rust,ignore
-{{#include ../../embedded/src/lib.rs}}
-```
-
-`#[ferroforge::firmware]` retains an item for ARM compilation and renderer
-extraction. The mock macro supplies `init::Context` with real PAC peripherals
-and Cortex-M peripherals on ARM. Its host version omits hardware initialization
-and cannot serve as a substitute for the ARM check.
-
-Legacy init is parsed as part of `app!`, and its names-only mock task types
-depend on that same-crate app declaration.
-
-## Centralized Standalone System
-
-The first new-path system follows the agreed ownership layout:
-
-```text
-systems/nucleo-f401re/
-|-- init/                 # native HAL init check workspace
-|-- app_composition/      # host-only composition/target frontend
-`-- gen_app/              # generated real-RTIC firmware workspace
-```
-
-Its init source is centralized with the board instead of the reusable tasks:
-
-```rust,ignore
-{{#include ../../systems/nucleo-f401re/init/src/lib.rs}}
-```
-
-`tasks/blinky` is a separate check workspace containing unchanged reusable
-`blink` and `report` definitions. The app-composition crate discovers both
-manifests, constructs the explicit host-side composition, generates init
-interfaces, and renders `gen_app`. This is the initial frontend choice: normal
-Rust using the owned composition model. It deliberately does not settle a
-general author-facing macro or data-file grammar.
-
-## Mock Macro Expansion
+### Mock Macro Expansion
 
 `ferroforge/src/lib.rs` re-exports `app`, `composition`, `dependency_registry`,
-`firmware`, and `task`. Checking expansion is in `ferroforge-macros/src/lib.rs`;
+`firmware`, `init`, and `task`. Checking expansion is in `ferroforge-macros/src/lib.rs`;
 task argument parsing and common declaration validation now live in
 `ferroforge-contracts`.
 
@@ -106,7 +84,7 @@ one-, and multiple-input result shapes. These mocks are compile-only and may
 panic if executed. The legacy app-backed stubs still use FerroForge's
 `SpawnError::QueueFull`; the standalone transplant uses RTIC's returned inputs,
 while legacy-path translation remains open. See the
-[mock API review](review.md#3-supported-mock-api-and-real-rtic-translation).
+[task inputs and spawning](architecture.md#task-inputs-and-spawning).
 
 Current task source, including the software task and hardware interrupt task:
 
@@ -114,7 +92,7 @@ Current task source, including the software task and hardware interrupt task:
 {{#include ../../embedded/src/tasks.rs}}
 ```
 
-## Typed Spawn Composition
+### Typed Spawn Composition
 
 The original design's typed alias model is present in the mock app expansion.
 Each task declares aliases, and its app binds each alias to a selected task.
@@ -159,11 +137,11 @@ textual identifiers and original Rust source.
 Incoming parameter lists are derived from the task function. On the standalone
 path, `spawn = [report(value: u32)]` generates an independent typed checking
 method; on the legacy path, outgoing signatures still come from the selected
-target in the surrounding app. Composition-driven translation of the standalone
-call into a real instance spawn remains open. See
+target in the surrounding app. The standalone transplant translates that call
+into a real instance spawn; only the legacy path is unresolved. See
 [task inputs and spawning](architecture.md#task-inputs-and-spawning).
 
-## Target and Monotonic Support
+### Target and Monotonic Support
 
 The current renderer supports `STM32F401RET6` with `stm32f4xx-hal` 0.23.0 and
 the Rust target `thumbv7em-none-eabihf`. It records MCU build/linker properties,
@@ -193,37 +171,40 @@ dispatcher duplication/conflicts and the number required for distinct
 nonzero software priorities. Final RTIC validation remains mandatory.
 
 Target properties and parsing are duplicated between the macros, loader, and
-renderer. Consolidation is planned before broadening board/HAL support.
+renderer, and again in `standalone.rs` (`StandaloneTarget::stm32f401re`) and in
+the system runtime version constants under `systems/*/app_composition`. G5
+requires one authoritative target definition; the
+[repair plan](composition-repair-plan.md#unified-target-contract) relies on this
+inventory.
 
-## Host Composition
+## Standalone Path
 
-`composer/src/composition.rs` supplies the final scheduling and configuration:
+The active path. Everything in this section is independent of the legacy `app!`
+declaration.
 
-```rust,ignore
-{{#include ../../composer/src/composition.rs}}
+### Centralized Standalone System
+
+The first new-path system follows the agreed ownership layout:
+
+```text
+systems/nucleo-f401re/
+|-- init/                 # native HAL init check workspace
+|-- app_composition/      # host-only composition/target frontend
+`-- gen_app/              # generated real-RTIC firmware workspace
 ```
 
-The current composition can select existing task names and replace their
-priorities, configuration, spawn binding data, and app dispatchers. Resource
-declarations, init source, task bodies, hardware interrupt bindings, target,
-monotonic selection, and dependency requirements still come from `embedded`.
-Multiple named instances of one reusable definition and resource remapping are
-planned capabilities.
+Its init source is centralized with the board instead of the reusable tasks:
 
-## Source Loader
+```rust,ignore
+{{#include ../../systems/nucleo-f401re/init/src/lib.rs}}
+```
 
-The existing app-backed path remains the firmware renderer's input:
-
-`ferroforge-renderer/src/loader.rs` implements `load_application`. It reads
-`src/lib.rs`, finds an `app!` declaration, loads one sibling task file and an
-optional dependency registry file, and parses annotated task functions using
-`syn`. The host does not compile or link the ARM library to load this data.
-
-Discovery is currently based on that fixed file arrangement and unqualified
-function names. Supporting imports/helpers from task files are not collected.
-The logical-module supporting-source boundary is agreed, but generalized
-package/module discovery, instance identity, and scope-preserving extraction
-remain [implementation and verification work](review.md#4-supporting-source-and-reference-scope).
+`tasks/blinky` is a separate check workspace containing unchanged reusable
+`blink` and `report` definitions. The app-composition crate discovers both
+manifests, constructs the explicit host-side composition, generates init
+interfaces, and renders `gen_app`. This is the initial frontend choice: normal
+Rust using the owned composition model. It deliberately does not settle a
+general author-facing macro or data-file grammar.
 
 ### Standalone Discovery Foundation
 
@@ -239,8 +220,9 @@ task macro selects the standalone expansion for typed declarations. Names-only
 prototype syntax still works. Repeated task argument keys,
 duplicate declarations, overlapping local/shared claims, and malformed dependency
 arguments now fail consistently instead of being accumulated by one parser and
-overwritten by the other. Typed contracts remain rejected explicitly by the
-legacy loader because the new rendering path does not consume them yet.
+overwritten by the other. The legacy loader still rejects typed contracts
+explicitly, because that loader feeds the legacy renderer; the standalone
+transplant consumes them.
 
 The new read-only `ferroforge_renderer::source::discover_tasks(&crate_root)` API
 discovers ordinary file-backed/inline modules and `mod.rs` children. It keeps
@@ -419,7 +401,74 @@ dependency contributors before creating output. General frontend syntax,
 additional board profiles, and release-build orchestration remain outside this
 project writer.
 
-## Renderer
+## Legacy Path
+
+The 2026-09-05 app-backed prototype. Statements here do not describe the
+standalone path, and several of these limits are fixed there.
+
+### Legacy System Source
+
+`embedded/src/lib.rs` currently groups target selection, shared/local
+resources, initialization, and the default composition needed for checking.
+These defaults are replaced by host composition where supported. The source
+does not contain an executable firmware entry point.
+
+The following is included from the actual source so it stays current:
+
+```rust,ignore
+{{#include ../../embedded/src/lib.rs}}
+```
+
+`#[ferroforge::firmware]` retains an item for ARM compilation and renderer
+extraction. The mock macro supplies `init::Context` with real PAC peripherals
+and Cortex-M peripherals on ARM. Its host version omits hardware initialization
+and cannot serve as a substitute for the ARM check.
+
+Legacy init is parsed as part of `app!`, and its names-only mock task types
+depend on that same-crate app declaration.
+
+### Host Composition
+
+`composer/src/composition.rs` supplies the final scheduling and configuration:
+
+```rust,ignore
+{{#include ../../composer/src/composition.rs}}
+```
+
+The current composition can select existing task names and replace their
+priorities, configuration, spawn binding data, and app dispatchers. Resource
+declarations, init source, task bodies, hardware interrupt bindings, target,
+monotonic selection, and dependency requirements still come from `embedded`.
+Multiple named instances of one reusable definition and resource remapping
+remain planned for this legacy path; the standalone path implements both.
+
+Selection is not a free subset. Init is copied without being adjusted to the
+selection, so the composition must include every task that init references.
+Dropping `timer_interrupt` still renders, but the output cannot compile: init
+retains the unrewritten `timer_interrupt::Config::FREQUENCY_HZ`, and
+`hello_timer` stays in `Local` with no task claiming it. Dropping `blink`
+likewise leaves `blink::spawn()` in init. The renderer does not reject this.
+
+`compose_tasks` does enforce: every configuration key supplied, with its type
+matching the embedded check type exactly (`u32` for a `u64` key fails); every
+spawn alias bound; and `binds` only restating the embedded interrupt binding.
+
+### Source Loader
+
+The existing app-backed path remains the firmware renderer's input:
+
+`ferroforge-renderer/src/loader.rs` implements `load_application`. It reads
+`src/lib.rs`, finds an `app!` declaration, loads one sibling task file and an
+optional dependency registry file, and parses annotated task functions using
+`syn`. The host does not compile or link the ARM library to load this data.
+
+Discovery is currently based on that fixed file arrangement and unqualified
+function names. Supporting imports/helpers from task files are not collected.
+The logical-module supporting-source boundary is agreed, but generalized
+package/module discovery, instance identity, and scope-preserving extraction
+remain [implementation and verification work](architecture.md#source-transplant-boundary).
+
+### Renderer
 
 `ferroforge-renderer/src/lib.rs` exposes `render`, `render_loaded`,
 `render_composed`, and `render_loaded_composed`. The example uses the latter
@@ -427,7 +476,7 @@ with `load_application`, keeping the host and ARM dependency graphs separate.
 The definition-based APIs also exist, but importing a target-only library into
 the host composer is not the example's workflow.
 
-Renderer source:
+The example composer that drives it:
 
 ```rust,ignore
 {{#include ../../composer/src/main.rs}}
@@ -446,15 +495,22 @@ recognize the preferred [task-local `CONFIG.FIELD` syntax](architecture.md#task-
 It emits named, typed constants at the start of the app, before the resource
 structs and init, rather than replacing every read with a literal. The selected
 design builds on this placement with explicit grouping by composed task
-instance; generalized task instancing and `CONFIG.FIELD` rewriting remain work.
+instance. Generalized task instancing and `CONFIG.FIELD` rewriting remain work
+for this legacy renderer only; the standalone transplant implements both.
 Generated firmware has no FerroForge dependency, `build.rs` renderer, or
 `OUT_DIR` include.
 
-In this legacy renderer, spawn bindings are validated and stored but are not
-used to rewrite task spawn aliases. Its macro-token configuration rewrite also
-uses string replacement; preserving literals and scope is part of the remaining
-work. The separate standalone transplant implements direct spawn calls and
-direct configuration expressions but is not yet connected to this output path.
+The legacy renderer does not support spawn aliases in rendered firmware. It
+validates and stores the bindings but never rewrites the calls, so any task
+calling `cx.spawn.<alias>()` renders code referencing a context field real
+RTIC 2 does not have, and nothing reports an error. `compose_tasks` also
+accepts a hardware task as a spawn target, which the `app!` checking macro
+rejects. The current example uses no aliases, so the defect is latent.
+
+Its macro-token configuration rewrite also uses string replacement; preserving
+literals and scope is part of the remaining work. The separate standalone
+transplant implements direct spawn calls and direct configuration expressions
+but is not yet connected to this output path.
 
 ## Using the Mock API From Another Project
 
@@ -469,47 +525,3 @@ The macro crate is re-exported, so the small task/app example above needs only
 that dependency. Hardware declarations also need their own actual target
 dependencies. No publication status is assumed by these instructions.
 
-## Verified Baseline
-
-On 2026-09-14, 83 top-level workspace tests passed and two Rust Analyzer tests
-remained opt-in/ignored: 10 contract, 23 macro, 7 renderer/loader, 10 discovery,
-6 composition, 6 dependency, 4 standalone checking (one ignored), 8 standalone
-transplant, 3 standalone project, 4 independent-init tests (one ignored), 3
-first-system frontend/orchestration tests, and 1 second-system reuse test. The
-first-system tests include the real-process negative pipeline matrix.
-Nested checks cover one positive package, eight focused expected compiler
-failures with authored-source locations, the fixed real-RTIC layout, and
-renderer-emitted ARM source, including distinct configuration values for
-repeated instances, zero/one/multiple-input spawn
-translations, the real 1 kHz SysTick backend/delay, and mapped native logging
-arguments with unchanged literals. They also cover the independently checked
-native init transplanted beside selected real RTIC tasks. The standalone project
-also emits its manifest and complete initial STM32F401RE target package from
-collected requirements/profile data, then checks and release-links on ARM. The
-opt-in diagnostic test separately passed with Rust
-Analyzer 1.98.0, locating its E0599/E0308 errors on authored
-task-body lines. Strict workspace Clippy, the existing ARM source check, and the
-generated firmware release build also passed offline. The init suite also
-checks a generated native-HAL ARM package plus expected failures for stale
-composition interfaces, spawn arguments, startup types, and a missing profile.
-The actual one-command pipeline independently checks `tasks/blinky` on ARM,
-checks the centralized Nucleo init against its generated interface, checks the
-real-RTIC `gen_app`, and release-links it using the emitted target package. Its
-failure-order regressions both inject unsuccessful command stages and run real
-negative source/composition/init/render/check/link cases. The latter includes a
-concrete resource mismatch caught by the generated Rust/RTIC check and a
-malformed test-owned linker script rejected by the real release link. Each case
-asserts that later Cargo stages are skipped.
-The second `systems/nucleo-f401re-fast-blink` command uses the same bounded
-Nucleo pipeline mechanics with its own init and composition profile. It maps
-`blink`/`report` to `heartbeat`/`diagnostics`, maps the task resources to
-`activity_led`, `pulse_count`, and `heartbeat_enabled`, and emits a 125 ms
-period rather than the first system's 500 ms value. Its render regression
-compares the reusable task file before and after generation, and its complete
-ARM pipeline checks and release-links.
-These results close the bounded Phase 2 gate and preserve the single-system
-prototype. A separate opt-in Rust Analyzer 1.98.0 init regression locates its
-focused E0107/E0308 diagnostics on authored init lines, closing the bounded
-Phase 3 gate. The results do not validate general cross-boundary references,
-generalized frontend syntax, every Rust Analyzer diagnostic, or portability to
-another MCU/HAL target.

@@ -7,19 +7,20 @@ intended per-system `composition!` authoring interface.
 
 ## Implementation Evidence for the Governing Requirements
 
-The [governing requirements](governing-requirements.md) are maintained on one
-short page. This chapter contains implementation details, evidence to provide,
-progress, and proposals. It must not redefine those requirements.
+The [governing requirements](governing-requirements.md) state their own size
+limit. This chapter holds implementation details, proposals, and the evidence
+table below, which doubles as a requirements checklist. It must not redefine
+those requirements, and it is not a progress log.
 
 | Requirement | Evidence to provide |
 | --- | --- |
 | G1 | Firmware applications consume the same authored task definitions without editing or copying them into firmware-owned source. |
 | G2 | Firmware uses required family platform support and independently selects reusable software and hardware task crates; init and tasks share a family HAL helper crate with consistent type identity, and the backend works without optional hardware task crates. |
 | G3 | One coherent task/composition interface demonstrates both kinds; the interrupt distinction matches the user's clarified rule. |
-| G4 | Supported-chip interrupt coverage and selected-chip validity are demonstrated; invalid bindings are rejected. |
+| G4 | A per-chip interrupt enum is reachable from the authored composition, and naming an interrupt the selected chip does not have fails the authored package's own check. |
 | G5 | Migrated firmware workspaces use the agreed layout and shared host tooling. |
 | G6 | Complete authored software-task, hardware-task, composition, and init examples are reviewed for RTIC familiarity before parser/API implementation; any extra declarations serve reuse and composition. |
-| G7 | A helper command creates a recognizable project; CLI operations tolerate layout changes that preserve recognition and report missing/unrecognizable required inputs. Selecting a FerroForge library without an explicit marker fails with an error; broader library checks are deferred. |
+| G7 | A helper command creates a recognizable project; CLI operations tolerate layout changes that preserve recognition and report missing/unrecognizable required inputs. Selecting a FerroForge library without an explicit marker fails with an error. Marker absence is the only library check; broader library checks are out of scope. |
 
 Keep ordinary Rust task/init bodies, native HAL setup, familiar task/context and
 resource access, and a shared composition model central to the API. Internal
@@ -37,18 +38,16 @@ authoring signatures remain subject to the RTIC-like authoring review.
 
 ### Implementation Checkpoint
 
-- Current work: keep the governing requirements on one page and link the plan
-  and decision record to it. Rust implementation remains pending.
-- Existing evidence: reusable software source, standalone task/init checking,
-  transplantation, and both bounded Nucleo pipelines already work. They do not
-  establish completion of G1-G7 for the new firmware layout and family model.
+- Baseline: reusable software source, standalone task/init checking,
+  transplantation, and both bounded Nucleo pipelines work today. None of that
+  establishes G1-G7 for the new firmware layout and family model.
 - Pending: common/family crate organization, the shared task/interrupt enum API,
   firmware workspace migration, unified target consumption, the general CLI and
   project creation/recognition and required library marker handling, and
   checking-interface preparation/refresh in that layout.
-- Next action: settle library marker location/syntax, minimum project recognition
-  inputs, and new-project helper output; then interrupt enum ownership,
-  RTIC-like authoring examples, and checking/target details.
+- Next action: freeze the `composition!` declaration grammar with a complete
+  worked example, then settle interrupt enum ownership and selected-chip
+  validation, then the library marker and project recognition.
 - On continuation: reread `governing-requirements.md`, the current decision in
   `review.md`, and this checkpoint; verify implementation status against source
   and checks before editing. Update progress and evidence without weakening G1-G7.
@@ -130,8 +129,9 @@ source repository and reusable library repositories. A project should select
 libraries and backend support without copying the tool implementation or every
 library into its tree. Local library development can remain possible; required
 local directories, external library resolution, and backend distribution need
-explicit conventions. The compact governing tree shows component layouts, not
-one mandatory checkout containing all components.
+explicit conventions. G5 fixes the firmware layout only; library placement and
+backend packaging are open, and no single checkout is required to contain every
+component.
 
 Project conventions define how FerroForge finds its inputs. A helper command,
 analogous to `cargo generate`, sets up a new project in the expected structure.
@@ -140,8 +140,8 @@ far that required inputs cannot be recognized, the operation reports an error
 identifying the problem. Do not add a general layout linter or reject unrelated
 files and directories merely because they differ from the generated template.
 
-Library checks beyond an explicit marker are deferred and will be added as
-needed. A reusable library must identify itself as a FerroForge library; an
+Marker absence is the only library check; broader library checks are out of
+scope. A reusable library must identify itself as a FerroForge library; an
 attempt to use it as such without the marker must fail with an error identifying
 the crate and missing marker. Apply this requirement to libraries selected for
 FerroForge use, not indiscriminately to ordinary Rust dependencies. The marker
@@ -203,18 +203,8 @@ Required consistency rules:
 
 ### Family Backends and Firmware Workspaces
 
-The agreed logical hierarchy is below. Names illustrate the existing two
-applications; this is not yet a selected Cargo manifest or source-file layout.
-
-```text
-firmware/ (grouping directory, not a Cargo package)
-  nucleo-f401re (own workspace)
-    composition
-    handwritten init
-  nucleo-f401re-fast-blink (own workspace)
-    composition
-    handwritten init
-```
+G5 fixes the firmware layout; the concrete form for these two applications is
+in [the workspace layout below](#agreed-declaration-driven-workspace-layout).
 
 The per-firmware entries are application variants, not duplicate chip
 definitions. Both select the STM32F401RE definition owned by the STM32F4 backend.
@@ -254,10 +244,9 @@ have not been selected for this project.
 
 Family ownership does not imply every chip in STM32F4 has identical peripherals,
 interrupts, memory, or HAL features. Hardware-task selection and interrupt
-bindings must be checked against the firmware's concrete target. The required
-enum must cover supported-chip interrupts; its exact type organization remains
-open. Accepting a family-wide variant alone is not proof that the selected chip
-supports that interrupt.
+bindings must be checked against the firmware's concrete target. Per G4 the
+interrupt enum is per chip, so the selected chip's own enum is what the authored
+composition names; a family-wide variant list is not an acceptable substitute.
 
 Shared HAL helpers and types belong in their own family crate, such as
 `ferroforge-stm32f4`. Handwritten init and hardware tasks consume that same crate;
@@ -281,23 +270,37 @@ agreements. Resolve them before treating the plan as implementation-ready.
 The [interrupt task-kind rule](#interrupt-task-kind---resolved), enum requirement,
 and RTIC-like authoring goal are agreed.
 
-1. **Target access and board-specific settings:** family-backend ownership of
-   concrete chip definitions is now agreed. Still settle where board-specific
-   settings belong and how the host reads that definition without linking
-   native hardware code. These implementation details do not reopen ownership.
-2. **Cargo centralization (asked):** must the target also eliminate repeated
-   HAL versions/chip features from source manifests, or can independently
-   authored compatibility requirements remain and be checked against it?
-   Centralizing these too requires a concrete Cargo inheritance/checking
-   arrangement. The current isolated workspaces and dependency collector do
-   not provide that arrangement. Merely creating a Rust target struct would
-   not solve this part.
-3. **Target authoring format (proposal pending items 1 and 2):** keep one canonical
-   target descriptor and one resolved host model. Prefer Cargo-owned dependency
-   requirements and target metadata over a parallel Rust version registry.
-   Decide the exact file/package location and schema after settling inheritance;
-   do not introduce both a TOML target and separately maintained Rust presets.
-4. **Declaration grammar (proposal constrained by G6):** retain `composition!` as the entry point;
+1. **Target access and board-specific settings - narrowed 2026-09-16:** family-backend
+   ownership of concrete chip definitions is agreed, and the host already reads
+   target data without linking native code. What remains is classifying each
+   field as target-owned or application-owned, by the rule already stated in
+   this chapter: an interrupt assignment is an application choice against a
+   target, while memory layout, device path, and toolchain identity are not.
+2. **Cargo centralization - decided 2026-09-16:** independently authored
+   compatibility requirements stay in source manifests and are checked against
+   the resolved target. G5's single-target rule covers target facts, not
+   dependency versions, and the
+   [manifest-based requirements](dependencies.md#agreed-manifest-based-requirements)
+   policy already makes manifests authoritative for those. A firmware's authored
+   package declares only what its init and composition need in order to compile;
+   the backend supplies the platform-required remainder, which reaches generated
+   output only. Chip- and architecture-derived features such as `stm32f401` and
+   `thumbv7-backend` are target-owned; the logging and panic backends stay the
+   firmware's choice.
+3. **Target authoring format - decided 2026-09-16:** the resolved host model is
+   the load-bearing artifact. Every checking, generation, and build consumer uses
+   that model rather than the descriptor, so the authoring format can change later
+   without touching them. Minimal TOML board facts and a Rust interrupt enum may
+   coexist, provided they never describe the same fact: the backend's Rust owns the
+   family interrupt enum and per-chip validity, and the TOML must not name
+   interrupts. The definition belongs to a family backend crate per G2a, not to
+   `ferroforge-renderer`. That crate needs a name distinct from
+   `ferroforge-stm32f4`, which G2b assigns to the HAL helper.
+4. **Declaration grammar (direction set 2026-09-16; exact form open):** the
+   grammar is Rust-native and stays as close to idiomatic RTIC as possible.
+   "Rust-native" here means Rust syntax parsed declaratively, not ordinary Rust
+   evaluated on the host: composition cannot depend on arbitrary host execution
+   to decide its task graph. Retain `composition!` as the entry point;
    introduce an unambiguous standalone form containing a target reference,
    init reference, named source packages, and named task instances. Each
    instance selects `package_alias::module::definition` and declares its
@@ -306,29 +309,40 @@ and RTIC-like authoring goal are agreed.
    their current interpretation. Show ordinary task/init bodies and familiar
    RTIC declarations first; justify each addition needed for reusable definitions
    or firmware composition. Do not introduce an independent task/init DSL.
-5. **Initial scope limits (proposal):** prove the new interface on the existing
-   F401 target, with native synchronous interrupt handlers and async software
-   tasks. Additional boards, arbitrary Rust macro expansion, host simulation,
-   init-local storage, and a new init-configuration API are not proposed gates.
-   Confirm these limits; do not use them to omit the confirmed hardware or
-   multi-package requirements.
+5. **Initial scope limits - confirmed 2026-09-16:** prove the new interface on the
+   existing F401 target with both task kinds, native synchronous interrupt
+   handlers and async software tasks. Other boards follow afterwards. Arbitrary
+   Rust macro expansion, host simulation, init-local storage, and a new
+   init-configuration API are not gates. These limits do not excuse omitting the
+   confirmed hardware or multi-package requirements.
 6. **Rust Analyzer preparation and refresh (pending discussion):** the
    declaration-driven workspace layout below is agreed. Specify how a fresh
    checkout gets checking interfaces and backend-derived Cargo/editor settings,
    how edits refresh them, and how target changes reload the checking context.
    The detailed IDE proposal below is not yet an agreed implementation mechanism.
-7. **Shared helper integration and interrupt API:** implement the agreed family
-   helper-crate dependency with shared type identity; decide the interrupt enum's owner,
-   chip-specific availability, and conversion to real RTIC bindings. Do not
-   introduce an unrelated hardware-only composition frontend.
-8. **Project conventions and library marker:** choose the marker location/syntax,
-   then specify minimum project recognition inputs, new-project helper output,
-   library references, backend discovery, and command names. G7 requires useful
-   recognition errors and rejection of unmarked FerroForge libraries. Broader
-   library checks remain deferred and are added as needed.
+7. **Shared helper integration and interrupt API - decided 2026-09-16:** the
+   interrupt enum is typed per chip and owned by that chip's G2a platform backend,
+   not by the G2b HAL helper. The backend re-exports the PAC's existing per-chip
+   `Interrupt` enum rather than defining a second list of interrupt names, so
+   there is one source for them. Validity is not a FerroForge check: the authored
+   composition names that type and is compiled for the selected chip, so an
+   interrupt the chip does not have fails the authored package's own check on its
+   authored line. Nothing interrupt-shaped is needed host-side, in the target TOML,
+   or in the resolved target model. Still open: how a parsed variant becomes the
+   generated `binds` attribute, and the family helper-crate dependency with shared
+   type identity. Do not introduce an unrelated hardware-only composition frontend.
+8. **Project conventions and library marker - marker decided 2026-09-16:** a
+   FerroForge library marks itself with `library = true` under
+   `[package.metadata.ferroforge]`, the same manifest table that already carries
+   `check-only-dependencies`. Selecting an unmarked crate as a FerroForge library
+   fails with an error naming the crate and the missing marker. Still open:
+   minimum project recognition inputs, new-project helper output, library
+   references, backend discovery, and command names. Broader library checks stay
+   out of scope per G7b.
 
-Discuss item 8 next, then interrupt enum ownership and selected-chip validation,
-then the complete RTIC-like authoring examples and item 6. Cargo and checking
+Discuss item 4 next: the `composition!` declaration grammar, with a complete
+worked example frozen before any parser exists. Then item 7's interrupt enum
+ownership and selected-chip validation, then items 6 and 8. Cargo and checking
 mechanics must implement the agreed layout. Unknowns stay open rather than
 becoming silent defaults.
 
@@ -344,14 +358,16 @@ firmware/
   nucleo-f401re/
     Cargo.toml              # authored package and its workspace
     src/
-      lib.rs                # checking crate root
-      composition.rs        # composition! declaration
-      init.rs               # handwritten init, resources, local helpers
+      lib.rs                # checking crate root; holds composition!,
+                            # handwritten init, Shared and Local
     .ferroforge/            # generated checking interfaces/configuration
     gen_app/                # generated standalone firmware build package
   nucleo-f401re-fast-blink/
     ...                     # same authoring layout, own workspace
 ```
+
+Splitting the authored package across further files is the author's choice; G5
+requires the package, not a particular file layout.
 
 Agreed boundaries:
 
@@ -360,9 +376,10 @@ Agreed boundaries:
   the native init. A shared framework host command reads the sources and runs
   discovery, checking, generation, and building; there is no firmware-specific
   `app_composition/src/main.rs` or copied pipeline implementation.
-- `composition.rs` owns target selection and task wiring; `init.rs` owns native
-  initialization and concrete resources. Splitting them into files is for
-  readability, not a requirement for separate authoring packages.
+- One `composition!` declaration owns target selection and task wiring and
+  contains the handwritten init with its `Shared` and `Local` resources, so
+  resource bindings resolve in scope without a cross-file rule. Splitting the
+  package into further files is for readability only.
 - The `gen_app` directory remains a generated, standalone build package excluded
   from the authored workspace, rather than an authored workspace member that
   must exist before first generation. This keeps its final dependency graph

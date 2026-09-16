@@ -52,148 +52,73 @@ check is deferred by the subsequent decision below.
 
 **Library marker agreed, 2026-09-16:** a library must explicitly identify itself
 as a FerroForge library. Attempting to use a library without that marker must
-produce an error. Broader library checks are deferred and will be added as
-needed; a comprehensive checker is not a prerequisite for this work. The marker
-requirement is agreed, while its location, spelling, and implementation remain
-pending.
+produce an error. Per G7b, marker absence is the only library check and broader
+library checks are out of scope. The marker requirement is agreed, while its
+location, spelling, and implementation remain pending.
 
-**Next open point:** choose the library marker's location and syntax. Then settle
-minimum project recognition inputs, new-project helper output, and library
-references. The proposed separation of project, library,
-and tool locations is in the [repair plan](composition-repair-plan.md#cli-projects-and-reusable-libraries).
-Then resolve interrupt enum ownership/validation, review concrete RTIC-like
-authoring examples, and settle IDE preparation/refresh mechanics. Compatible
-earlier requirements below continue to apply.
+**Initial scope confirmed, 2026-09-16:** the first proof is a working F401
+example carrying both task kinds, native synchronous interrupt handlers and
+async software tasks. Other boards follow afterwards.
+
+**Target ownership and format agreed, 2026-09-16:** the resolved host model is
+the load-bearing artifact and every consumer uses it, so the authoring format
+stays changeable. Minimal TOML board facts and a Rust interrupt enum may
+coexist as long as they never state the same fact - the backend's Rust owns the
+interrupt enum and per-chip validity, and the TOML does not name interrupts.
+The definition belongs to a family backend crate per G2a, named distinctly from
+the G2b HAL helper. A firmware's authored package declares only what its init
+and composition need to compile; the backend supplies the platform-required
+remainder. Chip- and architecture-derived features are target-owned, while the
+logging and panic backends remain the firmware's choice. This closes the earlier
+Cargo-centralization question: source manifests stay authoritative for their own
+requirements and are checked against the resolved target.
+
+**Interrupt enum and library marker agreed, 2026-09-16:** the interrupt enum is
+typed per chip and owned by that chip's G2a platform backend, which re-exports
+the PAC's existing per-chip `Interrupt` enum rather than maintaining a second
+list of names. Validity needs no FerroForge check: the authored composition
+names that type and is compiled for the selected chip, so an interrupt the chip
+lacks fails the authored package's own check. No interrupt data is needed
+host-side, in the target TOML, or in the resolved target model.
+A FerroForge library marks itself with `library = true` under
+`[package.metadata.ferroforge]`, reusing the manifest table that already carries
+`check-only-dependencies`; a source comment was considered and rejected because
+Rust discards `//` comments before the parser sees them. The declaration grammar
+is Rust-native and RTIC-idiomatic, meaning Rust syntax parsed declaratively
+rather than host Rust evaluated to build the graph.
+
+**Next open point:** freeze the `composition!` declaration grammar with a
+complete worked example before implementing a parser. Then resolve interrupt
+enum ownership and selected-chip validation, then IDE preparation/refresh
+mechanics, then the library marker and project recognition inputs. Open items
+are tracked in the [repair plan](composition-repair-plan.md#decisions-still-open).
 
 ## Binding Decisions Carried Forward
 
-Promoted on 2026-09-16 from the initial walkthrough and the per-system
-composition discussion when those sections were archived. These remain in
-force. Their rationale, evidence, and implementation status are in
+Decisions from the initial walkthrough and the per-system composition discussion
+that remain in force. Each is specified in full in the chapter named. This list
+records that the decision was agreed and where it lives; it is not a second copy
+of the rule. Rationale and evidence are in
 `archive/2026-09-16/docs/src/review-historical.md`.
 
-### Task Authoring
-
-- Resource-keyed bounds: `bounds = [led: StatefulOutputPin]` alongside
-  `local = [led]` or `shared = [led]`. Concrete resources carry inline types
-  such as `toggle_count: u32`. This supersedes the earlier `led: Trait`
-  shorthand and the type-placeholder proposals.
-- Keep RTIC-familiar access: `local = [...]`, `shared = [...]`, `cx.local`,
-  and `cx.shared.<name>.lock(...)`. Both local and shared resources are in
-  scope, including state that persists across invocations.
-- Incoming inputs are ordinary Rust parameters after the context. There is no
-  separate input declaration.
-- Outgoing spawns use inline signatures such as `spawn = [report(value: u32)]`.
-  Spawn results follow RTIC 2: `()` for no inputs, the value for one input, a
-  tuple for several. The prototype's `SpawnError::QueueFull` is not kept.
-- RTIC 2's pending/running-instance restriction holds. Compile-only mocks do
-  not simulate scheduling.
-- Configuration is read task-locally as `CONFIG.FIELD`, not
-  `task::Config::FIELD`. A generated immutable typed view supplies the fields.
-- Related tasks share a source module with imports declared once at module
-  scope; each task keeps its own typed requirements and context.
-- Resource requirements stay inline with each reusable task. Explicit
-  `Local`/`Shared` requirement structs were considered and not selected.
-
-### Checking Mechanism
-
-- Macro-generated generic functions and contexts are the checking mechanism.
-  The author keeps a plain task-context signature; expansion introduces the
-  resource type parameters, lifetimes, and declared trait bounds.
-- Local fields generate as ordinary mutable references; shared fields as typed
-  borrowing proxies with a checked `lock` closure.
-- SysTick profile: 1 kHz, `u32`-backed time values, core clock source, using
-  real `fugit::Duration<u32, 1, 1_000>` and `ExtU32`. Init checks
-  `Mono::start(SYST, core_clock_hz)`. `now()`, `delay_until()`, timeouts,
-  alternative clock sources, and 64-bit profiles are deferred.
-- Configuration constants collect in one marked namespace ahead of the
-  generated app's resource structs and init, grouped by composed task instance
-  with instance-qualified paths. Composition stays the source of truth; values
-  are not inlined as task-body literals.
-
-### Init
-
-- Initialization uses native HAL types, traits, and methods with real PAC and
-  Cortex-M peripherals. FerroForge introduces no hardware-trait replacements or
-  HAL wrapper API for initialization.
-- Check-only init interfaces are generated from composition: a mock
-  `init::Context` carrying real peripheral types, typed spawn entry points for
-  selected instances, and the selected monotonic startup API.
-- The host reads source and metadata without linking target implementations.
-- Transplantation keeps the complete init body with native HAL calls intact;
-  generated firmware uses the real RTIC and monotonic equivalents.
-
-### Supporting Source
-
-- A logical Rust module groups related tasks with their imports and supporting
-  code. File-backed modules, inline modules, and a crate root used as one group
-  are all valid. No FerroForge module wrapper or grouping annotation is needed.
-- Tasks are selected individually; selecting one does not instantiate its
-  siblings or merge their resources.
-- The module's supporting imports, helpers, types, implementations, and
-  constants carry across together, without a handwritten helper list. Unused
-  supporting items may be retained and must still compile.
-- Support namespaces stay separate across source modules. Tasks and instances
-  from one module share supporting type identity; instantiating a task twice
-  does not duplicate module-level state.
-- Complete task bodies stay in real RTIC handlers. Reusable tasks do not become
-  runtime library callbacks, and authors do not expose private helpers purely
-  for transplantation.
-
-### Logging
-
-- Ordinary RTT and defmt syntax is supported scope, including
-  composition-dependent expressions inside logging arguments. FerroForge
-  logging wrappers are not required, and arguments are not moved into
-  handwritten temporaries. Format strings, hints, native macro calls, argument
-  evaluation, and module-level imports and aliases are preserved.
-
-### Dependencies
-
-- Task and init crates' normal Cargo manifests are the source of requirements.
-  There is no second per-task dependency list and no duplicated Rust version
-  registry.
-- Include dependencies needed by retained supporting code, not only by selected
-  task bodies. Carry each participating source crate's applicable normal
-  dependencies conservatively; precise pruning is deferred.
-- Check-only dependencies are named in `[package.metadata.ferroforge]` as
-  `check-only-dependencies = [...]`. They stay available to the source check and
-  are excluded from generated manifests. This role is not inferred from crate
-  names or procedural-macro status. Manifest exclusion alone is insufficient:
-  the corresponding imports and attributes are removed or translated during
-  transplantation.
-- The system supplies HAL, RTIC, monotonic, logging-backend, and panic choices
-  without silently overriding task or init requirements. Matching sources,
-  version requirement strings, and effective default-feature settings permit
-  combining requested features; differences produce diagnostics and require
-  alignment. Differently written but potentially compatible requirements are
-  rejected initially.
-
-### Composition and Firmware
-
-- Each firmware authors `composition!` together with its hardware init.
-- The family backend owns the concrete chip target definitions that firmware
-  selects.
-- One target-checked authored package per firmware workspace holds composition
-  and handwritten init, with shared host generation tooling rather than a
-  per-firmware host composer executable.
-- Betaflight's target organization is the requested structural reference for
-  firmware grouping.
-- Rust Analyzer type checking of authored source is a requirement, not an
-  optional convenience.
-
-### Scope Limits
-
-- Build only the API coverage current examples need, and extend it when real
-  uses arise. Exhaustive monotonic coverage is not a prerequisite.
-- Add useful, inexpensive early checks, but accept that some mistakes surface
-  in the generated application's Rust Analyzer or Rust/RTIC checks. A mock
-  check is not a promise that the final app compiles. Target-aware
-  `cargo check` and the final build remain the verification steps.
-- Keep host simulation separate from compile-only mock support.
-- Typed task-local spawn mocks, composition-derived init spawn mocks, and
-  authored-source checking tests already exist. Reuse them; do not reopen the
-  mock design or claim it is unimplemented.
+| Decision | Specified in |
+| --- | --- |
+| Resource-keyed bounds (`bounds = [led: StatefulOutputPin]`) with `local`/`shared` claims; no separate requirement structs | [architecture](architecture.md#software-task-clarifications) |
+| RTIC-familiar `cx.local` and `cx.shared.<name>.lock(...)` access; both categories from the first SW scope | [architecture](architecture.md#local-and-shared-resources-in-the-initial-sw-scope) |
+| Task-local `CONFIG.FIELD` reads, rendered as typed constants grouped per composed instance | [architecture](architecture.md#task-local-configuration-access) |
+| Inputs as ordinary parameters; inline `spawn = [report(value: u32)]`; RTIC 2 result shapes, not `SpawnError::QueueFull` | [architecture](architecture.md#task-inputs-and-spawning) |
+| SysTick 1 kHz / `u32` profile, supporting only `Mono::delay` and `Mono::start(SYST, u32)` | [architecture](architecture.md#systick-mock-direction) |
+| Generic checking expansion behind a plain task-context signature; local refs and shared lock proxies | [architecture](architecture.md#generated-checking-contexts) |
+| Related tasks share a source module with imports declared once at module scope | [architecture](architecture.md#modules-group-related-tasks) |
+| Native HAL init; check-only interfaces generated from composition; complete body transplanted | [architecture](architecture.md#system-owned-initialization) |
+| Logical-module supporting source carried whole; support namespaces separate per source module | [architecture](architecture.md#source-transplant-boundary) |
+| Ordinary RTT and defmt syntax supported, including composition-dependent arguments | [architecture](architecture.md#native-rtt-and-defmt-logging) |
+| Build only the API coverage concrete uses need; target-aware check and final build remain the verification | [architecture](architecture.md#incremental-coverage-and-early-checks) |
+| Cargo manifests are the source of dependency requirements; conservative inclusion | [dependencies](dependencies.md#agreed-manifest-based-requirements) |
+| `check-only-dependencies` declared in `[package.metadata.ferroforge]` | [dependencies](dependencies.md#agreed-check-only-dependency-setting) |
+| Exact source, version, and default-feature match required to merge; differences diagnose | [dependencies](dependencies.md#agreed-initial-merging-and-conflict-policy) |
+| Firmware layout, one authoritative target, and per-firmware `composition!` with its own init | G5; [repair plan](composition-repair-plan.md#confirmed-requirements) |
+| Existing spawn mocks and init checking interfaces are reused, not redesigned | [repair plan](composition-repair-plan.md#existing-implementation-to-reuse) |
 
 ## Archived History
 
@@ -201,5 +126,5 @@ The per-system composition discussion and the initial walkthrough and backend
 proofs were archived on 2026-09-16 to
 `archive/2026-09-16/docs/src/review-historical.md`. That file holds the
 rationale, the six-item walkthrough record, phase evidence, and implementation
-status as they stood. Binding decisions from it are promoted above; the archive
+status as they stood. Binding decisions from it are indexed above; the archive
 is not active design authority and requires explicit permission to read.

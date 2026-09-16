@@ -27,18 +27,20 @@ it. Implementation status does not change the requirements; the current tree
 3. **G3 - One task model.** Hardware and software tasks share the same authoring
    and composition model. Hardware tasks require an interrupt binding;
    software tasks do not.
-4. **G4 - Typed interrupts.** Interrupt selection uses an enum covering all
-   interrupts of the supported chips. A selected interrupt must be valid for
-   the selected chip.
+4. **G4 - Typed interrupts.** Interrupt selection uses a typed enum per chip,
+   owned by that chip's platform backend. A selected interrupt must be valid for
+   the selected chip; the per-chip enum makes an invalid selection a type error.
 5. **G5 - Firmware structure.** A project's `firmware/` directory must contain
    all its firmware applications. Each `firmware/<name>/` is its own Cargo
-   workspace with one authored package: `src/lib.rs` (checking crate root),
-   `src/composition.rs` (target selection and task wiring), and `src/init.rs`
-   (handwritten init and resources). Shared tooling generates `.ferroforge/`
-   (checking interfaces and configuration) and an isolated `gen_app/` build
-   package beneath that firmware directory; `gen_app/` is excluded from the
-   authored workspace. Firmware selects one authoritative target definition;
-   all checking, generation, and build consumers use it.
+   workspace with one authored package rooted at `src/lib.rs`. That package
+   holds the firmware's `composition!` declaration - target selection, task
+   wiring, and the handwritten init with its `Shared` and `Local` resources.
+   Whether that is one file or several is the author's choice. Shared tooling
+   generates `.ferroforge/` (checking interfaces and configuration) and an
+   isolated `gen_app/` build package beneath that firmware directory;
+   `gen_app/` is excluded from the authored workspace. Firmware selects one
+   authoritative target definition; all checking, generation, and build
+   consumers use it.
 6. **G6 - Extend RTIC.** Task definitions and init should feel as close to normal
    RTIC as possible. Keep ordinary Rust bodies, native HAL initialization, and
    familiar task/context/resource access. Additional declarations serve reuse
@@ -54,8 +56,7 @@ it. Implementation status does not change the requirements; the current tree
      dependencies. Marker absence is the only library check; broader library
      checks are out of scope.
 
-**Open:** interrupt enum ownership and organization; library marker syntax;
-library placement and backend packaging.
+**Open:** library placement and backend packaging.
 
 Implementation details, acceptance evidence, and progress belong in the
 [repair plan](composition-repair-plan.md). Decisions and remaining questions

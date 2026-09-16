@@ -73,9 +73,11 @@ The standalone package collector now parses this metadata, rejects unknown or
 duplicate entries and names that are not normal dependencies, and excludes the
 listed requirements before runtime-source validation. A check-only path
 dependency is therefore permitted in the first fixture. The bounded init
-transplant now replaces its `ferroforge` marker, removes a direct check-only root
-import, and rejects a surviving `ferroforge` reference. The centralized Nucleo
-frontend and complete initial target package exercise that path. Broader
+transplant replaces its `ferroforge` marker and rejects a surviving `ferroforge`
+reference. Source cleanup matches the literal crate name `ferroforge` only:
+other names listed in `check-only-dependencies` are excluded from the generated
+manifest, but their imports are neither removed nor diagnosed. The centralized
+Nucleo frontend and complete initial target package exercise that path. Broader
 checking-only source translation remains incomplete; final target checking is
 still required.
 
@@ -196,8 +198,10 @@ Cargo resolves dependencies before procedural macro expansion. A macro cannot
 add a new dependency to the graph already being compiled. The current host
 generator produces the final manifest; developers invoke Cargo separately for
 that project using the [workflow commands](workflow.md#check-and-build-firmware).
-Automatic source checking and final Cargo invocation are planned orchestration
-work, not behavior provided by today's composer.
+The legacy `composer` only renders; it does not check or build. Both Nucleo
+pipelines do orchestrate the full sequence -
+`run_blinky_nucleo_f401re_pipeline` runs task check, init check, lockfile,
+firmware check, and release build.
 
 The dependency registry is renderer data. It does not install dependencies
 into the task/init crate performing an independent check. Those crates need
@@ -211,7 +215,7 @@ compatible. Checking a task against one HAL version/feature set does not prove
 that a different final selection works. Rust and RTIC check the final graph.
 The manifest source of requirements, conservative inclusion, explicit check-only
 setting, and initial merging policy are agreed in
-[review item 5](review.md#5-validation-guarantees-and-dependency-consistency).
+[the decision record](review.md#binding-decisions-carried-forward).
 Their bounded standalone collection, merge, manifest emission, and generated
 ARM project check/release-link proof are implemented, including first-system
 integration and its initial orchestrated command. Broader failure injection and

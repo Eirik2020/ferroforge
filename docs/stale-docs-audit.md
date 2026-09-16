@@ -25,62 +25,6 @@ feature is implemented, while an older sentence nearby still says it is open
 or unproven. The code supports the newer sentence in every case below. The fix
 is usually to delete or rewrite the older sentence, not to change the design.
 
-## 1. Incorrect or Broken
-
-| Location | Problem | Evidence | Suggested fix |
-| --- | --- | --- | --- |
-| `src/documentation.md:68`, `../embedded/README.md:4` | Link to `prototype.md#system-source` is broken. The heading is now "Legacy System Source". | `src/prototype.md:37` | Change the anchor to `#legacy-system-source`. |
-| `src/introduction.md:40-42` | Says "Separate reusable task crates and independent system init crates remain planned work." | `tasks/blinky`, `systems/nucleo-f401re/init`, and `systems/nucleo-f401re-fast-blink/init` exist and are used by both pipelines. | Rewrite the status paragraph so the legacy example and the standalone systems are described separately. |
-| `src/dependencies.md:199-200` | Says automatic source checking and the final Cargo invocation are "planned orchestration work, not behavior provided by today's composer". Lines 215-218 of the same section say the orchestration is implemented. | `run_blinky_nucleo_f401re_pipeline` in `systems/nucleo-f401re/app_composition/src/lib.rs` runs task check, init check, lockfile, firmware check, and release build. | Limit the sentence to the legacy `composer`. |
-| `src/workflow.md:119-123` | Says the init checker does not yet provide "generated-manifest/orchestration integration". | `render_standalone_project` merges init dependencies into the manifest, and both Nucleo pipelines run the init check as a stage. | Remove that item from the list of missing features. |
-| `src/workflow.md:267-269` | Says `.vscode/settings.json` covers the workspaces, and "each embedded workspace has its own `.cargo/config.toml`". | `linkedProjects` lists only the root, `embedded`, and `generated/nucleo-f401re`. `tasks/blinky`, both `systems/*/init`, and both `gen_app` are not linked. `tasks/blinky` and the init packages have no committed `.cargo/config.toml`; init's config is generated under `.ferroforge/init-check`. | Document the actual coverage, or add the missing projects and describe how Rust Analyzer gets `FERROFORGE_INIT_INTERFACES`. |
-| `src/prototype.md:84-85` | Lists the `ferroforge` re-exports as `app`, `composition`, `dependency_registry`, `firmware`, `task`. | `ferroforge/src/lib.rs:17` also re-exports `init`. | Add `init`. |
-| `src/implementation-plan.md:601-603` | The generic "source checks" rule says to run `cargo check --lib --target ...` from each source crate's workspace, and that applies to init as well. | Checking init needs the generated `.cargo/config.toml` that sets `FERROFORGE_INIT_INTERFACES`. The pipeline and `src/workflow.md:196-197` run the check from `.ferroforge/init-check` with `--manifest-path`. | Add the init exception, or link to the workflow command. |
-| `src/dependencies.md:74-78` | Describes removal of "a direct check-only root import", which implies the cleanup follows `check-only-dependencies`. | `transplant.rs:333-334`, `640-641`, and `361` match the literal crate name `ferroforge`. Other names in `check-only-dependencies` are removed from the manifest, but their imports are neither removed nor diagnosed. | State that source cleanup currently covers only `ferroforge`, or make the transplant use the metadata list. |
-
-## 2. Stale "Not Implemented / Open" Statements Contradicted by Code
-
-### `src/prototype.md`
-
-| Line | Stale statement | Actual state |
-| --- | --- | --- |
-| 159-164 | "Composition-driven translation of the standalone call into a real instance spawn remains open." | Implemented. Lines 354-358 of the same chapter say so. |
-| 240-243 | Typed contracts are rejected by the legacy loader "because the new rendering path does not consume them yet". | The standalone transplant consumes them. The rejection is still correct, but the reason is not. |
-| 206-211 | "Multiple named instances of one reusable definition and resource remapping are planned capabilities." | They are planned only for the legacy composer; the standalone path implements both. Say which path this describes. |
-| 446-449 | "Generalized task instancing and `CONFIG.FIELD` rewriting remain work." | They remain work only for the legacy renderer (see line 457). Say which path this describes. |
-| 195-196 | Target data is duplicated across "the macros, loader, and renderer". | This understates the duplication. The data is also in `standalone.rs` (`StandaloneTarget::stm32f401re`), and the system runtime versions in `systems/nucleo-f401re/app_composition/src/lib.rs` repeat the renderer's version constants. The repair plan relies on this inventory. |
-
-### `src/implementation-plan.md`
-
-| Line | Stale statement | Actual state |
-| --- | --- | --- |
-| 13-14 | "The phase gates below describe required evidence, not work already completed." | Phases 2-6 all record "Status: met". |
-| 163-165 | "Composition integration and broader types remain to be implemented." | Composition integration is done. Only broader types remain. |
-| 170-171 | "The current renderer ... still reads qualified `task::Config::FIELD` paths." | Only the legacy renderer does. The standalone transplant reads `CONFIG.FIELD`. |
-| 221-222 | "The end-to-end transplant pipeline still need[s] work." | Phase 5 is met. |
-| 452-457 | Remaining work includes "complete orchestration". Also, broader checking-only translation is "later Phase 4 work", although Phase 4 is closed. | Orchestration exists. Move the remaining item to the repair plan. |
-| 485-486 | The checks "do not prove ... the end-to-end generated pipeline". | The verification table directly above lists both pipeline commands as passing. |
-| 41-63 | The "Intended layout" (`systems/foxeer_f405v2/...`, `tasks/stm32f4/...`, `code_renderer/`) is not marked as superseded. | It is replaced by the agreed `firmware/` grouping with family backends in `src/composition-repair-plan.md`. |
-
-### `src/introduction.md` and `src/workflow.md`
-
-| Location | Problem |
-| --- | --- |
-| `src/introduction.md:24-32` | The reading guide says "the walkthrough is ready for a bounded implementation/proof step". Phases 2-6 are complete, and the active work is the repair plan. The guide also leaves out `composition-repair-plan.md`, which `SUMMARY.md` includes. |
-| `src/workflow.md:3-4` | The sentence "The bounded two-system pipeline are covered in the implementation plan" has a grammar error, and the pipeline commands are in this chapter anyway. |
-
-## 3. Low Severity
-
-- `src/prototype.md:430-434`: the heading "Renderer source:" introduces
-  `composer/src/main.rs`, which is the composer, not the renderer.
-- `src/prototype.md:19`: describes `ferroforge-renderer` only as "host source
-  loader and RTIC firmware renderer". It also contains standalone discovery,
-  composition validation, init-check generation, transplant, dependency merge,
-  and project emission.
-- `src/implementation-plan.md:292-306`: the proposed
-  `app!(board = ..., init = ..., tasks = [...])` shape is superseded by the
-  agreed per-firmware `composition!` direction.
-
 ## 4. Stale Comments and Messages in Code
 
 These are outside the book but repeat the same outdated status:
@@ -111,14 +55,6 @@ and `generated/nucleo-f401re`.
 - Rendered variant compositions from a throwaway crate outside the repo
   through `render_loaded_composed`.
 
-### Documentation Findings
-
-| Location | Problem | Evidence | Suggested fix |
-| --- | --- | --- | --- |
-| `src/prototype.md:206-211` | Says the composition "can select existing task names". This implies a subset can be selected. | A composition without `timer_interrupt` renders with no error, but the output cannot compile. `init` still contains the unrewritten `timer_interrupt::Config::FREQUENCY_HZ` (`rewrite_config_paths` only knows selected tasks), and `hello_timer` stays in `Local` with no task claiming it. Dropping `blink` would likewise leave `blink::spawn()` in init. The embedded init is not adjusted to the selection. | Say that init is copied unchanged, so the selection must include every task that init references. Also consider making the renderer reject this case. |
-| `src/prototype.md:206-211` | Leaves out the other constraints `compose_tasks` enforces. | Every configuration key must be supplied, and its type must match the embedded check type exactly (`u32` for a `u64` key fails: "must have type `u64`"). Every spawn alias must be bound. `binds` may only repeat the embedded binding. | List these constraints in the Host Composition section. |
-| `src/prototype.md:453-457` | Says legacy spawn bindings "are validated and stored but are not used to rewrite task spawn aliases". This understates the problem. | Any task that calls `cx.spawn.<alias>()` renders code that uses a context field real RTIC 2 does not have (see `src/architecture.md:479`), and no error is reported. `compose_tasks` also accepts a hardware task as a spawn target; the `app!` checking macro rejects this (`src/prototype.md:154-155`). The current example uses no aliases, so the problem is latent. | State that the legacy renderer does not support spawn aliases in rendered firmware. |
-
 ### Code Observations (Not Documentation)
 
 These are not doc errors, but they affect what the docs can promise for this path:
@@ -147,8 +83,8 @@ These are not doc errors, but they affect what the docs can promise for this pat
 - `src/dependencies.md:293-309`: registry resolution for selected tasks only
   and conflict rejection match `resolve_dependencies`.
 
-- Test counts in `src/prototype.md:474-479` and
-  `src/implementation-plan.md:466`: 10 contract, 23 macro, 7 renderer/loader,
+- Test counts in `src/prototype.md:474-479` (the
+  `src/implementation-plan.md` copy was archived 2026-09-16): 10 contract, 23 macro, 7 renderer/loader,
   10 discovery, 6 composition, 6 dependency, 4 standalone check, 8 transplant,
   3 project, 4 init, 3 first-system, 1 second-system (85 total, 2 ignored).
 - Test names in commands, fixture package/bin names, `--ignored` Rust
