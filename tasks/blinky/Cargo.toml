@@ -9,10 +9,14 @@ test = false
 bench = false
 
 [dependencies]
-defmt = "1.0.1"
-embedded-hal = "1.0.0"
+defmt = { version = "1.0.1", default-features = true, features = [] }
+embedded-hal = { version = "1.0.0", default-features = true, features = [] }
 ferroforge = { path = "../../ferroforge" }
-fugit = "0.3.9"
+fugit = { version = "0.3.9", default-features = true, features = [] }
+rtic = { version = "2.3.1", default-features = false, features = ["thumbv7-backend"] }
+rtic-monotonics = { version = "2.2.1", default-features = false, features = ["cortex-m-systick"] }
+
+
 
 [package.metadata.ferroforge]
 check-only-dependencies = ["ferroforge"]

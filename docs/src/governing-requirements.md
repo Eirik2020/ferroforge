@@ -18,29 +18,30 @@ it. Implementation status does not change the requirements; the current tree
    tasks reusable across projects using that HAL. Firmware selects and
    instantiates definitions without changing their authored source.
 2. **G2 - Minimal backends, separate HAL helpers.**
-   - **G2a:** Backends must contain only the minimum information FerroForge
-     needs to support a chip family, including chip definitions, independently
-     of project tasks.
+   - **G2a:** A backend is the minimum chip-family data FerroForge needs before
+     a build: memory layout, probe identity, Rust target triple, device path,
+     and the platform crate selections. It is build-time input, consumed by the
+     CLI to emit target files and scaffold a firmware manifest, not a dependency
+     of the firmware, and it is independent of project tasks.
    - **G2b:** HAL helper libraries are separate from backends.
      `ferroforge-stm32f4` is the FerroForge-oriented STM32F4 helper, sharing
      helpers/types between init and hardware tasks.
 3. **G3 - One task model.** Hardware and software tasks share the same authoring
    and composition model. Hardware tasks require an interrupt binding;
    software tasks do not.
-4. **G4 - Typed interrupts.** Interrupt selection uses a typed enum per chip,
-   owned by that chip's platform backend. A selected interrupt must be valid for
-   the selected chip; the per-chip enum makes an invalid selection a type error.
+4. **G4 - Typed interrupts.** An interrupt binding names a variant of the
+   selected device's own interrupt enum, so an interrupt the chip does not have
+   is a compile error on the authored line. FerroForge does not define, own, or
+   validate a separate interrupt list.
 5. **G5 - Firmware structure.** A project's `firmware/` directory must contain
    all its firmware applications. Each `firmware/<name>/` is its own Cargo
-   workspace with one authored package rooted at `src/lib.rs`. That package
-   holds the firmware's `composition!` declaration - target selection, task
-   wiring, and the handwritten init with its `Shared` and `Local` resources.
-   Whether that is one file or several is the author's choice. Shared tooling
-   generates `.ferroforge/` (checking interfaces and configuration) and an
-   isolated `gen_app/` build package beneath that firmware directory;
-   `gen_app/` is excluded from the authored workspace. Firmware selects one
-   authoritative target definition; all checking, generation, and build
-   consumers use it.
+   workspace whose authored package is the firmware binary: it holds the
+   `composition!` declaration - target selection, task wiring, and the
+   handwritten init with its `Shared` and `Local` resources. Whether that is
+   one file or several is the author's choice. The CLI generates that
+   firmware's target files from the selected chip; nothing else is generated.
+   Firmware selects one authoritative target, and every generated file and
+   build consumer uses it.
 6. **G6 - Extend RTIC.** Task definitions and init should feel as close to normal
    RTIC as possible. Keep ordinary Rust bodies, native HAL initialization, and
    familiar task/context/resource access. Additional declarations serve reuse
@@ -58,6 +59,6 @@ it. Implementation status does not change the requirements; the current tree
 
 **Open:** library placement and backend packaging.
 
-Implementation details, acceptance evidence, and progress belong in the
-[repair plan](composition-repair-plan.md). Decisions and remaining questions
-belong in the [review record](review.md). Keep this page concise when updating it.
+Implementation details belong in [architecture](architecture.md), what is left
+to build in [remaining work](implementation-plan.md), and decisions in the
+[review record](review.md). Keep this page concise when updating it.

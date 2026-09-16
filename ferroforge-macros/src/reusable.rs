@@ -8,9 +8,7 @@
 use ferroforge_contracts::{Resource, TaskArguments, TaskContract, TaskKind, identifier_key};
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use syn::{
-    Error, ItemFn, Result, spanned::Spanned, visit_mut::VisitMut,
-};
+use syn::{Error, ItemFn, Result, spanned::Spanned, visit_mut::VisitMut};
 
 /// Uppercase configuration names become const generic parameters, so a value
 /// supplied by composition is a constant inside the body.
@@ -33,8 +31,13 @@ fn resource_type(resource: &Resource, bounds: &[(String, syn::Ident)]) -> TokenS
     }
 }
 
-/// Rewrite `CONFIG.FIELD` reads to the const generic parameter `FIELD`. This is
-/// a local rewrite inside the task's own expansion, not a cross-crate move.
+/// Rewrite `CONFIG.FIELD` reads to `__FfConfig::FIELD`, an associated const on
+/// the configuration type the firmware supplies. Associated consts stay
+/// compile-time, and unlike const generics they are inferred from the context
+/// the caller constructs - so the adapter needs no turbofish.
+///
+/// This is a local rewrite inside the task's own expansion, not a cross-crate
+/// move.
 struct ConfigReader;
 
 impl VisitMut for ConfigReader {
@@ -45,7 +48,7 @@ impl VisitMut for ConfigReader {
             && let syn::Member::Named(name) = &field.member
         {
             let name = name.clone();
-            *expr = syn::parse_quote!(#name);
+            *expr = syn::parse_quote!(__FfConfig::#name);
             return;
         }
         syn::visit_mut::visit_expr_mut(self, expr);
@@ -131,15 +134,20 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
             .inputs
             .as_ref()
             .ok_or_else(|| Error::new(name.span(), "reusable spawn aliases need a signature"))?;
-        let types = inputs.iter().map(|parameter| &parameter.ty).collect::<Vec<_>>();
-        let names = inputs.iter().map(|parameter| &parameter.name).collect::<Vec<_>>();
+        let types = inputs
+            .iter()
+            .map(|parameter| &parameter.ty)
+            .collect::<Vec<_>>();
+        let names = inputs
+            .iter()
+            .map(|parameter| &parameter.name)
+            .collect::<Vec<_>>();
         let error = match types.as_slice() {
             [] => quote!(()),
             [ty] => quote!(#ty),
             types => quote!((#(#types),*)),
         };
-        spawn_bounds
-            .push(quote!(#generic: Fn(#(#types),*) -> ::core::result::Result<(), #error>));
+        spawn_bounds.push(quote!(#generic: Fn(#(#types),*) -> ::core::result::Result<(), #error>));
         spawn_methods.push(quote! {
             #[inline]
             pub fn #name(&self, #(#names: #types),*)
@@ -149,7 +157,9 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
         });
     }
 
-    let config_params = arguments
+    // Configuration becomes a trait of associated consts. The firmware
+    // implements it per instance; the value stays a compile-time constant.
+    let config_consts = arguments
         .config
         .iter()
         .map(|config| {
@@ -157,12 +167,10 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
             let ty = config.ty.as_ref().ok_or_else(|| {
                 Error::new(config.name.span(), "reusable configuration needs a type")
             })?;
-            Ok(quote!(const #name: #ty))
+            Ok(quote!(const #name: #ty;))
         })
         .collect::<Result<Vec<_>>>()?;
-    if !arguments.config.is_empty() {
-        ConfigReader.visit_block_mut(&mut function.block);
-    }
+    ConfigReader.visit_block_mut(&mut function.block);
 
     // The monotonic keeps the name the author imported, so `Mono::delay(..)` in
     // the body resolves to this parameter instead of a mock type.
@@ -170,18 +178,20 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
         .monotonic
         .as_ref()
         .map(|path| {
-            path.get_ident().cloned().ok_or_else(|| {
-                Error::new(path.span(), "reusable monotonic must be a plain name")
-            })
+            path.get_ident()
+                .cloned()
+                .ok_or_else(|| Error::new(path.span(), "reusable monotonic must be a plain name"))
         })
         .transpose()?;
 
-    let bound_params = arguments.bounds.iter().zip(&bound_generics).map(
-        |(bound, (_, generic))| {
+    let bound_params = arguments
+        .bounds
+        .iter()
+        .zip(&bound_generics)
+        .map(|(bound, (_, generic))| {
             let traits = &bound.traits;
             quote!(#generic: #traits)
-        },
-    );
+        });
     let bound_names = bound_generics
         .iter()
         .map(|(_, generic)| generic)
@@ -205,27 +215,30 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
     local_params.extend(bound_names.iter().map(|generic| quote!(#generic)));
     let local_list = quote!(#(#local_params),*);
 
+    // Every parameter lives on the context, so the caller specifies nothing:
+    // constructing the context infers all of them, including the configuration
+    // type and the monotonic carried as `PhantomData`.
     let mut context_params = local_params.clone();
     context_params.extend(shared_names.iter().map(|generic| quote!(#generic)));
     context_params.extend(spawn_names.iter().map(|generic| quote!(#generic)));
+    context_params.push(quote!(__FfConfig));
+    // Every task carries a monotonic slot whether or not its body uses one, so
+    // the caller can construct any context without knowing the definition's
+    // internals. The type parameter takes the name the author imported, so
+    // `Mono::delay(..)` in the body resolves to it.
+    let monotonic_name = monotonic_param
+        .clone()
+        .unwrap_or_else(|| format_ident!("__FfMono"));
+    context_params.push(quote!(#monotonic_name));
     let context_generics = quote!(#(#context_params),*);
 
     let shared_list = quote!(#(#shared_names),*);
     let spawn_list = quote!(#(#spawn_names),*);
     // The agreed initial profile: SysTick at 1 kHz with u32 time values.
-    let monotonic_decl = monotonic_param.as_ref().map(|name| {
-        quote!(#name: ::rtic_monotonics::Monotonic<
-            Duration = ::fugit::Duration<u32, 1, 1000>
-        >)
-    });
-
-    // The function's own generics: the context's, then the monotonic, then one
-    // const parameter per configuration key. Joined rather than concatenated so
-    // a task with none of them still declares a valid empty list.
-    let mut function_params = context_params.clone();
-    function_params.extend(monotonic_decl);
-    function_params.extend(config_params);
-    let function_generics = quote!(#(#function_params),*);
+    let monotonic_bound = quote!(#monotonic_name: ::rtic_monotonics::Monotonic<
+        Duration = ::fugit::Duration<u32, 1, 1000>
+    >,);
+    let monotonic_field = quote!(pub monotonic: ::core::marker::PhantomData<#monotonic_name>,);
 
     // Strip the mock context parameter; the real one is declared below.
     function.sig.inputs = function.sig.inputs.into_iter().skip(1).collect();
@@ -257,19 +270,29 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
                 #(#spawn_methods)*
             }
 
+            /// Configuration the firmware supplies per instance. Associated
+            /// consts stay compile-time and are usable in const positions.
+            pub trait Config {
+                #(#config_consts)*
+            }
+
             pub struct Context<#context_generics> {
                 pub local: Local<#local_list>,
                 pub shared: Shared<#shared_list>,
                 pub spawn: Spawn<#spawn_list>,
+                pub config: ::core::marker::PhantomData<__FfConfig>,
+                #monotonic_field
             }
         }
 
         #[allow(non_snake_case)]
-        #visibility #asyncness fn #task_name<#function_generics>(
+        #visibility #asyncness fn #task_name<#context_generics>(
             mut #context_parameter: #task_name::Context<#context_generics>,
             #signature_inputs
         ) #output
         where
+            __FfConfig: #task_name::Config,
+            #monotonic_bound
             #(#bound_params,)*
             #(#shared_bounds,)*
             #(#spawn_bounds,)*

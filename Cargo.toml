@@ -1,18 +1,12 @@
 [workspace]
 resolver = "2"
 
+# The call-through design needs three crates: argument parsing, the macros that
+# expand reusable tasks and compositions, and the facade that re-exports them.
+# Firmware and reusable task crates are their own workspaces, as G5 requires.
 members = [
-    "composer",
     "ferroforge",
+    "ferroforge-cli",
     "ferroforge-contracts",
     "ferroforge-macros",
-    "ferroforge-pipeline",
-    "ferroforge-renderer",
-    "systems/nucleo-f401re/app_composition",
-    "systems/nucleo-f401re-fast-blink/app_composition",
-]
-
-exclude = [
-    "embedded",
-    "generated/nucleo-f401re",
 ]

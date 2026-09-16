@@ -21,9 +21,7 @@ are brief entry points, not parallel documentation sets.
 Read `docs/src/governing-requirements.md` for the governing requirements. That
 document states its own size limit. Implementation details belong in the linked
 book chapters. Acceptance evidence, progress, and discussion history do not:
-the repair plan keeps one acceptance table keyed to G1-G7 because it doubles as
-a requirements checklist, and everything else of that kind belongs in commit
-messages or nowhere.
+they belong in commit messages or nowhere.
 
 Keep agreed design, current implementation, and open proposals distinct.
 Follow the current discussion recorded in `docs/src/review.md`. Keep remaining
@@ -39,14 +37,13 @@ Start from the task, not the chapter. Read the named sections, not whole files.
 
 | Task | Read |
 | --- | --- |
-| Authoring or changing a software task | `architecture.md` Reusable Task Workspaces |
-| Hardware tasks and interrupt binding | G3 and G4; `composition-repair-plan.md` Unified Target Contract |
-| Firmware composition or init | G5; `architecture.md` System-Owned Initialization and App Composition |
-| Renderer, transplant, source boundary | `architecture.md` Renderer Responsibilities and Source-Transplant Boundary; `prototype.md` Renderer |
+| Authoring or changing a reusable task | `architecture.md` Task Authoring |
+| Firmware composition, init, or resources | G5; `architecture.md` Firmware Composition |
+| Hardware tasks and interrupt binding | G3 and G4; `architecture.md` Task Authoring |
 | Dependencies and manifests | `dependencies.md` |
-| Running or verifying the pipeline | `workflow.md`; `implementation-plan.md` Verification and Completion Rules |
+| Building or checking anything | `workflow.md` |
 | What the code does today | `prototype.md` |
-| The active repair | `composition-repair-plan.md` |
+| What is left to build | `implementation-plan.md` |
 | Checking whether something was already decided | `review.md` |
 
 One topic, one owner. Specify a topic in its owning chapter; every other mention
@@ -55,30 +52,27 @@ links there instead of restating it.
 | Topic | Owner |
 | --- | --- |
 | Requirements G1-G7 | `governing-requirements.md` |
-| Task authoring, checking expansion, init, supporting source, logging, coverage policy | `architecture.md` |
-| Dependency requirements, check-only metadata, merge policy | `dependencies.md` |
+| Task authoring, firmware composition, what the compiler checks | `architecture.md` |
+| Where dependency requirements live | `dependencies.md` |
 | What the code does today | `prototype.md` |
 | Commands | `workflow.md` |
-| The active repair and its sequence | `composition-repair-plan.md` |
+| What is left to build | `implementation-plan.md` |
 | What was decided, and where it is specified | `review.md` (index only) |
 
-Whole-file scope and cost, when a section is not enough:
+The whole book is 726 lines, so read a chapter when a section is not enough:
 
-- `governing-requirements.md` (62) - G1-G7. Loaded at launch for Claude.
-- `architecture.md` (1099) - the agreed model. Owns the canonical
-  task-authoring design; other chapters link here rather than restate it.
-- `composition-repair-plan.md` (691) - active repair: target contract,
-  workspace layout, sequence, acceptance criteria.
-- `prototype.md` (527) - current behavior, split into Shared Machinery,
-  Standalone Path (active), and Legacy Path. Check which path a statement
-  describes before relying on it.
-- `implementation-plan.md` (340) - goal, workspace/task/init design, the
-  acceptance bar, verification and completion rules.
-- `workflow.md` (306) - commands for checking, rendering, building, and
-  Rust Analyzer setup.
-- `dependencies.md` (223) - manifest policy, check-only metadata, merge rules.
-- `review.md` (101) - current decisions, the next open point, and an index of
-  older decisions still in force.
+- `governing-requirements.md` (66) - G1-G7. Loaded at launch for Claude.
+- `architecture.md` (144) - the agreed call-through model. Owns the canonical
+  authoring design; other chapters link here rather than restate it.
+- `review.md` (122) - current decisions, the next open point, an index of
+  older decisions still in force, and what the call-through model superseded.
+- `implementation-plan.md` (83) - what is left, in unblocking order.
+- `workflow.md` (83) - the two commands, and what is still hand-written.
+- `prototype.md` (65) - what exists today and what does not.
+- `dependencies.md` (52) - where requirements live now that Cargo resolves them.
+
+Superseded transplant-era chapters are under `archive/2026-09-16/`, and the code
+they describe is on branch `main` and `test/new_task_method`.
 
 ## Always-Loaded Context Budget
 
@@ -108,26 +102,17 @@ states its own stricter limit.
 Do not write these into the book at all:
 
 - Progress narration and status records ("Phase 4 is now met", "this is
-  implemented as of ..."). Phase evidence belongs in the repair plan; what
-  changed and why belongs in the commit message.
+  implemented as of ..."). What changed and why belongs in the commit message.
 - Restatements of what the code does. A reader can open the file; describe
   intent, constraints, and rationale instead.
 - Completion notes for a task you just finished.
 - A new document when an existing chapter covers the topic. Check the
   documentation map above first.
 
-## Pending Documentation Fixes
+## Retiring Stale Material
 
-`docs/stale-docs-audit.md` lists book passages that are stale, contradict
-each other, or no longer match the code (audited 2026-09-14). It is a fix list,
-not design authority. Where an audit entry and a book passage disagree about
-current behavior, verify against the code before relying on either. When you
-edit a listed chapter, fix the related entries and remove them from the audit.
-Delete the file once it is empty.
-
-Scope: audit entries are specific passages with verified corrections, so fix
-them in place. A whole document or section that is spent or superseded is
-handled differently:
+Fix a specific stale passage in place. A whole document or section that is spent
+or superseded is handled differently:
 
 1. Find what still binds. Old material is not automatically dead - a decision
    that was never superseded, only buried under newer text, is still in force.

@@ -1,14 +1,21 @@
+//! `tasks/blinky` verbatim, with `#[ferroforge::task]` swapped for
+//! `#[ferroforge::reusable]`. The declarations and both bodies are unchanged:
+//! the only edit is the attribute name.
+//!
+//! If this checks standalone for ARM, the call-through expansion preserves the
+//! authored model - `cx.local`, `cx.shared.lock`, `cx.spawn`, `CONFIG.FIELD`
+//! and `Mono::delay` all still mean what they meant.
+
 #![no_std]
 
 use embedded_hal::digital::StatefulOutputPin;
-use ferroforge::mock::systick::Mono;
 use fugit::ExtU32 as _;
 
 fn increment(value: &mut u32) {
     *value = value.wrapping_add(1);
 }
 
-#[ferroforge::task(
+#[ferroforge::reusable(
     bounds = [led: StatefulOutputPin],
     local = [led, count: u32],
     shared = [enabled: bool],
@@ -27,7 +34,15 @@ pub async fn blink(mut cx: blink::Context) -> ! {
     }
 }
 
-#[ferroforge::task]
+#[ferroforge::reusable]
 pub async fn report(_cx: report::Context, value: u32) {
     defmt::info!("blink count={=u32}", value);
+}
+
+/// Synchronous, so the contract reads it as a hardware task. The definition
+/// never names an interrupt: composition binds one, so the same handler can
+/// serve different interrupts in different firmware.
+#[ferroforge::reusable(local = [ticks: u32])]
+pub fn on_tick(cx: on_tick::Context) {
+    increment(cx.local.ticks);
 }

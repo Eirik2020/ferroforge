@@ -1,3 +1,4 @@
+mod compose;
 mod reusable;
 
 use std::collections::{BTreeSet, HashSet};
@@ -281,6 +282,18 @@ fn expand_dependency_registry(registry: DependencyRegistryInput) -> Result<Token
                 #(#catalog_entries),*
             ];
     })
+}
+
+/// The firmware's authored composition, expanded in place into a real
+/// `#[rtic::app]`. Init and resources are written here and never move; each
+/// task declaration becomes an adapter that calls the reusable definition.
+#[proc_macro]
+pub fn compose(input: TokenStream) -> TokenStream {
+    let composition = parse_macro_input!(input as compose::Composition);
+    match compose::expand(composition) {
+        Ok(output) => output.into(),
+        Err(error) => error.to_compile_error().into(),
+    }
 }
 
 /// Call-through reusable task: expands to a real generic context and an

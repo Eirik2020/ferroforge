@@ -1,9 +1,0 @@
-[package]
-name = "ferroforge-nucleo-f401re-composer"
-version = "0.1.0"
-edition = "2024"
-publish = false
-
-[dependencies]
-ferroforge-pipeline = { path = "../../../ferroforge-pipeline" }
-ferroforge-renderer = { path = "../../../ferroforge-renderer" }

@@ -1,9 +1,0 @@
-[package]
-name = "ferroforge-nucleo-f401re-fast-blink-composer"
-version = "0.1.0"
-edition = "2024"
-publish = false
-
-[dependencies]
-ferroforge-nucleo-f401re-composer = { path = "../../nucleo-f401re/app_composition" }
-ferroforge-pipeline = { path = "../../../ferroforge-pipeline" }
