@@ -1,20 +1,26 @@
 # Source-Transplant Architecture
 
+The one-page [governing requirements](governing-requirements.md) take precedence
+over earlier design wording in this chapter. This chapter explains the
+architecture and its implementation status under those requirements. The
+interrupt enum is required; which task kind receives the binding remains
+unresolved in the [current decision record](review.md#current-decision---governing-requirements-2026-09-15).
+
 This document records the agreed direction: complete reusable task bodies and
 system-owned init bodies are checked through mock RTIC interfaces and
 transplanted into a real RTIC application. The unresolved implementation
 decisions are tracked in the [review and open decisions](review.md).
 The initial resource-keyed bounds, task input/spawn syntax, minimal SysTick
-profile, generic checking expansion, centralized first-system layout, and its
-complete check/generate/build pipeline are implemented. General frontend
-ergonomics, remaining contract details, additional target profiles, and
-cross-system reuse remain work.
+profile, generic checking expansion, complete check/generate/build pipeline,
+and same-board cross-system reuse are implemented. General frontend ergonomics,
+remaining contract details, additional target profiles, and broader target
+portability remain work.
 Shared declaration parsing, Cargo-aware source discovery, and structural
 standalone composition validation now have an
 [implemented foundation](prototype.md#standalone-discovery-foundation). That
 foundation now includes independent task/init checks, a bounded combined
-real-RTIC ARM transplant, and an explicit-Rust frontend under
-`systems/nucleo-f401re`; it remains separate from the legacy composer pipeline.
+real-RTIC ARM transplant, and two explicit-Rust system frontends under
+`systems/`; they remain separate from the legacy composer pipeline.
 
 ## Purpose
 
@@ -27,9 +33,9 @@ RTIC wrappers call. The reusable unit is the complete task declaration and
 body, written with the same programming model used inside an RTIC app:
 
 The following illustrates a complete blinking task in its source module.
-Resource-keyed bounds and inline concrete resources are the selected authoring
-direction, but the current macros do not implement this example. The mock-clock
-import and `monotonic` option remain illustrative API spellings. It assumes
+Resource-keyed bounds, inline concrete resources, the mock-clock import, and
+`monotonic` option are implemented for standalone checking and the bounded
+transplant pipeline. `tasks/blinky` exercises this contract. This example assumes
 the agreed 1 kHz, 32-bit SysTick profile for checking and generated firmware.
 
 ```rust,ignore
@@ -110,8 +116,8 @@ appropriate environment:
 - Different target families or incompatible HAL versions can use separate
   workspaces, target configurations, lockfiles, and feature resolution.
 
-Each system also has its own source and generated-output boundary. A typical
-layout is:
+Each firmware has its own source and generated-output boundary. The current
+checkout uses this prototype layout:
 
 ```text
 systems/
@@ -120,6 +126,24 @@ systems/
     |-- app_composition/
     `-- gen_app/
 ```
+
+The required target layout is:
+
+```text
+firmware/
+`-- <name>/                     # Independent Cargo workspace
+    |-- Cargo.toml              # Authored package and workspace
+    |-- src/
+    |   |-- lib.rs
+    |   |-- composition.rs
+    |   `-- init.rs
+    `-- gen_app/                # Excluded, generated standalone build package
+```
+
+Composition and init share one target-checked authored package. Shared host
+tooling performs generation; reusable common and chip-family task crates live
+outside individual firmware applications. This layout remains to be implemented;
+detailed Cargo plumbing and checking-interface refresh remain open.
 
 The generated firmware is a separate workspace because it has a different
 purpose from the mock check workspaces. It contains the complete
@@ -220,7 +244,8 @@ task API used by application code:
 - `cx.spawn.<alias>(...)` calls;
 - task input types and spawn result behavior;
 - typed task configuration access;
-- synchronous hardware-task and asynchronous software-task shapes;
+- the task function shapes supported by RTIC (the current code distinguishes
+  synchronous hardware tasks and asynchronous software tasks);
 - monotonic APIs used by tasks.
 
 `cx.spawn.<alias>(...)` is a FerroForge composition API. After binding an alias
@@ -270,12 +295,15 @@ That mechanism alone does not make a task independently compilable.
 
 ### Software Task Clarifications
 
-The initial implementation focuses on software (SW) tasks. FerroForge's intended
-split is portable SW task source using `embedded-hal` interfaces and
-hardware (HW) task source using chip HALs such as `stm32f4xx-hal`. HW task
-design remains deferred. The SW task's final resource can
-still be a chip-HAL type constructed by system init; the reusable SW source
-does not name that concrete type.
+The initial standalone implementation focuses on software (SW) tasks. Common
+reusable crates hold SW definitions using portable interfaces such as
+`embedded-hal`; chip-family crates hold hardware (HW) task definitions and
+helpers using that family's APIs, such as `stm32f4xx-hal`. This ownership and a
+common RTIC-like task model are required. Family implementation and the precise
+interrupt assignment remain work under the
+[governing requirements](governing-requirements.md).
+The SW task's final resource can still be a chip-HAL type constructed by firmware
+init; the reusable SW source does not name that concrete type.
 
 For a blinking software task, the requirements can use existing Rust types
 and traits:
@@ -352,8 +380,9 @@ Still provide useful typed access for the supported mock operations; partial
 validation does not mean the renderer can discard the local/shared distinction.
 
 The categories, access style, and initial resource-keyed bounds convention are
-agreed. Mock expansion, concrete binding checks, and implementation proofs
-remain work; more elaborate resource forms can be added when needed.
+agreed and implemented for the bounded standalone path. Its generated ARM checks
+exercise concrete resource bindings; independent mock checks alone do not prove
+all composition type compatibility. More elaborate resource forms remain work.
 
 ### Task-Local Configuration Access
 
@@ -369,8 +398,8 @@ retaining distinct configuration types and values. Generated boilerplate must
 handle the uppercase field naming convention without imposing lint allowances
 on the developer's code. Treat the binding as reserved in its supported scope
 and diagnose conflicting declarations rather than silently rewrite a shadowed
-user variable. The view's construction and integration with the generic checking
-function remain implementation work; the immutable typed-view approach is agreed.
+user variable. The standalone macro implements the immutable typed view inside
+the generic checking function and diagnoses conflicting `CONFIG` declarations.
 
 Generate the checking interface from the task's `config = [...]` declarations,
 without requiring a system composition or its actual values. For example,
@@ -396,11 +425,11 @@ an overview and distinguish separate uses of one task definition:
 
 ```rust,ignore
 mod __ferroforge_config {
-    mod status_blink {
-        const PERIOD_MS: u32 = 500;
+    pub(super) mod status_blink {
+        pub(crate) const PERIOD_MS: u32 = 500;
     }
-    mod alarm_blink {
-        const PERIOD_MS: u32 = 100;
+    pub(super) mod alarm_blink {
+        pub(crate) const PERIOD_MS: u32 = 100;
     }
 }
 ```
@@ -424,8 +453,8 @@ The legacy [current renderer](prototype.md#renderer) recognizes qualified
 `task::Config::FIELD` paths. The standalone transplant now recognizes direct
 `CONFIG.FIELD` expressions and emits collision-safe, typed constants per task
 instance before the resource structs and init. Two instances of one definition
-with different values compile in the renderer-owned ARM fixture. A marked,
-human-oriented grouping of that generated section remains presentation work.
+with different values compile in the renderer-owned ARM fixture. The generated
+section uses the grouped namespace shown above.
 The initial supported native logging argument forms now use the same direct
 configuration rewrite.
 
@@ -443,8 +472,8 @@ on a destination implementation. The macro generates a typed mock method for
 independently. The receiving task's function defines its own incoming signature;
 composition must connect compatible signatures.
 
-Selected starting syntax, implemented for standalone task checking but not yet
-translated into generated RTIC:
+Selected starting syntax, implemented for standalone task checking and translated
+into generated RTIC by the standalone transplant:
 
 ```rust,ignore
 pub mod telemetry {
@@ -587,8 +616,8 @@ The group is an ordinary logical Rust module, not necessarily an inline
 directly at the top level of `src/indicators.rs`. An inline module also works
 as an authoring form, and `src/lib.rs` itself can be the group when no further
 split is needed. No additional FerroForge module wrapper or grouping annotation
-is required. Discovery supports these forms; the generated namespace and
-private-access layout still need the real-RTIC proof.
+is required. Discovery supports these forms; the standalone transplant's ARM
+fixtures prove the initial generated namespace and private-helper access layout.
 
 Each task still has its own resource/configuration requirements and generated
 context. Grouping tasks does not merge their RTIC resource ownership or make
@@ -601,14 +630,14 @@ tasks from different modules are composed. Copying only the function loses
 this environment; merging all imports into one global scope is insufficient.
 Ordinary supporting items move together at the logical-module boundary while
 tasks remain individually selectable. See the agreed
-[source-transplant boundary](#source-transplant-boundary) for its initial scope
-and the namespace/access layout that still needs implementation proof.
+[source-transplant boundary](#source-transplant-boundary) for the proven initial
+namespace/access layout and the remaining reference-scope limitations.
 
 For a clock used by several tasks, the implemented checking spelling is a
 module-level `ferroforge::mock::systick::Mono` import independent of any one
 task's generated context module, with `monotonic = Mono` on tasks that use it.
-Generated firmware must still resolve these references to its real monotonic,
-retaining no mock import; that translation is not implemented.
+The standalone transplant resolves the supported references to its real
+monotonic and removes the direct `ferroforge` mock import.
 
 ### Generated Checking Contexts
 
@@ -698,7 +727,8 @@ The early concrete RTIC task transplant also has ARM coverage. Configuration,
 spawn, delay, and bounded logging translations are integrated, and the first
 Nucleo pipeline now orchestrates the separated Cargo checks and final build.
 Real negative cases cover each required Phase 5 failure class. Cross-system
-reuse and generalized orchestration remain open.
+reuse is proved for two same-board profiles; generalized orchestration and
+additional targets remain open.
 
 ## System-Owned Initialization
 
@@ -719,8 +749,10 @@ Hardware initialization uses the selected HAL's native types, traits, and
 methods, together with actual PAC/Cortex-M peripheral types. FerroForge does
 not introduce replacement hardware traits or a HAL wrapper API for clock,
 GPIO, or peripheral construction. The mock app context exposes real peripheral
-types; it does not substitute fake HAL objects. The independent init workspace
-is checked for its embedded target, without executing hardware initialization.
+types; it does not substitute fake HAL objects. Init is checked for its embedded
+target, without executing hardware initialization. The current prototype uses
+an independent init package; the required firmware layout checks init in the
+same authored package as composition.
 
 The developer writes an RTIC-shaped init function using a check-only init
 attribute and context. `#[ferroforge::init]` is now implemented as the bounded
@@ -800,7 +832,41 @@ child support modules, and other targets remain outside this slice. See the
 
 ## App Composition
 
-Each system owns an app composition. It supplies the global knowledge that a
+The agreed term is now **firmware**, replacing "system" in the new design.
+One `firmware/` grouping directory contains all firmware targets; it is not a
+compiled Cargo crate. Each target has its own workspace containing app composition
+and handwritten native hardware init, with Rust Analyzer checking of authored code
+as a requirement. The agreed layout places `composition.rs` and `init.rs` in
+one target-checked authoring package and uses shared host generation tooling;
+`gen_app` is an excluded, generated standalone build package. Checking-interface
+refresh and detailed Cargo plumbing remain open; current `systems/` paths still
+describe the checkout. See the
+[agreed logical hierarchy](composition-repair-plan.md#family-backends-and-firmware-workspaces).
+
+A family backend crate, such as STM32F4, owns its concrete chip target definitions
+and contains that family's reusable hardware tasks and helpers (functions,
+structs, and supporting code). Common reusable crates contain software tasks.
+Firmware selects the chip definition from the backend rather than maintaining
+another copy. Both task kinds use the same RTIC-like definition and composition
+model. Interrupt selection requires an enum covering supported-chip interrupts
+and validation against the selected chip. The task kind receiving the required
+binding awaits the clarification recorded in the
+[governing requirements](governing-requirements.md).
+Enum representation and helper sharing details remain open. Concrete target
+availability and helper type identity must be preserved through checking and
+transplantation.
+
+The required authoring interface is a per-firmware `composition!`, accompanied
+by that firmware's native hardware init. Each firmware selects one unified target
+definition; checking, init-interface generation, rendering, and building consume
+the same resolved target. Application scheduling/bindings and executable hardware
+setup have distinct ownership from target facts. See the
+[repair contract and ownership table](composition-repair-plan.md#unified-target-contract).
+This is an agreed direction, not current standalone behavior. The firmware
+hierarchy and single authored package are required; target representation and
+detailed Cargo inheritance remain open.
+
+Each firmware owns an app composition. It supplies the global knowledge that a
 reusable task or init module cannot know independently.
 
 The composition is responsible for:
@@ -812,7 +878,7 @@ The composition is responsible for:
 - providing typed configuration values;
 - mapping task-local spawn aliases to task instances;
 - assigning priorities;
-- assigning hardware interrupt bindings;
+- assigning interrupt bindings according to the clarified task-kind requirement;
 - selecting dispatchers and a monotonic;
 - selecting the target and final dependency versions or features.
 
@@ -826,17 +892,19 @@ while excluding explicitly identified check-only dependencies. Precise pruning
 is deferred. See [dependency management](dependencies.md#agreed-manifest-based-requirements).
 Check-only entries are explicitly listed using `check-only-dependencies` under
 `[package.metadata.ferroforge]`; collection, validation, and dependency exclusion
-are implemented. Their supported imports/attributes/references must still be
-removed or translated during firmware generation.
+are implemented. Source cleanup currently recognizes the literal `ferroforge`
+crate name and translates supported checking references; it does not use the
+metadata list to remove arbitrary check-only imports. General cleanup or
+diagnostics for those references remain work.
 The agreed initial merge rule combines requested features only for matching
 package sources, version requirement strings, and effective default-feature
 settings. Differences require alignment and a diagnostic identifying their
 contributors; system choices cannot silently override source requirements.
 This conservative collection and merge policy now drives the bounded standalone
-manifest writer and centralized Nucleo system, whose generated project passes
-an ARM check and release link. Legacy migration and generalized frontend syntax
-remain open. Matching requirements do not prove identical resolved graphs or
-valid feature combinations.
+manifest writer and both centralized Nucleo systems, whose generated projects
+pass ARM checks and release links. Legacy migration and generalized frontend
+syntax remain open. Matching requirements do not prove identical resolved
+graphs or valid feature combinations.
 Source validated against one HAL version is not automatically validated
 against a different version chosen during composition.
 
@@ -1038,14 +1106,20 @@ ARM-checks the native system init body, and the bounded Phase 4 path transplants
 that authored init into the real-RTIC output. The same path now emits a merged
 manifest and the complete initial STM32F401RE target package, then checks and
 release-links the generated project. Its initial explicit-Rust frontend now
-lives under `systems/nucleo-f401re`, where init, composition, and generated
-firmware have separate owned directories. It does not replace the legacy
-composer.
+lives under `systems/nucleo-f401re` and `systems/nucleo-f401re-fast-blink`, where
+init, composition, and generated firmware have separate owned directories.
+Both reuse `tasks/blinky`; the second composer uses the first composer's pipeline
+implementation. These paths do not replace the legacy composer or implement the
+required `firmware/` hierarchy and family backend repair.
 
 On 2026-09-13, all 81 default top-level workspace tests passed, with two
 additional Rust Analyzer diagnostic tests opt-in/ignored. Strict Clippy, the ARM
 source library check, and the existing generated firmware release build also
-passed offline. The workspace suite includes an independently checked
+passed offline. These are historical results. On 2026-09-15,
+`cargo test --workspace --locked --offline` passed 83 tests with two Rust Analyzer
+tests ignored, and both current Nucleo pipelines passed ARM checks and release
+links. That verification did not rerun strict Clippy or the opt-in Rust Analyzer
+tests. The workspace suite includes an independently checked
 standalone SW package, eight expected compiler failures with authored-source
 locations, a fixed real-RTIC ARM layout, and renderer-emitted ARM source with
 repeated per-instance configuration and zero/one/multiple-input spawn
@@ -1066,10 +1140,18 @@ failures. A second opt-in Rust Analyzer 1.98.0 regression locates the focused
 E0107/E0308 errors on authored init lines, closing the bounded Phase 3 gate. The
 new system composer now provides the first one-command pipeline: child Cargo
 processes check reusable tasks and init, then check and release-build the
-rendered firmware. Command-stage failures stop later stages; broader injected
-source/render/link failures remain Phase 5 hardening work.
+rendered firmware. Command-stage failures stop later stages;
+`real_failures_stop_at_their_pipeline_boundaries` also covers the required
+injected source, render, and link failure classes, closing the bounded Phase 5
+gate. The second same-board pipeline supplies Phase 6 reuse evidence.
 
 ## Core Design Principle
+
+FerroForge is a framework extending RTIC, not a new language for task behavior
+or hardware setup. Keep ordinary Rust task and init bodies, familiar RTIC
+contexts and resource access, and native HAL calls. Additional declaration
+syntax must serve reusable contracts or firmware composition without introducing
+a separate programming model.
 
 Rust remains the source of truth for task behavior, initialization behavior,
 types, and target API usage. Generation is limited to the pieces requiring

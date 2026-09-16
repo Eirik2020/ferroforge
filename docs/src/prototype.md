@@ -1,9 +1,10 @@
 # Current Prototype
 
 This chapter describes the 2026-09-05 prototype baseline plus the implemented
-standalone foundation. Typed standalone SW tasks compile independently, and one
-host command now carries the centralized Nucleo-F401RE system through init
-checking, rendering, real-RTIC checking, and an optimized release link.
+standalone foundation. Typed standalone SW tasks compile independently, and two
+host commands now carry distinct Nucleo-F401RE systems through init checking,
+rendering, real-RTIC checking, and optimized release links while consuming the
+same unchanged task package.
 The [architecture](architecture.md) and [review](review.md) distinguish the
 planned independent task/init design from this example.
 
@@ -11,7 +12,7 @@ planned independent task/init design from this example.
 
 | Location | Role |
 | --- | --- |
-| Root `Cargo.toml` | Host workspace containing the framework, legacy composer, and first-system composer |
+| Root `Cargo.toml` | Host workspace containing the framework, legacy composer, and two standalone-system composers |
 | `ferroforge` | `no_std` API, mock resource/clock types, metadata, macro re-exports |
 | `ferroforge-contracts` | Shared task declaration parser and structural validation; no HAL dependency |
 | `ferroforge-macros` | Procedural macros for tasks, apps, composition, and dependencies |
@@ -23,12 +24,15 @@ planned independent task/init design from this example.
 | `systems/nucleo-f401re/init` | Centralized native Nucleo init check workspace |
 | `systems/nucleo-f401re/app_composition` | Host frontend owning the first standalone composition and target choices |
 | `systems/nucleo-f401re/gen_app` | Generated standalone RTIC firmware workspace |
+| `systems/nucleo-f401re-fast-blink/init` | Separate native Nucleo init for the second reuse system |
+| `systems/nucleo-f401re-fast-blink/app_composition` | Second host frontend with alternate instance/resource/configuration bindings |
+| `systems/nucleo-f401re-fast-blink/gen_app` | Second generated standalone RTIC firmware workspace |
 
 The legacy `embedded` and `generated/nucleo-f401re` projects, reusable task
-workspace, system init, and standalone generated firmware are separate Cargo
-workspaces. Only `systems/nucleo-f401re/app_composition` joins the host workspace;
-it reads target source and metadata without importing target packages as host
-dependencies.
+workspace, both system init packages, and both standalone generated firmware
+projects are separate Cargo workspaces. The two `app_composition` packages join
+the host workspace; they read target source and metadata without importing
+target packages as host dependencies.
 
 ## Legacy System Source
 
@@ -278,9 +282,9 @@ and the SysTick delay type. Independent init checking now has a separate native
 fixture and generated ARM checker, and the first Phase 4 regression transplants
 that init into a generated real-RTIC ARM program. The standalone project writer
 now emits the complete initial STM32F401RE target package and checks and
-release-links that generated project. The real `tasks/blinky` and centralized
-Nucleo system now exercise the same boundary; orchestration and additional
-target profiles remain work.
+release-links that generated project. The real `tasks/blinky` and both
+centralized Nucleo systems now exercise the same boundary through complete host
+orchestration. Additional target profiles remain work.
 `load_application` and the composer have not been switched to these fixtures.
 
 ### Composition-Generated Init Checker
@@ -320,9 +324,11 @@ remain compiler responsibilities.
 
 This model deliberately does not select a new author-facing composition macro
 grammar. The existing `composition!` and composer still drive only the
-app-backed prototype. The first standalone system uses the owned model directly
-from ordinary Rust in `systems/nucleo-f401re/app_composition`; generalized
-frontend syntax and ergonomics remain open.
+app-backed prototype. Both standalone systems use the owned model directly from
+ordinary Rust in their `app_composition` packages. Restoring a per-system
+`composition!` is required work, not merely optional ergonomics. The
+[repair plan](composition-repair-plan.md) also includes hardware interrupt
+tasks, multiple source packages, and one unified target consumed by all stages.
 
 `ferroforge_renderer::transplant::render_rtic_app` is now an early renderer-owned
 bridge from a validated standalone composition to real RTIC source. It emits
@@ -465,12 +471,12 @@ dependencies. No publication status is assumed by these instructions.
 
 ## Verified Baseline
 
-On 2026-09-13, 82 top-level workspace tests passed and two Rust Analyzer tests
+On 2026-09-14, 83 top-level workspace tests passed and two Rust Analyzer tests
 remained opt-in/ignored: 10 contract, 23 macro, 7 renderer/loader, 10 discovery,
 6 composition, 6 dependency, 4 standalone checking (one ignored), 8 standalone
-transplant, 3 standalone project, 4 independent-init tests (one ignored), and 3
-first-system frontend/orchestration tests. The latter include the real-process
-negative pipeline matrix.
+transplant, 3 standalone project, 4 independent-init tests (one ignored), 3
+first-system frontend/orchestration tests, and 1 second-system reuse test. The
+first-system tests include the real-process negative pipeline matrix.
 Nested checks cover one positive package, eight focused expected compiler
 failures with authored-source locations, the fixed real-RTIC layout, and
 renderer-emitted ARM source, including distinct configuration values for
@@ -494,9 +500,16 @@ negative source/composition/init/render/check/link cases. The latter includes a
 concrete resource mismatch caught by the generated Rust/RTIC check and a
 malformed test-owned linker script rejected by the real release link. Each case
 asserts that later Cargo stages are skipped.
+The second `systems/nucleo-f401re-fast-blink` command uses the same bounded
+Nucleo pipeline mechanics with its own init and composition profile. It maps
+`blink`/`report` to `heartbeat`/`diagnostics`, maps the task resources to
+`activity_led`, `pulse_count`, and `heartbeat_enabled`, and emits a 125 ms
+period rather than the first system's 500 ms value. Its render regression
+compares the reusable task file before and after generation, and its complete
+ARM pipeline checks and release-links.
 These results close the bounded Phase 2 gate and preserve the single-system
 prototype. A separate opt-in Rust Analyzer 1.98.0 init regression locates its
 focused E0107/E0308 diagnostics on authored init lines, closing the bounded
 Phase 3 gate. The results do not validate general cross-boundary references,
-generalized frontend syntax, every Rust Analyzer diagnostic, or cross-system
-reuse.
+generalized frontend syntax, every Rust Analyzer diagnostic, or portability to
+another MCU/HAL target.

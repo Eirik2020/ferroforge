@@ -37,13 +37,12 @@ fn renders_a_second_system_without_modifying_the_reusable_task() {
     let task_source_path = repository_root.join("tasks/blinky/src/lib.rs");
     let task_source_before = fs::read(&task_source_path).unwrap();
     let output = TempOutput::new();
-    let rendered =
-        ferroforge_nucleo_f401re_fast_blink_composer::render_nucleo_f401re_fast_blink(
-            &repository_root,
-            &output.0.join("init-check"),
-            &output.0.join("gen_app"),
-        )
-        .unwrap();
+    let rendered = ferroforge_nucleo_f401re_fast_blink_composer::render_nucleo_f401re_fast_blink(
+        &repository_root,
+        &output.0.join("init-check"),
+        &output.0.join("gen_app"),
+    )
+    .unwrap();
 
     let source = fs::read_to_string(rendered.firmware.main_source).unwrap();
     let manifest = fs::read_to_string(rendered.firmware.manifest).unwrap();

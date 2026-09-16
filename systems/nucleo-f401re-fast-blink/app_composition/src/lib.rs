@@ -4,8 +4,8 @@ use std::{
 };
 
 use ferroforge_nucleo_f401re_composer::{
-    BlinkyNucleoF401reProfile, PipelineError, RenderedNucleoF401re,
-    render_blinky_nucleo_f401re, run_blinky_nucleo_f401re_pipeline,
+    BlinkyNucleoF401reProfile, PipelineError, RenderedNucleoF401re, render_blinky_nucleo_f401re,
+    run_blinky_nucleo_f401re_pipeline,
 };
 
 pub fn profile() -> BlinkyNucleoF401reProfile {

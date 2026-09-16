@@ -1,7 +1,9 @@
 # Build and Development Workflow
 
-Commands below describe the current prototype. The planned multi-system
-orchestrator is covered in the [implementation plan](implementation-plan.md).
+Commands below describe the current prototype. The bounded two-system pipeline
+are covered in the [implementation plan](implementation-plan.md). The required
+[composition and unified-target repair](composition-repair-plan.md) is still
+planning work; its proposed interfaces are not executable commands yet.
 
 ## Toolchain
 
@@ -140,14 +142,18 @@ links. Negative cases verify that malformed target memory data and a
 system/source version conflict are rejected without leaving a partial project.
 This regression is not the Phase 5 check/generate/build orchestration command.
 
-## Render and Verify the Centralized Nucleo System
+## Render and Verify the Centralized Nucleo Systems
 
-The first actual standalone system keeps reusable tasks separate from
-board-owned init and composition:
+The two actual standalone systems keep reusable tasks separate from
+system-owned init and composition:
 
 ```text
 tasks/blinky/
 systems/nucleo-f401re/
+|-- init/
+|-- app_composition/
+`-- gen_app/
+systems/nucleo-f401re-fast-blink/
 |-- init/
 |-- app_composition/
 `-- gen_app/
@@ -166,6 +172,19 @@ under `systems/nucleo-f401re/gen_app`, refreshes its lockfile offline, checks th
 real RTIC target, and completes an optimized release build. Target task/init
 code is compiled only by child Cargo processes, never linked into the host
 composer.
+
+Run the second reuse system from the same repository root:
+
+```text
+cargo run -p ferroforge-nucleo-f401re-fast-blink-composer --locked --offline
+```
+
+It follows the same stage order but reads its own init and composition. The
+unchanged `tasks/blinky` definitions become `heartbeat` and `diagnostics`;
+their resources become `activity_led`, `pulse_count`, and
+`heartbeat_enabled`, and the period is 125 ms. This system intentionally uses
+the same Nucleo-F401RE target, so the result proves system-level reuse but not
+portability to another MCU family.
 
 For focused diagnosis, stages can still be run from their
 configuration-owning directories:
@@ -188,9 +207,9 @@ memory layout, and probe selection with the Nucleo system, while
 name and prevents all dependent later stages. The default regressions simulate
 failure at each command boundary and exercise real invalid task, composition,
 init, firmware-generation, generated-check, and linker cases. They assert both
-the reported stage and that later Cargo stages were not executed. This closes
-the bounded first-system Phase 5 gate; the Phase 6 second-system reuse proof is
-still outstanding.
+the reported stage and that later Cargo stages were not executed. Together with
+the second system's successful command and unchanged-source regression, this
+closes the bounded Phase 5 and Phase 6 gates.
 
 ## Check Embedded Source
 

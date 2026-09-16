@@ -1,5 +1,11 @@
 # Implementation Plan
 
+Current continuation (2026-09-14): the required
+[per-system composition and unified-target repair](composition-repair-plan.md)
+is pending. The bounded proofs below do not mean the intended `composition!`
+authoring interface is complete. The repair includes hardware interrupt tasks,
+multiple task packages, one authoritative target, and legacy compatibility.
+
 The implementation baseline was reviewed on 2026-09-05. This plan incorporates
 the subsequent agreements in the [source-transplant architecture](architecture.md)
 and [decision record](review.md). The initial design and implementation sequence
@@ -370,8 +376,9 @@ init-to-firmware transplant plus manifest-derived project emission, complete
 initial STM32F401RE target files, and a real-RTIC ARM check/release link.
 The first explicit-Rust frontend, grouped configuration namespace, and
 centralized Nucleo system are also in place. The bounded Phase 4 exit gate is
-met. General reference coverage, additional target profiles, and the full
-pipeline remain outstanding.
+met. The bounded full pipeline and second-system reuse proof are now recorded
+below. Required per-system declaration/unified-target work is tracked in the
+repair plan; general reference coverage and additional targets remain limited.
 
 ### Progress Record - Phase 1 Foundation
 
@@ -456,9 +463,10 @@ Verification for this foundation:
 
 | Working directory | Command | Result |
 | --- | --- | --- |
-| Repository root | `cargo test --workspace --all-targets --locked --offline` | 82 top-level tests pass and two Rust Analyzer tests are opt-in/ignored: 10 contract, 23 macro, 7 existing renderer/loader, 10 discovery, 6 standalone composition, 6 dependency collection/merging, 4 standalone checking tests (one ignored), 8 standalone transplant tests, 3 standalone project tests, 4 independent-init tests (one ignored), and 3 first-system frontend/orchestration tests; nested checks add one positive SW fixture package, eight expected compiler failures with authored-source locations, the fixed ARM layout, renderer-emitted ARM task source including the combined native-init case, one manifest-driven generated ARM project that checks and release-links with its emitted target files, one native-HAL init fixture check, three expected init-check failures, and the real source/composition/init/render/check/link pipeline failure matrix |
+| Repository root | `cargo test --workspace --all-targets --locked --offline` | 83 top-level tests pass and two Rust Analyzer tests are opt-in/ignored: 10 contract, 23 macro, 7 existing renderer/loader, 10 discovery, 6 standalone composition, 6 dependency collection/merging, 4 standalone checking tests (one ignored), 8 standalone transplant tests, 3 standalone project tests, 4 independent-init tests (one ignored), 3 first-system frontend/orchestration tests, and 1 second-system reuse test; nested checks add one positive SW fixture package, eight expected compiler failures with authored-source locations, the fixed ARM layout, renderer-emitted ARM task source including the combined native-init case, one manifest-driven generated ARM project that checks and release-links with its emitted target files, one native-HAL init fixture check, three expected init-check failures, and the real source/composition/init/render/check/link pipeline failure matrix |
 | Repository root | `cargo test -p ferroforge-renderer --test standalone_project --locked --offline` | Pass; emits, ARM-checks, and release-links a manifest-derived standalone project with `memory.x`, Cargo runner/linker settings, and probe configuration; retains conservative task/init dependencies, excludes `ferroforge`, and diagnoses invalid target data or a system/source version conflict before writing output |
 | Repository root | `cargo run -p ferroforge-nucleo-f401re-composer --locked --offline` | Pass; checks `tasks/blinky`, validates composition, generates and checks the centralized native init interface, emits/resolves/checks the real-RTIC firmware, and completes its release build |
+| Repository root | `cargo run -p ferroforge-nucleo-f401re-fast-blink-composer --locked --offline` | Pass; reuses `tasks/blinky` unchanged with a separate init and alternate instance/resource/configuration bindings, then checks and release-links the second generated system |
 | `tasks/blinky` | `cargo check --lib --target thumbv7em-none-eabihf --locked --offline` | Pass; independently checks the reusable portable task package |
 | `systems/nucleo-f401re/.ferroforge/init-check` | `cargo check --lib --manifest-path ../../init/Cargo.toml --locked --offline` | Pass; checks the centralized native HAL init against the generated composition interface |
 | `systems/nucleo-f401re/gen_app` | `cargo build --release --locked --offline` | Pass; release-links the first standalone system using its emitted target package |
@@ -585,8 +593,8 @@ target-aware compiler checks and the final build in the pipeline.
 Each phase lists its deliverables, verification, and exit gate. Do not mark a
 phase complete solely because its examples render or a mock body compiles.
 Record exact fixture/source paths, targets, commands, and results when
-implementing it. The first source/system crates and combined orchestration
-command now exist; broader negative end-to-end proof remains.
+implementing it. Both source/system pipelines and the representative negative
+end-to-end proofs now exist.
 
 - Host parser/renderer tests: run `cargo test --workspace --all-targets --locked`
   from the host workspace, including the new regression fixtures.
@@ -754,8 +762,8 @@ init-local storage, child support modules, and other targets remain deferred
 until required by a concrete system. The initial standalone init transplant is
 now implemented in Phase 4 together with manifest and complete initial
 STM32F401RE target emission. The explicit-Rust frontend, first-system
-integration, grouped configuration namespace, and bounded Phase 5 orchestration
-are implemented; the second-system reuse proof is next.
+integration, grouped configuration namespace, bounded Phase 5 orchestration,
+and Phase 6 same-board reuse proof are implemented.
 
 ### Phase 4 - Implement Composition-Driven Transplantation
 
@@ -823,10 +831,10 @@ constants, and the generated manifest/target files for the first system.
 
 Verification: host regression tests cover mappings, sibling exclusion, support
 identity/import collisions, native logging arguments and unchanged literals,
-check-only cleanup, and dependency merging. The first centralized system is now
+check-only cleanup, and dependency merging. The first centralized system is
 generated by its host frontend; its task and init packages check independently,
-and its generated target release-links with manual Cargo commands before
-end-to-end orchestration is added.
+and its generated target release-links. Phase 5 subsequently incorporated
+these steps into the end-to-end command.
 
 Exit gate: the generated project checks with real RTIC and no FerroForge mock
 dependency or task-library runtime wrapper. Selected bindings and constants are
@@ -837,8 +845,9 @@ diagnostics rather than silently altering source meaning or requirements.
 
 Status: met for the bounded first-system scope. `run_nucleo_f401re_pipeline` is
 the recorded host entry point. It invokes child Cargo processes in dependency
-order for the reusable task check, generated native-init check, firmware lockfile resolution,
-real-RTIC target check, and release build, with composition/interface and
+order for the reusable task check, generated native-init check, firmware
+lockfile resolution, real-RTIC target check, and release build, with
+composition/interface and
 firmware generation between those stages. Errors identify the failed stage and
 return immediately. A fake command executor regression injects failure at every
 Cargo boundary and proves later command stages are skipped. The documented real
@@ -911,10 +920,15 @@ limits in the workflow and prototype chapters.
 
 ### Phase 6 - Prove Reuse Across Systems
 
-Status: next. The concrete second system and its differing resource,
-configuration, and instance bindings have not yet been selected or implemented.
-It must consume `tasks/blinky` unchanged and own a separate init, composition,
-and generated project.
+Status: met for the bounded same-board scope. The second system is
+`systems/nucleo-f401re-fast-blink`. It consumes `tasks/blinky` unchanged,
+owns a separate native init, explicit-Rust composition, and generated project,
+maps the task definitions to `heartbeat` and `diagnostics`, renames the LED,
+counter, and shared-enable resources, and binds a 125 ms period instead of 500
+ms. Its host regression verifies those generated differences and byte-for-byte
+task-source preservation. Its recorded one-command pipeline independently checks
+the task and init, checks the generated real-RTIC target, and completes the
+optimized ARM release link. The first system pipeline remains successful.
 
 -   Add a second system using unchanged reusable task source.
 -   Verify instance/resource mapping and system-specific init ownership.
@@ -932,6 +946,10 @@ initial reuse proof; it is not evidence of untested HAL/target portability.
 
 Further board/HAL coverage, broader manifest/macro support, and executable host
 simulation remain follow-on work, not extra gates for this initial pipeline.
+The bounded backend sequence has its recorded proofs, but the intended
+per-system `composition!` frontend was not delivered. The active next work is
+the [composition and unified-target repair](composition-repair-plan.md), with
+its own explicit pending gates.
 
 ## Design Principle
 
