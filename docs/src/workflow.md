@@ -69,7 +69,14 @@ that alone:
 ```toml
 [package.metadata.ferroforge]
 chip = "stm32f401re"
+defmt-log = "info"
 ```
+
+`defmt-log` is optional and defaults to `info`. It takes anything `DEFMT_LOG`
+takes, including a per-crate filter such as `info,noisy_crate=off`. It is
+declared rather than passed on the command line because it is written into an
+emitted file: a flag would leave that file disagreeing with the manifest, which
+is the drift the derived files exist to prevent.
 
 `sync` rewrites `memory.x`, `.cargo/config.toml` and `Embed.toml`, and replaces
 the region of that firmware's `Cargo.toml` between

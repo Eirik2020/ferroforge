@@ -1,0 +1,10 @@
+[package]
+name = "msp"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# No dependencies, deliberately. Framing, formatting and the reply table are
+# ordinary Rust, so they belong somewhere a host test can reach them. The tasks
+# that move the bytes are a separate crate.
+[dependencies]

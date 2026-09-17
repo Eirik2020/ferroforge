@@ -51,8 +51,10 @@ const CASES: &[Case] = &[
     Case {
         name: "configuration-type-disagrees-with-definition",
         firmware: BASE,
-        from: "config = [period_ms: u32 = 500],",
-        to: "config = [period_ms: u64 = 500],",
+        // Only the type, so changing the configured value does not stop this
+        // case from testing what it is about.
+        from: "period_ms: u32 =",
+        to: "period_ms: u64 =",
         expected: "implemented const `PERIOD_MS` has an incompatible type for trait",
     },
     Case {
@@ -94,9 +96,31 @@ const CASES: &[Case] = &[
     Case {
         name: "too-few-dispatchers-for-the-priorities-used",
         firmware: BEACON,
-        from: "dispatchers = [USART2, USART6]",
+        from: "dispatchers = [USART2, SPI1]",
         to: "dispatchers = [USART2]",
         expected: "not enough interrupts to dispatch all software tasks",
+    },
+    // A group's library states how its priorities must relate. These two are the
+    // whole reason a group is more than a lexical block.
+    Case {
+        name: "priority-breaks-the-groups-wiring-rule",
+        firmware: BEACON,
+        // Only what the case is about: giving this task its own priority, which
+        // the group's rules forbid.
+        from: "from = on_rx, binds = DMA2_STREAM2",
+        to: "from = on_rx, binds = DMA2_STREAM2, priority = 7",
+        expected: "both lock Port from interrupt context",
+    },
+    // Both lines, or the attribute is left dangling onto the next declaration
+    // and the error is about that instead.
+    Case {
+        name: "a-group-missing-one-of-its-tasks",
+        firmware: BEACON,
+        from: "#[task(from = on_tx, binds = DMA2_STREAM7, priority = 4, shared = [], \
+               local = [stream = tx_stream, sent = tx_sent])]\n        \
+               fn dma_tx(cx: dma_tx::Context);",
+        to: "",
+        expected: "missing: `ON_TX_PRIORITY`",
     },
 ];
 

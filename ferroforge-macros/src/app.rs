@@ -64,7 +64,9 @@ struct TaskAttribute {
     priority: Option<LitInt>,
     binds: Option<Path>,
     local: Vec<Rebind>,
-    shared: Vec<Rebind>,
+    /// `None` is "not stated", which a group block fills in. `Some([])` is a
+    /// task saying it shares nothing - how one opts out of its group's binding.
+    shared: Option<Vec<Rebind>>,
     config: Vec<ConfigValue>,
     spawn: Vec<Rebind>,
 }
@@ -88,7 +90,7 @@ impl Parse for TaskAttribute {
                 "priority" => parsed.priority = Some(input.parse()?),
                 "binds" => parsed.binds = Some(input.parse()?),
                 "local" => parsed.local = bracketed_list(input)?,
-                "shared" => parsed.shared = bracketed_list(input)?,
+                "shared" => parsed.shared = Some(bracketed_list(input)?),
                 "config" => parsed.config = bracketed_list(input)?,
                 "spawn" => parsed.spawn = bracketed_list(input)?,
                 other => {
@@ -111,10 +113,80 @@ struct Instance {
     signature: Signature,
 }
 
+/// `#[group(from = .., wiring = .., shared = [..], priority = ..)] mod name { .. }`
+///
+/// Several tasks that only work as a set. The block states once what would
+/// otherwise be repeated on each of them, and names the trait the library uses
+/// to say how their priorities must relate.
+#[derive(Default)]
+struct GroupAttribute {
+    from: Option<Path>,
+    wiring: Option<Path>,
+    shared: Vec<Rebind>,
+    priority: Option<LitInt>,
+}
+
+impl Parse for GroupAttribute {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let mut parsed = Self::default();
+        while !input.is_empty() {
+            let key: Ident = input.parse()?;
+            input.parse::<Token![=]>()?;
+            match key.to_string().as_str() {
+                "from" => parsed.from = Some(input.parse()?),
+                "wiring" => parsed.wiring = Some(input.parse()?),
+                "shared" => parsed.shared = bracketed_list(input)?,
+                "priority" => parsed.priority = Some(input.parse()?),
+                other => {
+                    return Err(syn::Error::new(
+                        key.span(),
+                        format!(
+                            "unknown group option `{other}`; expected `from`, \
+                             `wiring`, `shared` or `priority`"
+                        ),
+                    ));
+                }
+            }
+            if input.peek(Token![,]) {
+                input.parse::<Token![,]>()?;
+            }
+        }
+        Ok(parsed)
+    }
+}
+
+struct Group {
+    attribute: GroupAttribute,
+    name: Ident,
+    instances: Vec<Instance>,
+}
+
 enum Element {
     /// Authored items - `use`, `Shared`, `Local`, `init` - passed through.
     Verbatim(Item),
     Instance(Instance),
+    Group(Group),
+}
+
+/// A bodyless `#[task(from = ..)] fn name(..);` declaration. Shared by the
+/// top-level form and the one inside a group block.
+fn parse_instance(input: ParseStream<'_>, attribute: TaskAttribute) -> syn::Result<Instance> {
+    let signature: Signature = input.parse()?;
+    input.parse::<Token![;]>()?;
+    Ok(Instance {
+        attribute,
+        signature,
+    })
+}
+
+/// The `#[task(..)]` attribute on an item, when it declares an instance rather
+/// than being RTIC's own.
+fn instance_attribute(attributes: &[Attribute]) -> Option<TaskAttribute> {
+    attributes
+        .iter()
+        .find(|attribute| attribute.path().is_ident("task"))
+        .and_then(|attribute| attribute.parse_args_with(TaskAttribute::parse).ok())
+        .filter(|parsed| parsed.from.is_some())
 }
 
 /// The type name substituted for a task's monotonic slot. An alias rather than
@@ -192,28 +264,38 @@ impl Parse for App {
         let mut elements = Vec::new();
         while !input.is_empty() {
             let attributes = input.call(Attribute::parse_outer)?;
-            let task = attributes
+            let group = attributes
                 .iter()
-                .find(|attribute| attribute.path().is_ident("task"));
-            let declares_instance = task
-                .map(|attribute| {
-                    attribute
-                        .parse_args_with(TaskAttribute::parse)
-                        .map(|parsed| parsed.from.is_some())
-                        .unwrap_or(false)
-                })
-                .unwrap_or(false);
+                .find(|attribute| attribute.path().is_ident("group"));
 
-            if declares_instance {
-                let attribute = task
-                    .expect("checked above")
-                    .parse_args_with(TaskAttribute::parse)?;
-                let signature: Signature = input.parse()?;
-                input.parse::<Token![;]>()?;
-                elements.push(Element::Instance(Instance {
+            if let Some(group) = group {
+                let attribute = group.parse_args_with(GroupAttribute::parse)?;
+                // Parsed by hand: the declarations inside are bodyless `fn`s,
+                // which are not items, so `ItemMod` cannot hold them.
+                input.parse::<Token![mod]>()?;
+                let name: Ident = input.parse()?;
+                let block;
+                syn::braced!(block in input);
+
+                let mut instances = Vec::new();
+                while !block.is_empty() {
+                    let inner = block.call(Attribute::parse_outer)?;
+                    let declared = instance_attribute(&inner).ok_or_else(|| {
+                        syn::Error::new(
+                            name.span(),
+                            "a group holds task declarations and nothing else; \
+                             each needs `#[task(from = ..)]`",
+                        )
+                    })?;
+                    instances.push(parse_instance(&block, declared)?);
+                }
+                elements.push(Element::Group(Group {
                     attribute,
-                    signature,
+                    name,
+                    instances,
                 }));
+            } else if let Some(attribute) = instance_attribute(&attributes) {
+                elements.push(Element::Instance(parse_instance(input, attribute)?));
             } else {
                 let mut item: Item = input.parse()?;
                 prepend_attributes(&mut item, attributes)?;
@@ -267,16 +349,16 @@ fn render_instance(instance: &Instance) -> syn::Result<TokenStream> {
         let (requirement, resource) = (&rebind.requirement, &rebind.target);
         quote!(#requirement: cx.local.#resource)
     });
-    let shared_fields = attribute.shared.iter().map(|rebind| {
+    let shared = attribute.shared.as_deref().unwrap_or_default();
+    let shared_fields = shared.iter().map(|rebind| {
         let (requirement, resource) = (&rebind.requirement, &rebind.target);
         quote!(#requirement: cx.shared.#resource)
     });
     let local_claims = attribute.local.iter().map(|rebind| &rebind.target);
-    let shared_claims = attribute.shared.iter().map(|rebind| &rebind.target);
+    let shared_claims = shared.iter().map(|rebind| &rebind.target);
     let local_attribute =
         (!attribute.local.is_empty()).then(|| quote!(, local = [#(#local_claims),*]));
-    let shared_attribute =
-        (!attribute.shared.is_empty()).then(|| quote!(, shared = [#(#shared_claims),*]));
+    let shared_attribute = (!shared.is_empty()).then(|| quote!(, shared = [#(#shared_claims),*]));
 
     // The spawn closure forwards to the bound instance's real RTIC `spawn`.
     // Argument count comes from the definition, so the closure takes the
@@ -363,6 +445,126 @@ fn render_instance(instance: &Instance) -> syn::Result<TokenStream> {
     })
 }
 
+/// A group's tasks, with what the block states once folded into each, plus the
+/// impl that hands their priorities to the library's `Wiring` trait.
+fn render_group(group: &Group) -> syn::Result<TokenStream> {
+    let Group {
+        attribute,
+        name,
+        instances,
+    } = group;
+
+    let mut rendered = Vec::new();
+    let mut consts = Vec::new();
+
+    for instance in instances {
+        let mut folded = TaskAttribute {
+            from: None,
+            priority: instance
+                .attribute
+                .priority
+                .clone()
+                .or_else(|| attribute.priority.clone()),
+            binds: instance.attribute.binds.clone(),
+            // A task that states its own claims replaces the group's; one that
+            // states none inherits them. `shared = []` is how a task in the
+            // group opts out, which the definitions without shared state need.
+            local: clone_rebinds(&instance.attribute.local),
+            shared: Some(match &instance.attribute.shared {
+                Some(own) => clone_rebinds(own),
+                None => clone_rebinds(&attribute.shared),
+            }),
+            config: clone_configs(&instance.attribute.config),
+            spawn: clone_rebinds(&instance.attribute.spawn),
+        };
+
+        // `from` inside a group is relative to the group's own path, so the
+        // definitions are named once at the top and then by their own names.
+        let relative = instance
+            .attribute
+            .from
+            .as_ref()
+            .expect("an instance is recognised by its `from`");
+        folded.from = Some(match &attribute.from {
+            Some(prefix) => syn::parse_quote!(#prefix::#relative),
+            None => relative.clone(),
+        });
+
+        if attribute.wiring.is_some() {
+            let definition = relative
+                .segments
+                .last()
+                .expect("a path has a last segment")
+                .ident
+                .to_string();
+            let constant = format_ident!(
+                "{}_PRIORITY",
+                definition.to_uppercase(),
+                span = instance.signature.ident.span()
+            );
+            let priority = folded
+                .priority
+                .clone()
+                .unwrap_or_else(|| LitInt::new("1", instance.signature.ident.span()));
+            consts.push(quote!(const #constant: u8 = #priority;));
+        }
+
+        rendered.push(render_instance(&Instance {
+            attribute: folded,
+            signature: instance.signature.clone(),
+        })?);
+    }
+
+    // The library states how these priorities must relate; this hands it the
+    // ones the firmware chose. A rule it breaks fails here, in the library's own
+    // words, and a task left out leaves its const missing from the impl.
+    let wiring = attribute.wiring.as_ref().map(|wiring| {
+        let witness = format_ident!(
+            "__FfWiring{}",
+            name.to_string().to_uppercase(),
+            span = name.span()
+        );
+        // Spanned on the group's own name, so a broken rule points at the block
+        // that broke it rather than at the whole macro invocation.
+        let forced = quote::quote_spanned! { name.span() =>
+            const _: () = <#witness as #wiring>::CHECK;
+        };
+        quote! {
+            struct #witness;
+            impl #wiring for #witness {
+                #(#consts)*
+            }
+            #forced
+        }
+    });
+
+    Ok(quote! {
+        #wiring
+        #(#rendered)*
+    })
+}
+
+fn clone_rebinds(rebinds: &[Rebind]) -> Vec<Rebind> {
+    rebinds
+        .iter()
+        .map(|rebind| Rebind {
+            requirement: rebind.requirement.clone(),
+            target: rebind.target.clone(),
+        })
+        .collect()
+}
+
+fn clone_configs(values: &[ConfigValue]) -> Vec<ConfigValue> {
+    values
+        .iter()
+        .map(|value| ConfigValue {
+            name: value.name.clone(),
+            ty: value.ty.clone(),
+            value: value.value.clone(),
+        })
+        .collect()
+}
+
 pub fn expand(application: App) -> syn::Result<TokenStream> {
     let App {
         device,
@@ -377,6 +579,7 @@ pub fn expand(application: App) -> syn::Result<TokenStream> {
         body.push(match element {
             Element::Verbatim(item) => quote!(#item),
             Element::Instance(instance) => render_instance(instance)?,
+            Element::Group(group) => render_group(group)?,
         });
     }
 

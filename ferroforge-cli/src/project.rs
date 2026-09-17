@@ -80,6 +80,8 @@ struct Metadata {
 #[derive(Debug, Default, Deserialize)]
 struct FerroForge {
     chip: Option<String>,
+    #[serde(rename = "defmt-log")]
+    defmt_log: Option<String>,
 }
 
 /// One application under `firmware/`.
@@ -89,9 +91,29 @@ pub struct Firmware {
 }
 
 impl Firmware {
+    /// What this firmware wants in `DEFMT_LOG`: a level, or a filter such as
+    /// `info,noisy_crate=off`.
+    ///
+    /// Declared rather than passed on the command line, because it is written
+    /// into an emitted file. A flag would leave the file disagreeing with
+    /// everything that records why, which is the drift the derived files exist
+    /// to prevent.
+    pub fn defmt_log(&self) -> Result<String, Error> {
+        Ok(self
+            .metadata()?
+            .defmt_log
+            .unwrap_or_else(|| "info".to_owned()))
+    }
+
     /// The chip this firmware declares. Not defaulted: guessing which chip a
     /// binary is for would produce a firmware that links and cannot run.
     pub fn chip(&self) -> Result<String, Error> {
+        self.metadata()?.chip.ok_or_else(|| Error::NoChip {
+            firmware: self.path.display().to_string(),
+        })
+    }
+
+    fn metadata(&self) -> Result<FerroForge, Error> {
         let manifest = self.path.join("Cargo.toml");
         let display = manifest.display().to_string();
         let text = fs::read_to_string(&manifest).map_err(|source| Error::Read {
@@ -102,14 +124,7 @@ impl Firmware {
             path: display,
             message: error.to_string(),
         })?;
-        parsed
-            .package
-            .metadata
-            .ferroforge
-            .chip
-            .ok_or_else(|| Error::NoChip {
-                firmware: self.path.display().to_string(),
-            })
+        Ok(parsed.package.metadata.ferroforge)
     }
 }
 

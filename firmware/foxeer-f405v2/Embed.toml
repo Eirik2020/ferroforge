@@ -1,8 +1,0 @@
-[default.general]
-chip = "STM32F405RG"
-
-[default.rtt]
-enabled = true
-
-[default.gdb]
-enabled = false

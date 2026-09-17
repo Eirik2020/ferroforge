@@ -65,7 +65,7 @@ ferroforge::app! {
         priority = 1,
         local = [led = status_led, count = blink_count],
         shared = [enabled = blink_enabled],
-        config = [period_ms: u32 = 500],
+        config = [period_ms: u32 = 2000],
         spawn = [report = telemetry],
     )]
     async fn status_blink(cx: status_blink::Context) -> !;

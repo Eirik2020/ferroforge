@@ -5,6 +5,7 @@ resolver = "2"
 # expand reusable tasks and compositions, and the facade that re-exports them.
 # Firmware and reusable task crates are their own workspaces, as G5 requires.
 members = [
+    "msp",
     "ferroforge",
     "ferroforge-cli",
     "ferroforge-contracts",

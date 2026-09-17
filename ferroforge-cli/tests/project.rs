@@ -460,3 +460,41 @@ fn a_chip_without_extra_regions_is_unchanged() {
          _stext = ORIGIN(FLASH) + 0x198;\n"
     );
 }
+
+/// `DEFMT_LOG` ends up in an emitted file, so the firmware has to declare it.
+/// A command-line flag would leave that file disagreeing with everything that
+/// records why, which is the drift the derived files exist to prevent.
+#[test]
+fn a_firmware_declares_its_log_filter() {
+    let root = repository_root().join("target/project-tests/defmt-log");
+    let _ = fs::remove_dir_all(&root);
+    let firmware = root.join("firmware/board");
+    fs::create_dir_all(&firmware).unwrap();
+    fs::write(
+        firmware.join("Cargo.toml"),
+        "[package]\nname = \"board\"\nversion = \"0.1.0\"\n\n\
+         [package.metadata.ferroforge]\nchip = \"stm32f401re\"\n\
+         defmt-log = \"warn,chatty_crate=off\"\n\n\
+         [dependencies]\n# ferroforge:platform-dependencies\n# ferroforge:end\n",
+    )
+    .unwrap();
+
+    let output = ferroforge_in(&root, &["sync"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let config = fs::read_to_string(firmware.join(".cargo/config.toml")).unwrap();
+    assert!(
+        config.contains("DEFMT_LOG = \"warn,chatty_crate=off\""),
+        "{config}"
+    );
+}
+
+/// Without one, `info` - the level a person wants when they have just flashed
+/// something and want to know whether it works.
+#[test]
+fn a_firmware_without_a_log_filter_gets_info() {
+    let root = scratch("defmt-log-default", &[("solo", Some("stm32f401re"))]);
+    let output = ferroforge_in(&root, &["sync"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let config = fs::read_to_string(root.join("firmware/solo/.cargo/config.toml")).unwrap();
+    assert!(config.contains("DEFMT_LOG = \"info\""), "{config}");
+}

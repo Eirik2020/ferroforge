@@ -59,6 +59,16 @@ fn a_reusable_task_crate_checks_independently() {
     checks_standalone("tasks/blinky", &[]);
 }
 
+/// A portable crate that is a protocol rather than a pin. It names no HAL and
+/// no chip, and it takes no forwarding feature to check - which is the claim
+/// G1 makes about software task crates, on something more substantial than an
+/// LED.
+#[test]
+#[ignore = "cross-compiles; run with --ignored"]
+fn a_portable_protocol_task_crate_checks_independently() {
+    checks_standalone("tasks/msp-displayport", &[]);
+}
+
 /// The HAL-specific case. It has to name a chip to compile at all - a HAL cannot
 /// be built without one - so the chip comes from a forwarding feature here, which
 /// a firmware's own selection unifies with rather than fights.
@@ -106,16 +116,6 @@ fn the_firmware_checks_and_release_links() {
 #[ignore = "cross-compiles and links; run with --ignored"]
 fn a_second_firmware_reuses_the_same_definitions() {
     release_links("nucleo-f401re-beacon");
-}
-
-/// A different board, and the first that is not a Nucleo: a flight controller,
-/// which is what this is ultimately for. It selects the same definitions with
-/// neither task crate changing, on a chip with its own flash size, RAM size and
-/// vector table.
-#[test]
-#[ignore = "cross-compiles and links; run with --ignored"]
-fn a_firmware_for_another_board_links() {
-    release_links("foxeer-f405v2");
 }
 
 /// A second HAL, and a Cortex-M7. The task crate pattern is the same; the HAL's

@@ -145,15 +145,13 @@ few report "not enough interrupts to dispatch all software tasks (need: 2;
 given: 1)". Both are pinned in the compile-fail suite, because the pass-through
 is what keeps them reaching the author.
 
-**A third board, 2026-09-17.** `firmware/foxeer-f405v2` targets a flight
-controller rather than a Nucleo - an STM32F405RG, with its own flash size, RAM
-size and vector table - and selects the same definitions with neither task crate
-changing. It is a build, not a hardware result.
-
-Two corrections came out of it. The vector table is sized by the PAC's
+**Vector tables and PAC siblings, 2026-09-17.** Two corrections came out of
+carrying a firmware to an STM32F405RG, a chip with its own flash size, RAM size
+and vector table. The board itself was dropped before it was ever flashed; the
+corrections outlived it. The vector table is sized by the PAC's
 `__INTERRUPTS` array, not by the highest `Interrupt` variant, and a released PAC
 can differ from its `-staging` sibling: reading the wrong one put the F405's
-`text-offset` 32 bytes too high. All three are now taken from `__INTERRUPTS` and
+`text-offset` 32 bytes too high. Every offset is now taken from `__INTERRUPTS` and
 confirmed against linked binaries. Separately, the chip-feature check scanned the
 generated block too, so changing a firmware's chip tripped it on the block that
 was about to be rewritten - which would have made the one workflow derived files
@@ -179,9 +177,59 @@ which names no HAL, is selected there unchanged. "Reusable across all hardware"
 means across the hardware whose HALs have migrated. That is the ecosystem's to
 fix, and worth knowing before ferro-wasp depends on it.
 
-**Next open point:** every result is a build. Nothing has been flashed, and
-`firmware/foxeer-f405v2` carries two unverified board facts - the LED pin and
-whether to use the crystal. Tracked in [remaining work](implementation-plan.md).
+**Task groups, 2026-09-17.** Some functionality needs several tasks that only
+work as a set - a DMA UART needs the USART's IDLE interrupt, both DMA
+transfer-complete interrupts and a parser off the interrupt - with rules about
+their priorities that no single definition can express.
+
+A library cannot supply the declarations. `#[rtic::app]` parses `mod app` before
+any inner `macro_rules!` expands, so a generated `#[task]` is never seen: RTIC
+reports "cannot find attribute `task` in this scope". Verified before designing
+around it. Task declarations are therefore always lexical, in the firmware.
+
+What is possible splits cleanly. The library owns the shared state as one type,
+so the group binds one resource rather than several that could be wired apart.
+The library also owns the *rules*, as a trait of associated priority consts with
+const assertions. The firmware owns the *numbers*, written where RTIC needs them,
+and `#[group]` states `from`, `shared` and a default priority once instead of per
+task. `app!` mirrors the chosen priorities into an impl of that trait and forces
+it to evaluate - the same mechanism as `config`.
+
+Two properties follow, both verified: a rule the firmware breaks fails in the
+library's own words, and a task omitted from the group leaves its const missing,
+so an incomplete group is `missing: ON_TX_PRIORITY in implementation` rather than
+something that builds and never transmits. This corrects an earlier judgement
+that completeness could not be enforced.
+
+Priorities are checked, not propagated. RTIC parses `priority` as a literal, so
+"set one and the other follows" is not available; writing both and rejecting a
+mismatch gets the same guarantee with the number visible at each task.
+
+**Two protocols on one firmware, 2026-09-17.** `nucleo-f401re-beacon` receives
+SBUS and drives an MSP DisplayPort OSD at once. The second port is a plain
+interrupt-driven UART rather than a second instance of the DMA group, because a
+second instance is not available: `tasks/stm32f4-uart-dma` names `USART1` and
+`Stream2<DMA2>` as concrete types, and the streams a second port would need are
+different types again. A group written against concrete peripherals is
+single-instance by construction.
+
+Three things came out of building it. A dispatcher is an interrupt vector RTIC
+borrows for software tasks, so a peripheral the firmware actually uses cannot
+share one - USART6 stopped being a dispatcher before it could be a serial port.
+A synchronous definition reads as a hardware task and so takes no inputs, which
+is what rejected an earlier design that spawned a task per received byte; the
+version that survived puts the parser step in the handler that already holds the
+lock, where it costs nothing. And the protocol was split out of the task crate
+into `msp`, an ordinary dependency-free library, because a crate that depends on
+RTIC cannot carry a host test and framing is exactly the thing worth testing
+before wiring anything up.
+
+**Next open point:** whether a group should be generic over its peripherals.
+Doing so would let one library serve every UART on a chip instead of the one it
+names, which is what a reusable task crate is supposed to mean - against that,
+the concrete types are what make a mis-wiring an ordinary Rust error at the
+authored line, and generics would move that error somewhere less useful.
+Tracked in [remaining work](implementation-plan.md).
 
 ## Binding Decisions Carried Forward
 

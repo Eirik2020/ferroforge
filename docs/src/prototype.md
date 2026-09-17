@@ -11,6 +11,12 @@ What exists today, as distinct from the agreed design in
 | `ferroforge-macros` | `task` and `app!`, and nothing else. |
 | `ferroforge` | Facade. Re-exports the two macros; no runtime types. |
 | `ferroforge-cli` | The `ferroforge` binary. Carries the chip data, recognizes projects, and delegates to Cargo. |
+| `msp` | MSP v1, DisplayPort and a text canvas. No dependencies, not FerroForge's - it is here because a task crate uses it, not because it is part of the tool. |
+
+`msp` is a workspace member while the task crates are not, and the reason is
+testing rather than layout. A task crate depends on RTIC and cannot run a host
+test; a protocol crate can, so the parts worth testing were put where a test
+can reach them. Keeping the two apart is what makes that possible.
 
 The transplant-era crates - the renderer, the pipeline, the example composer,
 the embedded and generated projects, and the two `systems/` firmwares - were
@@ -30,14 +36,13 @@ same target with no FerroForge machinery beyond the `#[task]` attribute.
 selecting the same definitions with none of the same bindings. It instantiates
 `blink` twice - different names, pins, counters, gates and periods - and the
 HAL-specific `on_timer` once against `TIM3`. Adding it required no edit to
-either task crate. It is a build, not a hardware result: only PA5
-carries an LED, and the second pin is a bare header pin.
+either task crate. Only PA5 carries an LED, so the second pin is a bare header
+pin and that half of it is a build rather than an observation.
 
-`firmware/foxeer-f405v2` is a third application, on a flight controller rather
-than a Nucleo: a different chip, with its own flash size, RAM size and vector
-table. It selects the same definitions with neither task crate changing. Two
-board facts in it are marked unverified in its source - the LED pin and whether
-to use the crystal - and nothing here has been flashed.
+It is also the firmware with hardware on it, and the one running two serial
+protocols at once: SBUS in on USART1 by circular DMA, MSP DisplayPort out on
+USART6 to a video transmitter. The wiring is in its own module documentation,
+where someone about to connect a cable will look.
 
 `firmware/nucleo-h753zi` is a Cortex-M7 on a different HAL, with a part whose
 memory is more than the pair `cortex-m-rt` needs. It reuses `report` from the
@@ -46,18 +51,44 @@ task's counterpart. It does **not** use `blink`: that bounds on `embedded-hal`
 1.0 and `stm32h7xx-hal` 0.16 implements only 0.2, so the LED is driven by a task
 in the firmware instead.
 
+`tasks/stm32f4-uart-dma` is a group: four tasks that only work as a set, with a
+`Wiring` trait stating how their priorities must relate. `nucleo-f401re-beacon`
+selects it through a `#[group]` block, configures a circular receive, and
+decodes SBUS on the bytes it delivers.
+
+Two constraints the group exists to hold. Delivery happens on the idle line and
+nowhere else: in circular mode a transfer-complete means the buffer filled, not
+that a frame ended, so delivering there cuts whichever frame is in flight into
+two short ones. And the USART's error flags are the receive path's business, not
+diagnostics - an uncleared overrun stops the peripheral requesting DMA at all,
+so a handler that ignores them wedges reception rather than degrading it.
+
+`tasks/msp-displayport` is the OSD, and the portable case on something larger
+than an LED: it names no HAL and no chip, takes no forwarding feature, and
+checks for ARM on its own. `nucleo-f401re-beacon` selects it alongside the SBUS
+group, so the two protocols run at once on one firmware.
+
+It is one task, not a group, and the shape is the point. A DisplayPort
+transmitter has to be answered before it hands over the canvas, so the traffic
+runs both ways - but receiving is not a task here. The firmware's own handler
+owns the port and already holds the shared state to drain the outgoing queue, so
+a parser step costs it nothing, where a task spawned per received byte would
+drop bytes whenever the previous one had not finished. What the library keeps is
+the half that is genuinely periodic: the picture, pushed out on a timer.
+
 `tasks/stm32f4-timer` is the HAL-specific case. Reading and clearing a timer's
 update flag cannot be written against `embedded-hal`, so the task names the HAL
 type its resource has - `CounterUs<TIM3>` - and its body is the handler anyone
 would write by hand. It declares no bounds and depends on `stm32f4xx-hal` and
 nothing else but the check-only `ferroforge`.
 
-All four sit in the layout G5 requires, and opt-in tests in `ferroforge-macros`
-assert it rather than leaving it to be run by hand: both task crates check
-independently, both firmwares link, and five defects planted in copies of them
-are each rejected for their own reason. Because those defects are applied to the
-real firmwares, they cannot drift into testing nothing. See
-[workflow](workflow.md) for how to run them.
+Every one of these sits in the layout G5 requires, and opt-in tests in
+`ferroforge-macros` assert it rather than leaving it to be run by hand: each
+task crate checks independently, each firmware links, and defects planted in
+copies of them are rejected for their own reasons. Because the defects are
+applied to the real firmwares, they cannot drift into testing nothing - and one
+has already caught a changed configuration value that would have left a case
+asserting nothing. See [workflow](workflow.md) for how to run them.
 
 ## Implemented
 
@@ -94,9 +125,14 @@ real firmwares, they cannot drift into testing nothing. See
   reach the linker script and nothing else.
 - A chip feature enabled outside the generated block is refused, because the HAL
   would otherwise reject it from a build script as a panic with no cause.
+- A `#[group]` block states `from`, `shared` and a default priority once for
+  several tasks, and hands their priorities to a library trait that decides
+  whether the combination is allowed.
 
 ## Not Implemented
 
+- **Transmit.** The group's `on_tx` counts completed transfers and nothing else.
+  Only the receive half has been driven by real traffic.
 - **Portability past embedded-hal 1.0.** A task bounding on it cannot be
   selected on a HAL that still implements 0.2, which `stm32h7xx-hal` does. That
   is the ecosystem's to fix, not FerroForge's, but it bounds what G1's "all
