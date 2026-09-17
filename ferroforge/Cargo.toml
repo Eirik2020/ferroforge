@@ -3,12 +3,11 @@ name = "ferroforge"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-description = "A host-side, RTIC-like application model for defining and validating embedded task graphs"
+description = "Compose reusable RTIC tasks and project-owned initialization into a real RTIC firmware application"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
-keywords = ["embedded", "rtic", "mock", "proc-macro"]
+keywords = ["embedded", "rtic", "proc-macro"]
 categories = ["development-tools", "embedded"]
 
 [dependencies]
-fugit = "0.3.9"
 ferroforge-macros = { version = "0.1.0", path = "../ferroforge-macros" }

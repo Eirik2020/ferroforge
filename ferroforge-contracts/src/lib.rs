@@ -18,8 +18,9 @@ pub fn identifier_key(name: &Ident) -> String {
     name.to_string().trim_start_matches("r#").to_owned()
 }
 
-/// An inline resource/configuration entry. `None` preserves legacy names-only
-/// syntax; standalone resources must instead have a type or a matching bound.
+/// An inline resource or configuration entry. A resource needs either a type or
+/// a matching bound; `None` is the bare-name form, which `#[task]` rejects for
+/// resources because it cannot infer a field type from a name alone.
 #[derive(Clone, Debug)]
 pub struct Resource {
     pub name: Ident,
@@ -74,7 +75,8 @@ impl Parse for Parameter {
 #[derive(Clone, Debug)]
 pub struct Spawn {
     pub name: Ident,
-    /// `Some([])` is an explicit zero-input signature; `None` is legacy syntax.
+    /// `Some([])` is an explicit zero-input signature, `report()`. `None` is the
+    /// bare name `report`, which carries no signature to bound the closure with.
     pub inputs: Option<Vec<Parameter>>,
 }
 
@@ -191,21 +193,8 @@ fn unique<'a>(names: impl IntoIterator<Item = &'a Ident>, message: &str) -> syn:
 }
 
 impl TaskArguments {
-    /// Whether this declaration requests the standalone checking expansion.
-    /// Empty and names-only declarations remain on the app-backed legacy path.
-    pub fn uses_standalone_contract(&self) -> bool {
-        !self.bounds.is_empty()
-            || self.monotonic.is_some()
-            || self
-                .local
-                .iter()
-                .chain(&self.shared)
-                .chain(&self.config)
-                .any(|resource| resource.ty.is_some())
-            || self.spawn.iter().any(|spawn| spawn.inputs.is_some())
-    }
-
-    /// Structural validation common to source discovery and legacy expansion.
+    /// Structural validation of the declaration itself, before any expansion
+    /// reads it: duplicate names, empty categories, missing types.
     pub fn validate(&self) -> syn::Result<()> {
         unique(
             self.local.iter().map(|r| &r.name),
@@ -325,25 +314,6 @@ impl TaskArguments {
         }
         Ok(())
     }
-
-    /// Keep the legacy app-backed consumer explicit. Standalone typed contracts
-    /// use the separate checking expansion and must never be silently degraded.
-    pub fn into_legacy(self) -> syn::Result<LegacyTaskArguments> {
-        self.validate()?;
-        if self.uses_standalone_contract() {
-            return Err(Error::new(
-                proc_span(&self),
-                "standalone contracts parse, but independent checking expansion/rendering is not implemented yet",
-            ));
-        }
-        Ok(LegacyTaskArguments {
-            configs: self.config.into_iter().map(|r| r.name).collect(),
-            local: self.local.into_iter().map(|r| r.name).collect(),
-            shared: self.shared.into_iter().map(|r| r.name).collect(),
-            spawns: self.spawn.into_iter().map(|s| s.name).collect(),
-            dependencies: self.dependencies,
-        })
-    }
 }
 
 fn explicit_type(ty: &Type) -> syn::Result<()> {
@@ -354,38 +324,6 @@ fn explicit_type(ty: &Type) -> syn::Result<()> {
         ));
     }
     Ok(())
-}
-
-fn proc_span(args: &TaskArguments) -> proc_macro2::Span {
-    // Obtain a source span without making callers convert the contract to text.
-    args.bounds
-        .first()
-        .map(|b| b.name.span())
-        .or_else(|| args.monotonic.as_ref().map(Spanned::span))
-        .or_else(|| {
-            args.local
-                .iter()
-                .chain(&args.shared)
-                .chain(&args.config)
-                .find_map(|r| r.ty.as_ref().map(Spanned::span))
-        })
-        .or_else(|| args.spawn.first().map(|s| s.name.span()))
-        .unwrap_or_else(proc_macro2::Span::call_site)
-}
-
-/// Existing app-backed task representation, using the same syntax parser.
-pub struct LegacyTaskArguments {
-    pub configs: Vec<Ident>,
-    pub local: Vec<Ident>,
-    pub shared: Vec<Ident>,
-    pub spawns: Vec<Ident>,
-    pub dependencies: Vec<TaskDependency>,
-}
-
-impl Parse for LegacyTaskArguments {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        input.parse::<TaskArguments>()?.into_legacy()
-    }
 }
 
 /// Which RTIC task shape a definition was authored as. RTIC itself makes the
@@ -406,107 +344,6 @@ pub struct TaskContract {
     pub context: Ident,
     pub inputs: Vec<Parameter>,
     pub diverges: bool,
-}
-
-/// Initial standalone system-initialization signature.
-#[derive(Clone, Debug)]
-pub struct InitContract {
-    pub context: Ident,
-}
-
-impl InitContract {
-    pub fn new(signature: &Signature) -> syn::Result<Self> {
-        if signature.ident != "init"
-            || signature.asyncness.is_some()
-            || signature.unsafety.is_some()
-            || signature.abi.is_some()
-            || signature.constness.is_some()
-            || !signature.generics.params.is_empty()
-            || signature.generics.where_clause.is_some()
-            || signature.variadic.is_some()
-        {
-            return Err(Error::new(
-                signature.span(),
-                "initial standalone init must be a safe synchronous `fn init` without generics or an ABI",
-            ));
-        }
-        if signature.inputs.len() != 1 {
-            return Err(Error::new(
-                signature.inputs.span(),
-                "standalone init needs exactly one context parameter",
-            ));
-        }
-        let argument = signature.inputs.first().expect("length was checked");
-        let FnArg::Typed(argument) = argument else {
-            return Err(Error::new(
-                argument.span(),
-                "standalone init context cannot be a receiver",
-            ));
-        };
-        let Pat::Ident(pattern) = argument.pat.as_ref() else {
-            return Err(Error::new(
-                argument.pat.span(),
-                "standalone init context must be a named identifier",
-            ));
-        };
-        if pattern.by_ref.is_some() || pattern.subpat.is_some() {
-            return Err(Error::new(
-                pattern.span(),
-                "standalone init context cannot use `ref` or a subpattern",
-            ));
-        }
-        let Type::Path(context_type) = argument.ty.as_ref() else {
-            return Err(Error::new(argument.ty.span(), "expected init::Context"));
-        };
-        let segments = &context_type.path.segments;
-        if context_type.qself.is_some()
-            || context_type.path.leading_colon.is_some()
-            || segments.len() != 2
-            || segments[0].ident != "init"
-            || segments[1].ident != "Context"
-            || segments.iter().any(|segment| !segment.arguments.is_empty())
-        {
-            return Err(Error::new(argument.ty.span(), "expected init::Context"));
-        }
-        let ReturnType::Type(_, output) = &signature.output else {
-            return Err(Error::new(
-                signature.output.span(),
-                "standalone init must return `(Shared, Local)`",
-            ));
-        };
-        let Type::Tuple(output) = output.as_ref() else {
-            return Err(Error::new(
-                output.span(),
-                "standalone init must return `(Shared, Local)`",
-            ));
-        };
-        let mut elements = output.elems.iter();
-        let shared = elements.next();
-        let local = elements.next();
-        if elements.next().is_some()
-            || !shared.is_some_and(|ty| simple_type(ty, "Shared"))
-            || !local.is_some_and(|ty| simple_type(ty, "Local"))
-        {
-            return Err(Error::new(
-                output.span(),
-                "standalone init must return `(Shared, Local)`",
-            ));
-        }
-        Ok(Self {
-            context: pattern.ident.clone(),
-        })
-    }
-}
-
-fn simple_type(ty: &Type, expected: &str) -> bool {
-    let Type::Path(path) = ty else {
-        return false;
-    };
-    path.qself.is_none()
-        && path.path.leading_colon.is_none()
-        && path.path.segments.len() == 1
-        && path.path.segments[0].ident == expected
-        && path.path.segments[0].arguments.is_empty()
 }
 
 impl TaskContract {
@@ -627,44 +464,6 @@ mod tests {
         let function: syn::ItemFn = syn::parse_str(function)?;
         TaskContract::new(args, &function.sig)
     }
-
-    fn init_contract(function: &str) -> syn::Result<InitContract> {
-        let function: syn::ItemFn = syn::parse_str(function)?;
-        InitContract::new(&function.sig)
-    }
-
-    #[test]
-    fn validates_the_initial_standalone_init_signature() {
-        let init =
-            init_contract("fn init(mut cx: init::Context) -> (Shared, Local) { todo!() }").unwrap();
-        assert_eq!(init.context, "cx");
-    }
-
-    #[test]
-    fn rejects_unsupported_standalone_init_signatures() {
-        for (source, expected) in [
-            (
-                "async fn init(cx: init::Context) -> (Shared, Local) { todo!() }",
-                "safe synchronous",
-            ),
-            (
-                "fn setup(cx: init::Context) -> (Shared, Local) { todo!() }",
-                "fn init",
-            ),
-            (
-                "fn init(cx: other::Context) -> (Shared, Local) { todo!() }",
-                "init::Context",
-            ),
-            (
-                "fn init(cx: init::Context) -> Shared { todo!() }",
-                "(Shared, Local)",
-            ),
-        ] {
-            let error = init_contract(source).unwrap_err().to_string();
-            assert!(error.contains(expected), "{error}");
-        }
-    }
-
     #[test]
     fn parses_complete_standalone_contract_without_system_types() {
         let task = contract(
@@ -690,7 +489,7 @@ mod tests {
     }
 
     #[test]
-    fn distinguishes_zero_inputs_from_legacy_aliases() {
+    fn distinguishes_an_explicit_zero_input_signature_from_a_bare_name() {
         let args: TaskArguments = syn::parse_str("spawn = [wake(), report]").unwrap();
         assert!(args.spawn[0].inputs.as_ref().unwrap().is_empty());
         assert!(args.spawn[1].inputs.is_none());
@@ -788,37 +587,5 @@ mod tests {
         assert!(!task.diverges);
         assert_eq!(task.context, "ctx");
         assert_eq!(task.inputs.len(), 1);
-    }
-
-    #[test]
-    fn legacy_adapter_preserves_existing_contracts_but_not_typed_contracts() {
-        let args: LegacyTaskArguments = syn::parse_str(
-            "local = [led], config = [period_ms], spawn = [report],
-             dependencies = [Fugit, Serde(features = [\"derive\"])]",
-        )
-        .unwrap();
-        assert_eq!(args.local[0], "led");
-        assert_eq!(args.dependencies[1].features[0].value(), "derive");
-        let error = syn::parse_str::<LegacyTaskArguments>("local = [count: u32]")
-            .err()
-            .unwrap();
-        assert!(error.to_string().contains("not implemented yet"));
-    }
-
-    #[test]
-    fn legacy_adapter_also_validates_duplicates_and_categories() {
-        for source in [
-            "dependencies = [D, D]",
-            "dependencies = [D(features = [\"a\", \"a\"])]",
-            "local = [led], shared = [led]",
-            "spawn = [report, report]",
-            "local = [led, r#led]",
-            "local = [led], shared = [r#led]",
-        ] {
-            assert!(
-                syn::parse_str::<LegacyTaskArguments>(source).is_err(),
-                "{source}"
-            );
-        }
     }
 }

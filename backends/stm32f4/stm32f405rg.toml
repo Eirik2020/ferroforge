@@ -1,0 +1,42 @@
+# Chip-family data for the STM32F405RG, as on the Foxeer F405 V2 flight
+# controller and most F405-class boards.
+#
+# Per G2a this is the minimum FerroForge needs before a build, and it is read by
+# the CLI rather than depended on by any firmware. It deliberately does not name
+# interrupts: per G4 the device's own enum is the only interrupt list.
+
+[chip]
+name = "STM32F405RG"
+rust-target = "thumbv7em-none-eabihf"
+# Verified against `probe-rs chip list`.
+probe-rs-chip = "STM32F405RG"
+# The same path as every other STM32F4: the HAL aliases `pac` to the selected
+# chip's module, so this is a property of the HAL rather than of the chip.
+device = "stm32f4xx_hal::pac"
+
+[memory]
+flash-origin = 0x08000000
+flash-size = 1048576
+# SRAM1 and SRAM2, contiguous from 0x20000000. The 64 KiB of CCM at 0x10000000
+# is deliberately not described: this model carries one RAM region, and CCM is
+# not reachable by DMA, so it is not a drop-in extension of this one.
+ram-origin = 0x20000000
+ram-size = 131072
+# (16 exceptions + 82 interrupts) * 4 = 0x188, already 8-byte aligned.
+#
+# Taken from the PAC's `__INTERRUPTS` array, which is what sizes the vector
+# table, and confirmed against the linked binary. The `Interrupt` enum's highest
+# variant is not the same thing - it can exceed the array - and a released PAC
+# can differ from its `-staging` sibling, as this chip does.
+text-offset = 0x188
+
+# Crates a firmware for this chip cannot build without. Features here are
+# chip- or architecture-derived, so they belong to the target rather than to
+# the application. Logging and panic backends are the firmware's choice and are
+# deliberately absent.
+[platform-dependencies]
+cortex-m = { version = "0.7.7" }
+cortex-m-rt = { version = "0.7.6" }
+rtic = { version = "2.3.1", default-features = false, features = ["thumbv7-backend"] }
+rtic-monotonics = { version = "2.2.1", default-features = false, features = ["cortex-m-systick"] }
+stm32f4xx-hal = { version = "0.23.0", default-features = false, features = ["stm32f405"] }

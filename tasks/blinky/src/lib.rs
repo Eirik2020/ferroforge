@@ -1,10 +1,11 @@
-//! `tasks/blinky` verbatim, with `#[ferroforge::task]` swapped for
-//! `#[ferroforge::reusable]`. The declarations and both bodies are unchanged:
-//! the only edit is the attribute name.
+//! Portable task definitions: nothing here names a HAL or a chip, only
+//! `embedded-hal` traits and the bounds each task declares. Contrast
+//! `tasks/stm32f4-timer`, which needs its HAL and says so.
 //!
-//! If this checks standalone for ARM, the call-through expansion preserves the
-//! authored model - `cx.local`, `cx.shared.lock`, `cx.spawn`, `CONFIG.FIELD`
-//! and `Mono::delay` all still mean what they meant.
+//! That this checks standalone for ARM is the evidence that the call-through
+//! expansion preserves the authored model - `cx.local`, `cx.shared.lock`,
+//! `cx.spawn`, `CONFIG.FIELD` and `Mono::delay` all still mean what they mean
+//! in ordinary RTIC.
 
 #![no_std]
 
@@ -15,7 +16,7 @@ fn increment(value: &mut u32) {
     *value = value.wrapping_add(1);
 }
 
-#[ferroforge::reusable(
+#[ferroforge::task(
     bounds = [led: StatefulOutputPin],
     local = [led, count: u32],
     shared = [enabled: bool],
@@ -34,7 +35,7 @@ pub async fn blink(mut cx: blink::Context) -> ! {
     }
 }
 
-#[ferroforge::reusable]
+#[ferroforge::task]
 pub async fn report(_cx: report::Context, value: u32) {
     defmt::info!("blink count={=u32}", value);
 }
@@ -42,7 +43,7 @@ pub async fn report(_cx: report::Context, value: u32) {
 /// Synchronous, so the contract reads it as a hardware task. The definition
 /// never names an interrupt: composition binds one, so the same handler can
 /// serve different interrupts in different firmware.
-#[ferroforge::reusable(local = [ticks: u32])]
+#[ferroforge::task(local = [ticks: u32])]
 pub fn on_tick(cx: on_tick::Context) {
     increment(cx.local.ticks);
 }

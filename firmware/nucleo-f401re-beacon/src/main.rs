@@ -1,9 +1,9 @@
 //! A second application on the same board, to prove reuse.
 //!
-//! Nothing in `tasks/blinky` changes to support this. `blink` is instantiated
-//! twice here with different names, pins, counters, gates and periods; `on_tick`
-//! binds `TIM3` where the other firmware binds `TIM2`, which is the point of a
-//! definition that never names an interrupt itself.
+//! No task crate changes to support this. `blink` is instantiated twice with
+//! different names, pins, counters, gates and periods, and the HAL-specific
+//! `on_timer` is bound to `TIM3` here - the definition names no interrupt, so
+//! which line serves it is the composition's choice.
 //!
 //! PA5 is the board's LD2. PB0 is an ordinary header pin with no LED on it: this
 //! firmware is evidence that the composition checks and links, not that anything
@@ -14,17 +14,23 @@
 
 use defmt_rtt as _;
 use panic_probe as _;
+use rtic_monotonics::systick::prelude::*;
 
-ferroforge::compose! {
+systick_monotonic!(Mono, 1000);
+
+ferroforge::app! {
     device = stm32f4xx_hal::pac,
     dispatchers = [USART2, USART6],
-    monotonic_hz = 1000,
+    monotonic = Mono,
 
-    use ferroforge_task_blinky::{blink, on_tick, report};
+    use ferroforge_task_blinky::{blink, report};
+    use ferroforge_task_stm32f4_timer::on_timer;
     use stm32f4xx_hal::{
         gpio::{Output, PA5, PB0, PushPull},
+        pac::TIM3,
         prelude::*,
         rcc::Config,
+        timer::{CounterUs, Event},
     };
 
     #[shared]
@@ -39,6 +45,7 @@ ferroforge::compose! {
         beacon_led: PB0<Output<PushPull>>,
         heartbeat_count: u32,
         beacon_count: u32,
+        pulse_timer: CounterUs<TIM3>,
         pulse_count: u32,
     }
 
@@ -54,6 +61,12 @@ ferroforge::compose! {
         heartbeat_led.set_low();
         beacon_led.set_low();
 
+        // The HAL-specific task reads and clears this timer's flags; init owns
+        // everything else about it.
+        let mut pulse_timer = cx.device.TIM3.counter_us(&mut rcc);
+        pulse_timer.start(500.millis().into()).unwrap();
+        pulse_timer.listen(Event::Update);
+
         heartbeat::spawn().unwrap();
         beacon::spawn().unwrap();
 
@@ -67,6 +80,7 @@ ferroforge::compose! {
                 beacon_led,
                 heartbeat_count: 0,
                 beacon_count: 0,
+                pulse_timer,
                 pulse_count: 0,
             },
         )
@@ -98,11 +112,15 @@ ferroforge::compose! {
     #[task(from = report, priority = 1)]
     async fn telemetry(_cx: telemetry::Context, value: u32);
 
+    // The HAL-specific hardware task. Unlike a portable definition it can read
+    // and clear the peripheral's update flag, which is what makes the binding
+    // actually work rather than merely compile.
     #[task(
-        from = on_tick,
+        from = on_timer,
         binds = TIM3,
         priority = 3,
-        local = [ticks = pulse_count],
+        local = [timer = pulse_timer, elapsed = pulse_count],
+        spawn = [elapsed = telemetry],
     )]
     fn pulse(cx: pulse::Context);
 }

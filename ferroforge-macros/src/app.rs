@@ -1,4 +1,4 @@
-//! `compose!`: the firmware's authored composition, expanded in place into a
+//! `app!`: the firmware's authored application, expanded in place into a
 //! real `#[rtic::app]`.
 //!
 //! There is no generated project. Init, `Shared` and `Local` are written here
@@ -12,7 +12,7 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{
-    Attribute, Expr, Ident, Item, LitInt, Path, Signature, Token, Type,
+    Attribute, Expr, Ident, Item, LitBool, LitInt, Path, Signature, Token, Type,
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
     spanned::Spanned,
@@ -117,38 +117,77 @@ enum Element {
     Instance(Instance),
 }
 
-pub struct Composition {
+/// The type name substituted for a task's monotonic slot. An alias rather than
+/// the author's own name, so an application that declares no monotonic still
+/// has something to put in the slot.
+const MONOTONIC_SLOT: &str = "__FfMonotonic";
+
+/// What the slot resolves to when nothing was declared. Named for what it means,
+/// because a task that does need a clock fails against this name.
+const NO_MONOTONIC: &str = "NoMonotonicDeclared";
+
+pub struct App {
     device: Path,
     dispatchers: Vec<Ident>,
-    monotonic_hz: LitInt,
+    /// `None` leaves RTIC's own default alone rather than restating it.
+    peripherals: Option<LitBool>,
+    /// The application's monotonic, declared outside this macro as in ordinary
+    /// RTIC and named here so adapters can hand it to tasks.
+    monotonic: Option<Ident>,
     elements: Vec<Element>,
 }
 
-fn header_value<T: Parse>(input: ParseStream<'_>, expected: &str) -> syn::Result<T> {
-    let key: Ident = input.parse()?;
-    if key != expected {
-        return Err(syn::Error::new(
-            key.span(),
-            format!("expected `{expected}`"),
-        ));
-    }
-    input.parse::<Token![=]>()?;
-    let value = input.parse()?;
-    input.parse::<Token![,]>()?;
-    Ok(value)
-}
-
-impl Parse for Composition {
+/// Header arguments, parsed as RTIC parses its own: a loop, so order does not
+/// matter, with defaults for everything a firmware need not say.
+impl Parse for App {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let device: Path = header_value(input, "device")?;
-        let key: Ident = input.parse()?;
-        if key != "dispatchers" {
-            return Err(syn::Error::new(key.span(), "expected `dispatchers`"));
+        let mut device: Option<Path> = None;
+        let mut dispatchers = Vec::new();
+        let mut peripherals = None;
+        let mut monotonic = None;
+        let mut seen: Vec<String> = Vec::new();
+
+        // A header entry is `ident = ...`. Items begin with `#`, or a keyword
+        // such as `use`, `struct` or `fn`, and a macro call has `!` where this
+        // wants `=` - so this never mistakes one for the other.
+        while input.peek(Ident) && input.peek2(Token![=]) {
+            let key: Ident = input.parse()?;
+            let name = key.to_string();
+            if seen.contains(&name) {
+                return Err(syn::Error::new(
+                    key.span(),
+                    format!("`{name}` appears more than once"),
+                ));
+            }
+            seen.push(name.clone());
+            input.parse::<Token![=]>()?;
+
+            match name.as_str() {
+                "device" => device = Some(input.parse()?),
+                "dispatchers" => dispatchers = bracketed_list(input)?,
+                "peripherals" => peripherals = Some(input.parse()?),
+                "monotonic" => monotonic = Some(input.parse()?),
+                other => {
+                    return Err(syn::Error::new(
+                        key.span(),
+                        format!(
+                            "unknown argument `{other}`; expected `device`, \
+                             `dispatchers`, `peripherals` or `monotonic`"
+                        ),
+                    ));
+                }
+            }
+            if input.peek(Token![,]) {
+                input.parse::<Token![,]>()?;
+            }
         }
-        input.parse::<Token![=]>()?;
-        let dispatchers = bracketed_list(input)?;
-        input.parse::<Token![,]>()?;
-        let monotonic_hz: LitInt = header_value(input, "monotonic_hz")?;
+
+        let device = device.ok_or_else(|| {
+            syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "an application needs `device = <path to the PAC>`",
+            )
+        })?;
 
         let mut elements = Vec::new();
         while !input.is_empty() {
@@ -185,7 +224,8 @@ impl Parse for Composition {
         Ok(Self {
             device,
             dispatchers,
-            monotonic_hz,
+            peripherals,
+            monotonic,
             elements,
         })
     }
@@ -247,6 +287,7 @@ fn render_instance(instance: &Instance) -> syn::Result<TokenStream> {
     });
 
     let config_type = format_ident!("__FfConfig{}", name.to_string().to_uppercase());
+    let monotonic_slot = format_ident!("{MONOTONIC_SLOT}");
     let config_consts = attribute.config.iter().map(|value| {
         let (name, ty, value) = (&value.name, &value.ty, &value.value);
         let name = format_ident!("{}", name.to_string().to_uppercase(), span = name.span());
@@ -314,7 +355,7 @@ fn render_instance(instance: &Instance) -> syn::Result<TokenStream> {
                     shared: #from::Shared { #(#shared_fields),* },
                     spawn: #from::Spawn { #(#spawn_fields),* },
                     config: ::core::marker::PhantomData::<#config_type>,
-                    monotonic: ::core::marker::PhantomData::<Mono>,
+                    monotonic: ::core::marker::PhantomData::<#monotonic_slot>,
                 }
                 #(, #forwarded)*
             ) #awaiting
@@ -322,13 +363,14 @@ fn render_instance(instance: &Instance) -> syn::Result<TokenStream> {
     })
 }
 
-pub fn expand(composition: Composition) -> syn::Result<TokenStream> {
-    let Composition {
+pub fn expand(application: App) -> syn::Result<TokenStream> {
+    let App {
         device,
         dispatchers,
-        monotonic_hz,
+        peripherals,
+        monotonic,
         elements,
-    } = composition;
+    } = application;
 
     let mut body = Vec::new();
     for element in &elements {
@@ -338,16 +380,39 @@ pub fn expand(composition: Composition) -> syn::Result<TokenStream> {
         });
     }
 
+    // Passed through only when stated, so RTIC's own default stands otherwise
+    // rather than being restated here and drifting from it.
+    let peripherals = peripherals.map(|value| quote!(, peripherals = #value));
+    let dispatchers =
+        (!dispatchers.is_empty()).then(|| quote!(, dispatchers = [#(#dispatchers),*]));
+
+    // Every task context carries a monotonic slot, so the slot always needs a
+    // type. An application that declared one aliases it; one that did not gets
+    // an uninhabited stand-in, and a task that actually needs a clock then fails
+    // against a name that says why.
+    let slot = format_ident!("{MONOTONIC_SLOT}");
+    let monotonic = match monotonic {
+        // Imported under the author's own name as well, because `init` starts it
+        // and tasks may use it directly, exactly as in ordinary RTIC.
+        Some(name) => quote! {
+            use super::#name;
+            type #slot = #name;
+        },
+        None => {
+            let absent = format_ident!("{NO_MONOTONIC}");
+            quote! {
+                enum #absent {}
+                type #slot = #absent;
+            }
+        }
+    };
+
     // The expansion contains another attribute macro; expansion is recursive,
     // so `#[rtic::app]` runs on the result of this one.
     Ok(quote! {
-        use rtic_monotonics::systick::prelude::*;
-
-        systick_monotonic!(Mono, #monotonic_hz);
-
-        #[rtic::app(device = #device, dispatchers = [#(#dispatchers),*])]
+        #[rtic::app(device = #device #dispatchers #peripherals)]
         mod app {
-            use super::Mono;
+            #monotonic
             #(#body)*
         }
     })
@@ -359,8 +424,8 @@ mod tests {
 
     fn expand_source(tasks: &str) -> syn::Result<TokenStream> {
         let source =
-            format!("device = chip::pac, dispatchers = [SPARE], monotonic_hz = 1000,\n{tasks}");
-        expand(syn::parse_str::<Composition>(&source)?)
+            format!("device = chip::pac, dispatchers = [SPARE], monotonic = Mono,\n{tasks}");
+        expand(syn::parse_str::<App>(&source)?)
     }
 
     /// Nothing here reads the task crate, so the rejection has to come from the
@@ -385,5 +450,94 @@ mod tests {
     fn accepts_a_synchronous_task_bound_to_an_interrupt() {
         expand_source("#[task(from = on_tick, binds = TIM2)] fn tick(cx: tick::Context);")
             .expect("a synchronous bound task is a hardware task");
+    }
+}
+
+/// The header, which RTIC parses as a loop with defaults. These assert that
+/// `app!` does the same, because the previous fixed-order form reported a
+/// swapped argument as "expected `device`" - blaming the wrong one.
+#[cfg(test)]
+mod header {
+    use super::*;
+
+    fn parse(header: &str) -> syn::Result<App> {
+        syn::parse_str::<App>(header)
+    }
+
+    fn rendered(header: &str) -> String {
+        match parse(header) {
+            Ok(application) => expand(application).unwrap().to_string(),
+            Err(error) => panic!("`{header}` must parse: {error}"),
+        }
+    }
+
+    fn refused(header: &str) -> String {
+        match parse(header) {
+            Ok(_) => panic!("`{header}` must not parse"),
+            Err(error) => error.to_string(),
+        }
+    }
+
+    #[test]
+    fn arguments_may_appear_in_any_order() {
+        assert!(
+            parse("dispatchers = [A], monotonic = Mono, device = chip::pac,").is_ok(),
+            "order must not matter, as in RTIC"
+        );
+    }
+
+    /// RTIC defaults `dispatchers` to empty. An application with no software
+    /// tasks has nothing to dispatch and should not have to say so.
+    #[test]
+    fn dispatchers_are_optional_and_omitted_when_empty() {
+        let output = rendered("device = chip::pac,");
+        assert!(!output.contains("dispatchers"), "{output}");
+    }
+
+    /// Passed through only when stated, so RTIC's own default is never restated
+    /// here where it could drift from RTIC's.
+    #[test]
+    fn peripherals_is_passed_through_only_when_stated() {
+        assert!(!rendered("device = chip::pac,").contains("peripherals"));
+        let stated = rendered("device = chip::pac, peripherals = false,");
+        assert!(stated.contains("peripherals = false"), "{stated}");
+    }
+
+    /// The one argument an application cannot do without.
+    #[test]
+    fn device_is_required_and_says_so() {
+        let error = refused("dispatchers = [A],");
+        assert!(error.contains("device"), "{error}");
+    }
+
+    #[test]
+    fn a_repeated_argument_is_named() {
+        let error = refused("device = a::pac, device = b::pac,");
+        assert!(error.contains("more than once"), "{error}");
+        assert!(error.contains("device"), "{error}");
+    }
+
+    #[test]
+    fn an_unknown_argument_lists_the_real_ones() {
+        let error = refused("device = chip::pac, monotonic_hz = 1000,");
+        assert!(error.contains("monotonic_hz"), "{error}");
+        assert!(error.contains("dispatchers"), "{error}");
+        assert!(error.contains("monotonic"), "{error}");
+    }
+
+    /// An application without a monotonic still has a slot to fill, so it gets
+    /// a stand-in named for what it means.
+    #[test]
+    fn an_application_without_a_monotonic_still_expands() {
+        let output = rendered("device = chip::pac,");
+        assert!(output.contains(NO_MONOTONIC), "{output}");
+    }
+
+    /// With one, the author's own name is in scope too - `init` starts it.
+    #[test]
+    fn a_declared_monotonic_is_imported_under_its_own_name() {
+        let output = rendered("device = chip::pac, monotonic = Mono,");
+        assert!(output.contains("use super :: Mono"), "{output}");
+        assert!(!output.contains(NO_MONOTONIC), "{output}");
     }
 }

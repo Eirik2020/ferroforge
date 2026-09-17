@@ -1,0 +1,38 @@
+# Chip-family data for the STM32F411RE, as on the Nucleo-F411RE.
+#
+# Per G2a this is the minimum FerroForge needs before a build, and it is read by
+# the CLI rather than depended on by any firmware. It deliberately does not name
+# interrupts: per G4 the device's own enum is the only interrupt list.
+
+[chip]
+name = "STM32F411RE"
+rust-target = "thumbv7em-none-eabihf"
+probe-rs-chip = "STM32F411RE"
+# The same path as every other STM32F4: the HAL aliases `pac` to the selected
+# chip's module, so this is a property of the HAL rather than of the chip.
+device = "stm32f4xx_hal::pac"
+
+[memory]
+flash-origin = 0x08000000
+flash-size = 524288
+ram-origin = 0x20000000
+ram-size = 131072
+# The F411 has one more interrupt than the F401, so its vector table ends at
+# 0x198 rather than 0x194 - already 8-byte aligned, where the F401's needed
+# rounding up to the same value.
+#
+# (16 exceptions + 86 interrupts) * 4, taken from the PAC's `__INTERRUPTS`
+# array, which is what sizes the vector table, and confirmed against a linked
+# binary. The `Interrupt` enum's highest variant is not the same thing.
+text-offset = 0x198
+
+# Crates a firmware for this chip cannot build without. Features here are
+# chip- or architecture-derived, so they belong to the target rather than to
+# the application. Logging and panic backends are the firmware's choice and are
+# deliberately absent.
+[platform-dependencies]
+cortex-m = { version = "0.7.7" }
+cortex-m-rt = { version = "0.7.6" }
+rtic = { version = "2.3.1", default-features = false, features = ["thumbv7-backend"] }
+rtic-monotonics = { version = "2.2.1", default-features = false, features = ["cortex-m-systick"] }
+stm32f4xx-hal = { version = "0.23.0", default-features = false, features = ["stm32f411"] }

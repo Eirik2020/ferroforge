@@ -5,6 +5,12 @@ edition = "2024"
 publish = false
 build = false
 
+[package.metadata.ferroforge]
+# The chip this firmware is built for. Everything the chip implies -
+# memory layout, probe identity, target triple, PAC path and platform
+# crates - is derived from this, and nothing else records it.
+chip = "stm32f401re"
+
 [[bin]]
 name = "nucleo-f401re"
 path = "src/main.rs"

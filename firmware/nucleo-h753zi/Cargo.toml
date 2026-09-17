@@ -1,0 +1,44 @@
+[package]
+name = "nucleo-h753zi"
+version = "0.1.0"
+edition = "2024"
+publish = false
+build = false
+
+[package.metadata.ferroforge]
+# The chip this firmware is built for. Everything the chip implies -
+# memory layout, probe identity, target triple, PAC path and platform
+# crates - is derived from this, and nothing else records it.
+chip = "stm32h753zi"
+
+[[bin]]
+name = "nucleo-h753zi"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+ferroforge = { path = "../../ferroforge" }
+ferroforge-task-blinky = { path = "../../tasks/blinky" }
+ferroforge-task-stm32h7-timer = { path = "../../tasks/stm32h7-timer" }
+
+# This application's own choices: what it logs with and how it panics.
+defmt = { version = "1.0.1", default-features = true, features = [] }
+defmt-rtt = { version = "1.3.0", default-features = true, features = [] }
+panic-probe = { version = "1.0.0", default-features = true, features = ["print-defmt"] }
+
+# ferroforge:platform-dependencies for STM32H753ZI - generated, do not edit
+cortex-m = { version = "0.7.7", default-features = true, features = [] }
+cortex-m-rt = { version = "0.7.6", default-features = true, features = [] }
+rtic = { version = "2.3.1", default-features = false, features = ["thumbv7-backend"] }
+rtic-monotonics = { version = "2.2.1", default-features = false, features = ["cortex-m-systick"] }
+stm32h7xx-hal = { version = "0.16.0", default-features = false, features = ["stm32h753v", "rt"] }
+# ferroforge:end
+
+[profile.release]
+codegen-units = 1
+debug = 2
+lto = true
+opt-level = "s"
+
+[workspace]

@@ -13,7 +13,6 @@ proc-macro = true
 
 [dependencies]
 ferroforge-contracts = { path = "../ferroforge-contracts" }
-heck = "0.5"
 proc-macro2 = "1"
 quote = "1"
-syn = { version = "2", features = ["full", "visit", "visit-mut"] }
+syn = { version = "2", features = ["full", "visit-mut"] }

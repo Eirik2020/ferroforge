@@ -2,9 +2,12 @@
 
 FerroForge composes reusable RTIC tasks and project-owned initialization into a
 real RTIC firmware application. A reusable task is an ordinary Rust function in
-its own crate; a firmware's `composition!` expands in place into a real
-`#[rtic::app]` that calls it. Nothing is copied between crates and no separate
-project is generated.
+its own crate; a firmware's `app!` expands in place into a real `#[rtic::app]`
+that calls it. Nothing is copied between crates and no separate project is
+generated.
+
+The macros borrow RTIC's words for RTIC's ideas: `#[ferroforge::task]` marks a
+definition, `ferroforge::app!` declares the application that selects it.
 
 FerroForge is not mature. Its macro-generated interfaces are a versioned ABI
 between task crates and firmware, and it is free to break that ABI while the

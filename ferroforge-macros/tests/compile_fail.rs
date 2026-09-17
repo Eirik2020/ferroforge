@@ -7,7 +7,7 @@
 //!
 //! Mutating a copy rather than keeping four hand-written fixtures means the
 //! cases cannot rot into compiling for unrelated reasons - they track whatever
-//! `firmware/nucleo-f401re` actually says.
+//! the firmware it names actually says.
 
 use std::{
     env, fs,
@@ -15,26 +15,33 @@ use std::{
     process::Command,
 };
 
-/// A defect, the authored text it replaces, and the reason it must fail for.
+/// A defect, the firmware it is planted in, the authored text it replaces, and
+/// the reason it must fail for.
 struct Case {
     name: &'static str,
+    firmware: &'static str,
     from: &'static str,
     to: &'static str,
     expected: &'static str,
 }
 
+const BASE: &str = "nucleo-f401re";
+const BEACON: &str = "nucleo-f401re-beacon";
+
 const CASES: &[Case] = &[
     // RTIC owns the shape of a bound handler, and its message names the handler.
     Case {
         name: "hardware-task-given-inputs",
+        firmware: BASE,
         from: "fn tick(cx: tick::Context);",
         to: "fn tick(cx: tick::Context, value: u32);",
         expected: "this task handler must have type signature `fn(tick::Context)`",
     },
-    // `compose!` owns this one: the contradiction is visible in the authored
+    // `app!` owns this one: the contradiction is visible in the authored
     // declaration, so it does not reach RTIC as a signature complaint.
     Case {
         name: "software-task-given-an-interrupt",
+        firmware: BASE,
         from: "from = blink,",
         to: "from = blink, binds = TIM3,",
         expected: "an `async` task cannot bind an interrupt",
@@ -43,15 +50,53 @@ const CASES: &[Case] = &[
     // definition; disagreeing with it fails against the `Config` trait.
     Case {
         name: "configuration-type-disagrees-with-definition",
+        firmware: BASE,
         from: "config = [period_ms: u32 = 500],",
         to: "config = [period_ms: u64 = 500],",
         expected: "implemented const `PERIOD_MS` has an incompatible type for trait",
     },
     Case {
         name: "binding-names-a-resource-that-does-not-exist",
+        firmware: BASE,
         from: "local = [led = status_led, count = blink_count],",
         to: "local = [led = status_led, count = no_such_resource],",
         expected: "this local resource has NOT been declared",
+    },
+    // A HAL-specific task names the concrete type it needs, so a firmware whose
+    // resource is something else fails as ordinary Rust, at the line in `init`
+    // that produced the wrong thing.
+    Case {
+        name: "resource-type-disagrees-with-the-hal-definition",
+        firmware: BEACON,
+        from: "pulse_timer: CounterUs<TIM3>,",
+        to: "pulse_timer: u32,",
+        expected: "expected `u32`, found `Counter",
+    },
+    // A task that needs a clock, in an application that declares no monotonic.
+    // The slot is filled with a stand-in named for exactly that.
+    Case {
+        name: "task-needs-a-monotonic-the-application-lacks",
+        firmware: BASE,
+        from: "    monotonic = Mono,
+",
+        to: "",
+        expected: "NoMonotonicDeclared",
+    },
+    // Dispatchers are the author's choice, passed through unchanged - so RTIC's
+    // own validation of that choice must still reach the authored line.
+    Case {
+        name: "dispatcher-is-also-a-bound-interrupt",
+        firmware: BASE,
+        from: "dispatchers = [USART1]",
+        to: "dispatchers = [TIM2]",
+        expected: "dispatcher interrupts can't be used as hardware tasks",
+    },
+    Case {
+        name: "too-few-dispatchers-for-the-priorities-used",
+        firmware: BEACON,
+        from: "dispatchers = [USART2, USART6]",
+        to: "dispatchers = [USART2]",
+        expected: "not enough interrupts to dispatch all software tasks",
     },
 ];
 
@@ -68,9 +113,9 @@ fn repository_root() -> PathBuf {
 
 /// Copy the firmware beside the real one and apply one replacement. Path
 /// dependencies are made absolute because the copy sits at a different depth.
-fn prepare(name: &str, mutation: Option<&Case>) -> PathBuf {
+fn prepare(firmware: &str, name: &str, mutation: Option<&Case>) -> PathBuf {
     let root = repository_root();
-    let source = root.join("firmware/nucleo-f401re");
+    let source = root.join("firmware").join(firmware);
     let directory = root.join("target/compile-fail").join(name);
 
     let _ = fs::remove_dir_all(&directory);
@@ -105,9 +150,9 @@ fn prepare(name: &str, mutation: Option<&Case>) -> PathBuf {
     directory
 }
 
-fn check(directory: &Path) -> (bool, String) {
+fn check(firmware: &str, directory: &Path) -> (bool, String) {
     let output = Command::new(cargo())
-        .args(["check", "--bin", "nucleo-f401re", "--offline"])
+        .args(["check", "--bin", firmware, "--offline"])
         .current_dir(directory)
         // One target directory across every case, so the dependency tree is
         // built once. The cases run in sequence for the same reason: concurrent
@@ -148,16 +193,19 @@ fn is_broken_run(stderr: &str) -> Option<&'static str> {
 #[test]
 #[ignore = "cross-compiles the firmware once per case; run with --ignored"]
 fn each_rejection_fails_for_its_own_reason() {
-    let control = prepare("control", None);
-    let (succeeded, stderr) = check(&control);
-    assert!(
-        succeeded,
-        "the unmutated copy must check, or every rejection below proves nothing:\n{stderr}"
-    );
+    for firmware in [BASE, BEACON] {
+        let control = prepare(firmware, &format!("control-{firmware}"), None);
+        let (succeeded, stderr) = check(firmware, &control);
+        assert!(
+            succeeded,
+            "the unmutated copy of {firmware} must check, \
+             or every rejection below proves nothing:\n{stderr}"
+        );
+    }
 
     for case in CASES {
-        let directory = prepare(case.name, Some(case));
-        let (succeeded, stderr) = check(&directory);
+        let directory = prepare(case.firmware, case.name, Some(case));
+        let (succeeded, stderr) = check(case.firmware, &directory);
 
         assert!(
             !succeeded,

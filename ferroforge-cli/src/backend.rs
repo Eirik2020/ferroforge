@@ -3,10 +3,103 @@
 //! Per G2a a backend is build-time data, not a crate: nothing depends on it at
 //! compile time, so it exists only to be read here. Per G4 it must not name
 //! interrupts - the device's own enum is the only interrupt list.
+//!
+//! Backends ship with FerroForge rather than with a project, because a chip's
+//! memory map is not a property of anyone's application. They are embedded at
+//! compile time, not read from disk, so an installed binary carries its own
+//! chip data and does not depend on where its source tree was.
 
 use std::{collections::BTreeMap, fmt, fs, io, path::Path};
 
 use serde::Deserialize;
+
+/// Every chip FerroForge knows, keyed by the name a firmware declares.
+///
+/// Listed rather than globbed so that adding a file is a deliberate act; a test
+/// asserts this matches `backends/` so the two cannot drift.
+const BUILTIN: &[(&str, &str)] = &[
+    (
+        "stm32f401re",
+        include_str!("../../backends/stm32f4/stm32f401re.toml"),
+    ),
+    (
+        "stm32f405rg",
+        include_str!("../../backends/stm32f4/stm32f405rg.toml"),
+    ),
+    (
+        "stm32f411re",
+        include_str!("../../backends/stm32f4/stm32f411re.toml"),
+    ),
+    (
+        "stm32h753zi",
+        include_str!("../../backends/stm32h7/stm32h753zi.toml"),
+    ),
+];
+
+/// The chips this build knows, for error messages and listings.
+pub fn known_chips() -> Vec<&'static str> {
+    BUILTIN.iter().map(|(name, _)| *name).collect()
+}
+
+/// Every chip feature any known backend enables on a platform crate, such as
+/// `stm32f401`. A firmware enabling one of these itself is naming a chip outside
+/// the generated block, where nothing keeps it in step.
+fn chip_features() -> Vec<String> {
+    let mut found = Vec::new();
+    for (_, text) in BUILTIN {
+        if let Ok(backend) = Backend::parse("a built-in backend", text) {
+            for dependency in backend.platform_dependencies.values() {
+                found.extend(dependency.features.iter().cloned());
+            }
+        }
+    }
+    found.sort();
+    found.dedup();
+    found
+}
+
+/// A chip feature a firmware enables by hand that the selected chip does not
+/// want. The HAL rejects two chip features at once, but only from a build
+/// script, which reports a panic rather than a cause.
+fn conflicting_chip_feature(manifest: &str, wanted: &[String]) -> Option<(String, String)> {
+    let owned = chip_features();
+    let mut generated = false;
+    for line in manifest.lines() {
+        // The generated block is about to be replaced, and until it is it still
+        // names the previous chip. Scanning it would make changing a firmware's
+        // chip impossible - the one thing this is here to keep working.
+        let trimmed = line.trim_start();
+        if trimmed.starts_with(MARKER_BEGIN) {
+            generated = true;
+            continue;
+        }
+        if trimmed.starts_with(MARKER_END) {
+            generated = false;
+            continue;
+        }
+        if generated {
+            continue;
+        }
+
+        let line = line.split('#').next().unwrap_or_default();
+        let Some((name, rest)) = line.split_once('=') else {
+            continue;
+        };
+        let name = name.trim();
+        if name.is_empty() || !rest.contains("features") {
+            continue;
+        }
+        for feature in &owned {
+            if wanted.contains(feature) {
+                continue;
+            }
+            if rest.contains(&format!("\"{feature}\"")) {
+                return Some((name.to_owned(), feature.clone()));
+            }
+        }
+    }
+    None
+}
 
 /// The firmware manifest is authored, so the CLI owns only the lines between
 /// these markers. Everything else in it - the task crates, the logging and panic
@@ -16,11 +109,34 @@ const MARKER_END: &str = "# ferroforge:end";
 
 #[derive(Debug)]
 pub enum Error {
-    Read { path: String, source: io::Error },
-    Parse { path: String, message: String },
-    Write { path: String, source: io::Error },
-    NamesInterrupts { path: String },
-    NoManifestMarkers { path: String },
+    Read {
+        path: String,
+        source: io::Error,
+    },
+    Parse {
+        path: String,
+        message: String,
+    },
+    Write {
+        path: String,
+        source: io::Error,
+    },
+    NamesInterrupts {
+        path: String,
+    },
+    NoManifestMarkers {
+        path: String,
+    },
+    UnknownChip {
+        chip: String,
+        known: String,
+    },
+    ConflictingChipFeature {
+        path: String,
+        dependency: String,
+        feature: String,
+        chip: String,
+    },
 }
 
 impl fmt::Display for Error {
@@ -29,6 +145,23 @@ impl fmt::Display for Error {
             Self::Read { path, source } => write!(formatter, "cannot read {path}: {source}"),
             Self::Parse { path, message } => write!(formatter, "{path}: {message}"),
             Self::Write { path, source } => write!(formatter, "cannot write {path}: {source}"),
+            Self::UnknownChip { chip, known } => write!(
+                formatter,
+                "no backend for chip `{chip}`. FerroForge ships: {known}"
+            ),
+            Self::ConflictingChipFeature {
+                path,
+                dependency,
+                feature,
+                chip,
+            } => write!(
+                formatter,
+                "{path} enables `{feature}` on `{dependency}`, but this firmware \
+                 is for {chip}. A chip feature outside the generated block is a \
+                 chip named twice, and the HAL refuses two at once. Drop it: a \
+                 task crate's own HAL dependency takes the chip from this \
+                 firmware's platform crates, because Cargo features are additive."
+            ),
             Self::NoManifestMarkers { path } => write!(
                 formatter,
                 "{path} has no `{MARKER_BEGIN}` / `{MARKER_END}` block; add one \
@@ -68,6 +201,10 @@ pub struct Chip {
     pub device: String,
 }
 
+/// `FLASH` and `RAM` are the pair `cortex-m-rt` requires and are named as it
+/// expects. Anything else a part offers is an extra region: emitted so a
+/// firmware can place sections in it, never used automatically, because which
+/// memory suits which data is the application's decision.
 #[derive(Debug, Deserialize)]
 pub struct Memory {
     #[serde(rename = "flash-origin")]
@@ -80,6 +217,16 @@ pub struct Memory {
     pub ram_size: u64,
     #[serde(rename = "text-offset")]
     pub text_offset: u64,
+    #[serde(default)]
+    pub region: Vec<Region>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Region {
+    pub name: String,
+    pub origin: u64,
+    pub size: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -92,20 +239,31 @@ pub struct Dependency {
 }
 
 impl Backend {
-    pub fn load(path: &Path) -> Result<Self, Error> {
-        let display = path.display().to_string();
-        let text = fs::read_to_string(path).map_err(|source| Error::Read {
-            path: display.clone(),
-            source,
-        })?;
+    /// The backend for a chip a firmware named. Matching is case-insensitive so
+    /// `STM32F401RE` and `stm32f401re` are the same chip.
+    pub fn for_chip(chip: &str) -> Result<Self, Error> {
+        let wanted = chip.to_ascii_lowercase();
+        let (name, text) = BUILTIN
+            .iter()
+            .find(|(name, _)| *name == wanted)
+            .ok_or_else(|| Error::UnknownChip {
+                chip: chip.to_owned(),
+                known: known_chips().join(", "),
+            })?;
+        Self::parse(&format!("the built-in backend for {name}"), text)
+    }
+
+    fn parse(origin: &str, text: &str) -> Result<Self, Error> {
         // Checked on the data, not the raw text, so a comment explaining the
         // rule does not trip it. Unknown keys are rejected by the parse itself;
         // this exists only to give the G4 reason rather than "unknown field".
-        if names_interrupts(&text) {
-            return Err(Error::NamesInterrupts { path: display });
+        if names_interrupts(text) {
+            return Err(Error::NamesInterrupts {
+                path: origin.to_owned(),
+            });
         }
-        toml::from_str(&text).map_err(|error| Error::Parse {
-            path: display,
+        toml::from_str(text).map_err(|error| Error::Parse {
+            path: origin.to_owned(),
             message: error.to_string(),
         })
     }
@@ -113,12 +271,37 @@ impl Backend {
     /// Linker memory regions. Sizes are emitted in KiB when they divide evenly,
     /// because that is how a person reads a memory map.
     pub fn memory_x(&self) -> String {
-        format!(
-            "MEMORY\n{{\n  FLASH : ORIGIN = {:#010x}, LENGTH = {}\n  RAM   : ORIGIN = {:#010x}, LENGTH = {}\n}}\n\n_stext = ORIGIN(FLASH) + {:#x};\n",
+        // Names are padded to the widest so the map reads as a column, which is
+        // the point of writing it out rather than computing it.
+        let width = self
+            .memory
+            .region
+            .iter()
+            .map(|region| region.name.len())
+            .chain([5])
+            .max()
+            .unwrap_or(5);
+
+        let mut regions = format!(
+            "  {:width$} : ORIGIN = {:#010x}, LENGTH = {}\n  {:width$} : ORIGIN = {:#010x}, LENGTH = {}\n",
+            "FLASH",
             self.memory.flash_origin,
             human_size(self.memory.flash_size),
+            "RAM",
             self.memory.ram_origin,
             human_size(self.memory.ram_size),
+        );
+        for region in &self.memory.region {
+            regions.push_str(&format!(
+                "  {:width$} : ORIGIN = {:#010x}, LENGTH = {}\n",
+                region.name,
+                region.origin,
+                human_size(region.size),
+            ));
+        }
+
+        format!(
+            "MEMORY\n{{\n{regions}}}\n\n_stext = ORIGIN(FLASH) + {:#x};\n",
             self.memory.text_offset,
         )
     }
@@ -179,6 +362,21 @@ impl Backend {
             path: display.clone(),
             source,
         })?;
+
+        // Checked before rewriting, so the manifest is left as it was.
+        let wanted = self
+            .platform_dependencies
+            .values()
+            .flat_map(|dependency| dependency.features.iter().cloned())
+            .collect::<Vec<_>>();
+        if let Some((dependency, feature)) = conflicting_chip_feature(&text, &wanted) {
+            return Err(Error::ConflictingChipFeature {
+                path: display,
+                dependency,
+                feature,
+                chip: self.chip.name.clone(),
+            });
+        }
 
         let lines = text.lines().collect::<Vec<_>>();
         let begin = lines
@@ -254,5 +452,140 @@ fn human_size(bytes: u64) -> String {
         format!("{}K", bytes / 1024)
     } else {
         bytes.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MINIMAL: &str = "[chip]\nname = \"X\"\nrust-target = \"t\"\nprobe-rs-chip = \"X\"\n\
+                           device = \"x::pac\"\n\n[memory]\nflash-origin = 0\nflash-size = 1024\n\
+                           ram-origin = 0\nram-size = 1024\ntext-offset = 0\n";
+
+    /// Per G4 the device's own enum is the only interrupt list, so backend data
+    /// naming one is refused with that reason rather than "unknown field".
+    #[test]
+    fn backend_data_may_not_name_interrupts() {
+        let text = format!("{MINIMAL}\n[interrupts]\nTIM2 = 28\n");
+        let error = Backend::parse("under test", &text).unwrap_err().to_string();
+        assert!(error.contains("names interrupts"), "{error}");
+        assert!(error.contains("G4"), "the error must say why: {error}");
+    }
+
+    /// The shipped backend documents that rule in a comment. Documenting a rule
+    /// must not violate it.
+    #[test]
+    fn a_comment_about_interrupts_is_not_interrupt_data() {
+        let backend = Backend::for_chip("stm32f401re").expect("the shipped backend must parse");
+        assert!(backend.platform_dependencies.contains_key("stm32f4xx-hal"));
+        // Logging and panic backends are the firmware's choice, not the chip's.
+        assert!(!backend.platform_dependencies.contains_key("defmt-rtt"));
+        assert!(!backend.platform_dependencies.contains_key("panic-probe"));
+    }
+
+    #[test]
+    fn a_chip_is_matched_however_it_is_spelled() {
+        assert!(Backend::for_chip("STM32F401RE").is_ok());
+        assert!(Backend::for_chip("stm32f401re").is_ok());
+    }
+
+    /// An unknown chip must say what is available; a bare "not found" leaves an
+    /// author guessing at spelling.
+    #[test]
+    fn an_unknown_chip_lists_what_is_available() {
+        let error = Backend::for_chip("stm32f999zz").unwrap_err().to_string();
+        assert!(error.contains("stm32f999zz"), "{error}");
+        assert!(error.contains("stm32f401re"), "{error}");
+    }
+
+    /// The registry is hand-written, so this is what stops a backend file from
+    /// existing in the tree while being invisible to every command.
+    #[test]
+    fn every_backend_file_is_registered() {
+        let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("the CLI crate sits below the repository root")
+            .join("backends");
+
+        let mut found = Vec::new();
+        let mut stack = vec![directory];
+        while let Some(current) = stack.pop() {
+            for entry in fs::read_dir(&current)
+                .expect("backends/ must be readable")
+                .flatten()
+            {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path
+                    .extension()
+                    .is_some_and(|extension| extension == "toml")
+                {
+                    found.push(
+                        path.file_stem()
+                            .expect("a .toml file has a stem")
+                            .to_string_lossy()
+                            .into_owned(),
+                    );
+                }
+            }
+        }
+        found.sort();
+
+        let mut registered = known_chips();
+        registered.sort_unstable();
+        assert_eq!(
+            found, registered,
+            "backends/ and the built-in registry have drifted"
+        );
+    }
+}
+
+#[cfg(test)]
+mod derivation {
+    use super::*;
+
+    fn variant(name: &str, target: &str, flash: u64, offset: u64) -> Backend {
+        let text = format!(
+            "[chip]\nname = \"{name}\"\nrust-target = \"{target}\"\n\
+             probe-rs-chip = \"{name}\"\ndevice = \"x::pac\"\n\n\
+             [memory]\nflash-origin = 0x08000000\nflash-size = {flash}\n\
+             ram-origin = 0x20000000\nram-size = 98304\ntext-offset = {offset}\n"
+        );
+        Backend::parse("under test", &text).expect("the fixture must parse")
+    }
+
+    /// Every emitted file must be derived, so two chips must produce three
+    /// different files. One that stays put is hardcoded here rather than read
+    /// from the backend.
+    #[test]
+    fn a_different_chip_changes_every_emitted_file() {
+        let first = variant("CHIP_A", "thumbv7em-none-eabihf", 524288, 0x198);
+        let second = variant("CHIP_B", "thumbv7m-none-eabi", 262144, 0x1a0);
+
+        assert_ne!(first.memory_x(), second.memory_x());
+        assert_ne!(
+            first.cargo_config("info"),
+            second.cargo_config("info"),
+            "the target triple and probe chip both come from the backend"
+        );
+        assert_ne!(first.embed_toml(), second.embed_toml());
+        assert_ne!(
+            first.manifest_platform_block(),
+            second.manifest_platform_block(),
+            "the block names its chip, so selecting another rewrites it"
+        );
+    }
+
+    /// `--defmt-log` is the caller's, not the chip's.
+    #[test]
+    fn the_log_level_reaches_the_emitted_config() {
+        let backend = variant("CHIP_A", "thumbv7em-none-eabihf", 524288, 0x198);
+        assert!(
+            backend
+                .cargo_config("trace")
+                .contains("DEFMT_LOG = \"trace\"")
+        );
     }
 }

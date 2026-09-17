@@ -36,28 +36,40 @@ fn run(directory: &Path, arguments: &[&str]) -> std::process::Output {
 /// A reusable task crate must compile on its own, for the embedded target, with
 /// no firmware and no generated interfaces. This is what independent checking
 /// means now that there is no mock layer.
-#[test]
-#[ignore = "cross-compiles; run with --ignored"]
-fn a_reusable_task_crate_checks_independently() {
-    let output = run(
-        &repository_root().join("tasks/blinky"),
-        &[
-            "check",
-            "--lib",
-            "--target",
-            "thumbv7em-none-eabihf",
-            "--offline",
-        ],
-    );
+fn checks_standalone(crate_path: &str, extra: &[&str]) {
+    let mut arguments = vec![
+        "check",
+        "--lib",
+        "--target",
+        "thumbv7em-none-eabihf",
+        "--offline",
+    ];
+    arguments.extend_from_slice(extra);
+    let output = run(&repository_root().join(crate_path), &arguments);
     assert!(
         output.status.success(),
-        "tasks/blinky must check on its own:\n{}",
+        "{crate_path} must check on its own:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
 }
 
+#[test]
+#[ignore = "cross-compiles; run with --ignored"]
+fn a_reusable_task_crate_checks_independently() {
+    checks_standalone("tasks/blinky", &[]);
+}
+
+/// The HAL-specific case. It has to name a chip to compile at all - a HAL cannot
+/// be built without one - so the chip comes from a forwarding feature here, which
+/// a firmware's own selection unifies with rather than fights.
+#[test]
+#[ignore = "cross-compiles; run with --ignored"]
+fn a_hal_specific_task_crate_checks_independently() {
+    checks_standalone("tasks/stm32f4-timer", &["--features", "stm32f401"]);
+}
+
 /// The firmware crate is the binary, so one invocation proves the whole model:
-/// `compose!` expanded into a real `#[rtic::app]`, the adapters type-checked
+/// `app!` expanded into a real `#[rtic::app]`, the adapters type-checked
 /// against the task crate, and the result linked for the target.
 fn release_links(name: &str) {
     let firmware = repository_root().join("firmware").join(name);
@@ -94,4 +106,31 @@ fn the_firmware_checks_and_release_links() {
 #[ignore = "cross-compiles and links; run with --ignored"]
 fn a_second_firmware_reuses_the_same_definitions() {
     release_links("nucleo-f401re-beacon");
+}
+
+/// A different board, and the first that is not a Nucleo: a flight controller,
+/// which is what this is ultimately for. It selects the same definitions with
+/// neither task crate changing, on a chip with its own flash size, RAM size and
+/// vector table.
+#[test]
+#[ignore = "cross-compiles and links; run with --ignored"]
+fn a_firmware_for_another_board_links() {
+    release_links("foxeer-f405v2");
+}
+
+/// A second HAL, and a Cortex-M7. The task crate pattern is the same; the HAL's
+/// API is not, which is the point of a HAL-specific crate.
+#[test]
+#[ignore = "cross-compiles; run with --ignored"]
+fn a_task_crate_for_another_hal_checks_independently() {
+    checks_standalone("tasks/stm32h7-timer", &["--features", "stm32h753v"]);
+}
+
+/// The first firmware here that is not an STM32F4: a different HAL, a different
+/// PAC path, and a part with more memory regions than the pair `cortex-m-rt`
+/// requires. It reuses `report` from the portable crate unchanged.
+#[test]
+#[ignore = "cross-compiles and links; run with --ignored"]
+fn a_firmware_on_another_hal_links() {
+    release_links("nucleo-h753zi");
 }

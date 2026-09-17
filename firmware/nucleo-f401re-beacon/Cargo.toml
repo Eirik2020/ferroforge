@@ -5,6 +5,12 @@ edition = "2024"
 publish = false
 build = false
 
+[package.metadata.ferroforge]
+# The chip this firmware is built for. Everything the chip implies -
+# memory layout, probe identity, target triple, PAC path and platform
+# crates - is derived from this, and nothing else records it.
+chip = "stm32f401re"
+
 [[bin]]
 name = "nucleo-f401re-beacon"
 path = "src/main.rs"
@@ -14,6 +20,7 @@ bench = false
 [dependencies]
 ferroforge = { path = "../../ferroforge" }
 ferroforge-task-blinky = { path = "../../tasks/blinky" }
+ferroforge-task-stm32f4-timer = { path = "../../tasks/stm32f4-timer" }
 
 # This application's own choices: what it logs with and how it panics.
 defmt = { version = "1.0.1", default-features = true, features = [] }

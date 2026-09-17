@@ -1,0 +1,24 @@
+[package]
+name = "ferroforge-task-stm32h7-timer"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+test = false
+bench = false
+
+[dependencies]
+ferroforge = { path = "../../ferroforge" }
+stm32h7xx-hal = { version = "0.16.0", default-features = false, features = [] }
+
+[features]
+# A HAL-specific crate cannot compile without a chip selected, but it must not
+# be the one choosing. These forward to the HAL so a standalone check can name a
+# chip while a firmware's own selection wins through feature unification.
+stm32h753v = ["stm32h7xx-hal/stm32h753v"]
+
+[package.metadata.ferroforge]
+check-only-dependencies = ["ferroforge"]
+
+[workspace]

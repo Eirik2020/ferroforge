@@ -36,7 +36,7 @@ it. Implementation status does not change the requirements; the current tree
 5. **G5 - Firmware structure.** A project's `firmware/` directory must contain
    all its firmware applications. Each `firmware/<name>/` is its own Cargo
    workspace whose authored package is the firmware binary: it holds the
-   `composition!` declaration - target selection, task wiring, and the
+   `app!` declaration - target selection, task wiring, and the
    handwritten init with its `Shared` and `Local` resources. Whether that is
    one file or several is the author's choice. The CLI generates that
    firmware's target files from the selected chip; nothing else is generated.
@@ -46,18 +46,18 @@ it. Implementation status does not change the requirements; the current tree
    RTIC as possible. Keep ordinary Rust bodies, native HAL initialization, and
    familiar task/context/resource access. Additional declarations serve reuse
    and composition. FerroForge must not introduce a separate authoring DSL.
-7. **G7 - CLI conventions and library marker.**
-   - **G7a:** FerroForge is a CLI with an expected project layout and a helper
-     command to create new projects, and must support library reuse across
-     project boundaries. Layout changes cause errors when FerroForge can no
-     longer recognize required inputs.
-   - **G7b:** Libraries must explicitly mark themselves as FerroForge libraries;
-     attempting to use an unmarked library causes an error. The marker applies
-     to crates selected as FerroForge libraries, not to ordinary Cargo
-     dependencies. Marker absence is the only library check; broader library
-     checks are out of scope.
+7. **G7 - CLI conventions.** FerroForge is a CLI with an expected project layout
+   and a helper command to create new projects, and must support library reuse
+   across project boundaries. Layout changes cause errors when FerroForge can no
+   longer recognize required inputs. Selecting a crate that is not a FerroForge
+   library is a compile error on the authored line, because an `app!` names
+   that crate's own types; FerroForge adds no separate library check.
 
-**Open:** library placement and backend packaging.
+**Naming.** FerroForge borrows RTIC's words for RTIC's ideas: `#[ferroforge::task]`
+marks a definition, `ferroforge::app!` declares the application selecting it.
+
+**Open:** nothing. Backends ship with FerroForge; a library is an ordinary Cargo
+dependency and lives wherever Cargo can find it.
 
 Implementation details belong in [architecture](architecture.md), what is left
 to build in [remaining work](implementation-plan.md), and decisions in the

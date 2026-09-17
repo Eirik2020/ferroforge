@@ -3,7 +3,7 @@
 FerroForge composes reusable RTIC tasks and project-owned initialization into a
 real RTIC firmware application. Nothing is generated into a separate project and
 nothing is copied between crates: a reusable task is an ordinary Rust function
-in its own crate, and the firmware's `composition!` expands in place into a real
+in its own crate, and the firmware's `app!` expands in place into a real
 `#[rtic::app]` that calls it.
 
 The [governing requirements](governing-requirements.md) take precedence over
@@ -14,9 +14,9 @@ anything here.
 Three pieces, and only the middle one is FerroForge's:
 
 ```text
-reusable task crate          firmware crate                  the binary
-  #[ferroforge::reusable]      ferroforge::compose! { .. }      one cargo build
-  async fn blink(cx)      ->     #[rtic::app] mod app      ->   thumbv7em ELF
+task crate                     firmware crate                 the binary
+  #[ferroforge::task]            ferroforge::app! { .. }        one cargo build
+  async fn blink(cx)       ->    #[rtic::app] mod app      ->   thumbv7em ELF
   real trait bounds              init, Shared, Local
                                  one adapter per instance
 ```
@@ -66,10 +66,32 @@ each was settled.
 - Incoming inputs are ordinary parameters after the context. Outgoing calls use
   inline aliases, `spawn = [report(value: u32)]`, with RTIC 2 result shapes:
   `()` for no inputs, the value for one, a tuple for several.
-- The monotonic is named as imported, `monotonic = Mono`, and the initial
-  profile is SysTick at 1 kHz with `u32` time values.
+- The monotonic is named as imported, `monotonic = Mono`. The initial profile
+  is 1 kHz with `u32` time values, which the firmware satisfies by declaring a
+  matching monotonic of its own.
 - Related tasks share a source module with imports declared once at module
   scope. A task crate may hold several modules.
+
+A resource need not be bounded at all. A concrete inline type is the plainer
+choice and often the right one: a task that must touch a peripheral's interrupt
+flags cannot be written against `embedded-hal`, because no portable trait models
+them, so it names the HAL type the firmware will hold and its body is the handler
+anyone would write by hand. Such a task is reusable across projects using that
+HAL rather than across HALs, which is what G1 asks of it.
+
+Portability has a second, sharper limit, and it is the ecosystem's rather than
+this design's: a bound is only as portable as the HALs implementing it.
+`tasks/blinky` bounds on `embedded-hal` 1.0, and `stm32h7xx-hal` 0.16 still
+implements only 0.2, so that task cannot be selected on an STM32H7 at all - while
+a task naming no HAL, like `report`, is selected there unchanged. "Portable
+across all hardware" means across the hardware whose HALs have migrated.
+
+Bounds earn their place when a definition must serve resources of different
+types. They are not free: a bound has to be nameable and satisfiable by the type
+a firmware actually holds, and inventing a trait to bridge that gap buys
+generality at the cost of a layer between the author and the HAL. See
+[dependencies](dependencies.md) for the trade, and for how a HAL-specific crate
+names a chip without choosing one.
 
 Task kind follows the signature, exactly as in RTIC: an `async fn` is a software
 task, a plain `fn` is a hardware task. A hardware task takes only its context
@@ -80,11 +102,33 @@ firmware.
 
 ## Firmware Composition
 
-The firmware authors one `compose!` containing its target choices, its `Shared`
+The firmware authors one `app!` containing its target choices, its `Shared`
 and `Local` resources, its handwritten init, and one declaration per task
 instance. Init is written here and never moves, so RTIC generates the real
 `init::Context` and the real `spawn` functions and Rust checks the body against
 them. No checking interfaces are generated.
+
+Its header is RTIC's, parsed the way RTIC parses its own - a loop, so order does
+not matter, with a default for everything a firmware need not say:
+
+| Argument | |
+| --- | --- |
+| `device` | required; the PAC, as RTIC's |
+| `dispatchers` | optional, empty by default, passed through unchanged |
+| `peripherals` | optional, passed through only when stated |
+| `monotonic` | optional; names a monotonic the firmware declared itself |
+
+Which interrupts are free to dispatch software tasks depends on the
+application's own peripheral use, so the list is the author's and `app!` adds
+nothing to it. RTIC checks the choice: a dispatcher that is also bound, or too
+few for the priorities in use, is an error on the authored line.
+
+Only `monotonic` is not RTIC's, and it exists because call-through needs it: a
+task crate is generic over the clock, so the adapter has to be handed a type.
+The monotonic is declared outside `app!` exactly as an RTIC user declares one,
+and `init` starts it the same way. An application that needs no clock names none,
+and a task that does need one then fails against a type called
+`NoMonotonicDeclared`.
 
 Each instance declaration names the definition it comes from and maps the
 reusable names onto the firmware's own:
@@ -101,7 +145,7 @@ reusable names onto the firmware's own:
 async fn status_blink(cx: status_blink::Context) -> !;
 ```
 
-`compose!` emits a config impl and an adapter that constructs the definition's
+`app!` emits a config impl and an adapter that constructs the definition's
 own context and calls it. Every path it emits is a real Rust path, so a wrong
 definition, binding, type or interrupt is an ordinary compile error on the
 authored line.
@@ -132,9 +176,9 @@ target build remains the verification step. See
 ## Incremental Coverage
 
 Support the operations real examples need, then extend as uses appear.
-Exhaustive mock or monotonic coverage is not a prerequisite, and a clean editor
-is not a replacement for the final build. Keep host simulation separate from
-compile-time support; it is a distinct optional objective.
+Exhaustive monotonic or peripheral coverage is not a prerequisite, and a clean
+editor is not a replacement for the final build. Keep host simulation separate
+from compile-time support; it is a distinct optional objective.
 
 ## Core Design Principle
 

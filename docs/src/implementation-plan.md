@@ -8,6 +8,17 @@ around it.
 [Current state](prototype.md) records what exists; this chapter records what
 does not, in the order that unblocks the rest.
 
+## Hardware Validation
+
+Every result here is a build. Nothing has been flashed, and two facts in
+`firmware/foxeer-f405v2` are marked unverified in its source: which pin drives
+the status LED, and whether to run from the board crystal rather than the
+internal oscillator.
+
+Four boards build; none has been run. The Nucleo-F401RE, Nucleo-H753ZI and
+Foxeer F405 V2 are all to hand, so this is the next thing that can actually be
+closed.
+
 ## Evidence Rules
 
 Recording that something builds is not evidence; record exact paths, targets,
@@ -17,22 +28,6 @@ A compile-fail case must fail for the intended reason, not because a dependency
 or file is missing, and the harness must distinguish an expected negative from a
 broken run. IDE feedback does not replace compiler checks, and a build does not
 claim flashing or hardware validation.
-
-## Project Conventions and the Library Marker
-
-G7 is untouched. A FerroForge library marks itself with `library = true` under
-`[package.metadata.ferroforge]`, and selecting an unmarked crate fails with an
-error naming the crate and the missing marker. Marker absence is the only
-library check.
-
-Still open: minimum project recognition inputs, new-project helper output,
-library references, backend discovery, and command names.
-
-## Separate the Superseded Macros
-
-`ferroforge-macros` still contains the transplant-era `app!`, `composition!`,
-`firmware!`, `dependency_registry!` and mock `task` expansions. They are unused
-and share a file with `reusable` and `compose!`.
 
 ## Design Principle
 

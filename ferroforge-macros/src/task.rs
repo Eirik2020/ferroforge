@@ -63,7 +63,7 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
     if !arguments.dependencies.is_empty() {
         return Err(Error::new(
             function.sig.span(),
-            "reusable task dependencies belong in Cargo.toml",
+            "task dependencies belong in Cargo.toml",
         ));
     }
 
@@ -133,7 +133,7 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
         let inputs = spawn
             .inputs
             .as_ref()
-            .ok_or_else(|| Error::new(name.span(), "reusable spawn aliases need a signature"))?;
+            .ok_or_else(|| Error::new(name.span(), "a spawn alias needs a signature"))?;
         let types = inputs
             .iter()
             .map(|parameter| &parameter.ty)
@@ -164,23 +164,25 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
         .iter()
         .map(|config| {
             let name = const_name(&config.name);
-            let ty = config.ty.as_ref().ok_or_else(|| {
-                Error::new(config.name.span(), "reusable configuration needs a type")
-            })?;
+            let ty = config
+                .ty
+                .as_ref()
+                .ok_or_else(|| Error::new(config.name.span(), "configuration needs a type"))?;
             Ok(quote!(const #name: #ty;))
         })
         .collect::<Result<Vec<_>>>()?;
     ConfigReader.visit_block_mut(&mut function.block);
 
     // The monotonic keeps the name the author imported, so `Mono::delay(..)` in
-    // the body resolves to this parameter instead of a mock type.
+    // the body resolves to this type parameter, which the firmware fills with
+    // its real monotonic.
     let monotonic_param = arguments
         .monotonic
         .as_ref()
         .map(|path| {
             path.get_ident()
                 .cloned()
-                .ok_or_else(|| Error::new(path.span(), "reusable monotonic must be a plain name"))
+                .ok_or_else(|| Error::new(path.span(), "the monotonic must be a plain name"))
         })
         .transpose()?;
 
@@ -234,13 +236,22 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
 
     let shared_list = quote!(#(#shared_names),*);
     let spawn_list = quote!(#(#spawn_names),*);
+    // Bounded only when the task declared a monotonic, because the bound is what
+    // drags `rtic-monotonics` and `fugit` into the task crate's dependencies. The
+    // slot itself stays unconditional - a caller must be able to construct any
+    // context the same way - but a task that never reads time must not have to
+    // depend on the crates that describe time.
+    //
     // The agreed initial profile: SysTick at 1 kHz with u32 time values.
-    let monotonic_bound = quote!(#monotonic_name: ::rtic_monotonics::Monotonic<
-        Duration = ::fugit::Duration<u32, 1, 1000>
-    >,);
+    let monotonic_bound = monotonic_param.as_ref().map(|_| {
+        quote!(#monotonic_name: ::rtic_monotonics::Monotonic<
+            Duration = ::fugit::Duration<u32, 1, 1000>
+        >,)
+    });
     let monotonic_field = quote!(pub monotonic: ::core::marker::PhantomData<#monotonic_name>,);
 
-    // Strip the mock context parameter; the real one is declared below.
+    // Strip the authored context parameter; the real, generic one is declared
+    // below with the same name, so the body still says `cx`.
     function.sig.inputs = function.sig.inputs.into_iter().skip(1).collect();
     let body = function.block;
     let signature_inputs = &function.sig.inputs;

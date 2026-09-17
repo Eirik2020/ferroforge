@@ -1,0 +1,25 @@
+[package]
+name = "ferroforge-task-stm32f4-timer"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+test = false
+bench = false
+
+[dependencies]
+ferroforge = { path = "../../ferroforge" }
+stm32f4xx-hal = { version = "0.23.0", default-features = false, features = [] }
+
+[features]
+# A HAL-specific crate cannot compile without a chip selected, but it must not
+# be the one choosing. These forward to the HAL so a standalone check can name a
+# chip while a firmware's own selection still wins through feature unification.
+stm32f401 = ["stm32f4xx-hal/stm32f401"]
+stm32f411 = ["stm32f4xx-hal/stm32f411"]
+
+[package.metadata.ferroforge]
+check-only-dependencies = ["ferroforge"]
+
+[workspace]
