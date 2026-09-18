@@ -4,7 +4,8 @@
     ],
     "rust-analyzer.linkedProjects": [
         "./Cargo.toml",
-        "./embedded/Cargo.toml",
-        "./generated/nucleo-f401re/Cargo.toml"
+        "./firmware/nucleo-f401re/Cargo.toml",
+        "./firmware/nucleo-f401re-beacon/Cargo.toml",
+        "./firmware/nucleo-h753zi/Cargo.toml"
     ]
 }
