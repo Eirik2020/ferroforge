@@ -100,28 +100,6 @@ const CASES: &[Case] = &[
         to: "dispatchers = [USART2]",
         expected: "not enough interrupts to dispatch all software tasks",
     },
-    // A group's library states how its priorities must relate. These two are the
-    // whole reason a group is more than a lexical block.
-    Case {
-        name: "priority-breaks-the-groups-wiring-rule",
-        firmware: BEACON,
-        // Only what the case is about: giving this task its own priority, which
-        // the group's rules forbid.
-        from: "from = on_rx, binds = DMA2_STREAM2",
-        to: "from = on_rx, binds = DMA2_STREAM2, priority = 7",
-        expected: "both lock Port from interrupt context",
-    },
-    // Both lines, or the attribute is left dangling onto the next declaration
-    // and the error is about that instead.
-    Case {
-        name: "a-group-missing-one-of-its-tasks",
-        firmware: BEACON,
-        from: "#[task(from = on_tx, binds = DMA2_STREAM7, priority = 4, shared = [], \
-               local = [stream = tx_stream, sent = tx_sent])]\n        \
-               fn dma_tx(cx: dma_tx::Context);",
-        to: "",
-        expected: "missing: `ON_TX_PRIORITY`",
-    },
 ];
 
 fn cargo() -> std::ffi::OsString {

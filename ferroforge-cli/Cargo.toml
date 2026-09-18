@@ -2,7 +2,16 @@
 name = "ferroforge-cli"
 version = "0.1.0"
 edition = "2024"
-publish = false
+rust-version = "1.88"
+description = "The ferroforge command: create, check, build and flash FerroForge RTIC firmware"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Eirik2020/ferroforge"
+readme = "README.md"
+keywords = ["embedded", "rtic", "firmware", "cli"]
+categories = ["command-line-utilities", "embedded", "development-tools"]
+# The integration tests drive this repository's firmware and task crates, so
+# they cannot run from the published source.
+exclude = ["tests/"]
 
 [[bin]]
 name = "ferroforge"

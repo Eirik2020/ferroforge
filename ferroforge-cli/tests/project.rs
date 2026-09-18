@@ -229,12 +229,9 @@ fn a_scaffolded_project_is_recognized_by_the_convention() {
     );
     assert!(root.join("tasks/scaffolded-tasks/src/lib.rs").is_file());
 
-    // It must say FerroForge is unpublished rather than print advice that fails.
-    assert!(
-        stdout(&output).contains("not published"),
-        "{}",
-        stdout(&output)
-    );
+    // A new project depends on the published crate unless told otherwise.
+    let manifest = fs::read_to_string(root.join("firmware/scaffolded/Cargo.toml")).unwrap();
+    assert!(manifest.contains("ferroforge = \"0.1\""), "{manifest}");
 
     // And the convention must recognize what it just wrote.
     let resynced = ferroforge_in(&root, &["sync"]);
@@ -497,4 +494,38 @@ fn a_firmware_without_a_log_filter_gets_info() {
     assert!(output.status.success(), "{}", stderr(&output));
     let config = fs::read_to_string(root.join("firmware/solo/.cargo/config.toml")).unwrap();
     assert!(config.contains("DEFMT_LOG = \"info\""), "{config}");
+}
+
+/// What a new user runs first, end to end: `new`, then `build`, on one chip
+/// per HAL family. A project that is created but does not build would be the
+/// first thing anyone saw of FerroForge.
+///
+/// Against this checkout rather than the published crate, so it tests the
+/// code in front of it.
+#[test]
+#[ignore = "cross-compiles a scaffolded project per HAL; run with --ignored"]
+fn a_new_project_builds_on_every_hal_family() {
+    let facade = repository_root().join("ferroforge");
+    let facade = facade.to_str().unwrap().replace('\\', "/");
+    for chip in ["stm32f401re", "stm32h753zi"] {
+        let root = repository_root()
+            .join("target/project-tests")
+            .join(format!("new-{chip}"));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.parent().unwrap()).unwrap();
+
+        let created = ferroforge_in(
+            repository_root(),
+            &["new", root.to_str().unwrap(), "--chip", chip, "--ferroforge", &facade],
+        );
+        assert!(created.status.success(), "{chip}: {}", stderr(&created));
+
+        let built = ferroforge_in(&root, &["build"]);
+        assert!(built.status.success(), "{chip}: {}", stderr(&built));
+        assert!(
+            !stderr(&built).contains("warning:"),
+            "{chip}: a new project must build without warnings:\n{}",
+            stderr(&built)
+        );
+    }
 }

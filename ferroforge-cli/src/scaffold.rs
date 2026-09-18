@@ -13,6 +13,7 @@ use crate::backend::{self, Backend};
 pub enum Error {
     Exists { path: String },
     UnknownChip { chip: String, known: String },
+    NoStarter { chip: String },
     Backend(backend::Error),
     Write { path: String, source: io::Error },
 }
@@ -26,6 +27,10 @@ impl fmt::Display for Error {
             Self::UnknownChip { chip, known } => write!(
                 formatter,
                 "no backend for chip `{chip}`. FerroForge ships: {known}"
+            ),
+            Self::NoStarter { chip } => write!(
+                formatter,
+                "FerroForge knows `{chip}` but has no starting firmware for its HAL"
             ),
             Self::Backend(error) => write!(formatter, "{error}"),
             Self::Write { path, source } => write!(formatter, "cannot write {path}: {source}"),
@@ -48,9 +53,8 @@ fn write(path: &Path, contents: &str) -> Result<(), Error> {
     })
 }
 
-/// `ferroforge` is how the generated manifests should depend on FerroForge: a
-/// version requirement once it is published, or a path to a checkout, which is
-/// the only thing that resolves until then.
+/// `ferroforge` is how the generated manifests depend on FerroForge: the
+/// published version requirement, or a path to a checkout.
 pub fn create(root: &Path, chip: &str, ferroforge: &str) -> Result<(), Error> {
     if root.exists() {
         return Err(Error::Exists {
@@ -62,6 +66,9 @@ pub fn create(root: &Path, chip: &str, ferroforge: &str) -> Result<(), Error> {
     let backend = Backend::for_chip(chip).map_err(|error| match error {
         backend::Error::UnknownChip { chip, known } => Error::UnknownChip { chip, known },
         other => Error::Backend(other),
+    })?;
+    let starter = starter(&backend).ok_or_else(|| Error::NoStarter {
+        chip: chip.to_owned(),
     })?;
 
     let name = root
@@ -77,7 +84,7 @@ pub fn create(root: &Path, chip: &str, ferroforge: &str) -> Result<(), Error> {
     )?;
     write(
         &firmware.join("src/main.rs"),
-        &main_rs(&backend, &task_crate),
+        &main_rs(&backend, starter, &task_crate),
     )?;
     let tasks = root.join("tasks").join(&task_crate);
     write(
@@ -99,7 +106,7 @@ pub fn create(root: &Path, chip: &str, ferroforge: &str) -> Result<(), Error> {
         "  {} files derived from the chip, already written",
         written.len()
     );
-    println!("\nnext: cd {shown} && ferroforge check");
+    println!("\nnext: cd {shown} && ferroforge run");
     Ok(())
 }
 
@@ -150,7 +157,10 @@ fn task_manifest(task_crate: &str, ferroforge: &str) -> String {
          bench = false\n\n\
          [dependencies]\n\
          ferroforge = {ferroforge}\n\
-         embedded-hal = \"1.0.0\"\n\n\
+         defmt = \"1.0.1\"\n\
+         fugit = \"0.3.9\"\n\
+         rtic = {{ version = \"2.3.1\", default-features = false, features = [\"thumbv7-backend\"] }}\n\
+         rtic-monotonics = {{ version = \"2.2.1\", default-features = false, features = [\"cortex-m-systick\"] }}\n\n\
          [package.metadata.ferroforge]\n\
          check-only-dependencies = [\"ferroforge\"]\n\n\
          [workspace]\n"
@@ -159,49 +169,138 @@ fn task_manifest(task_crate: &str, ferroforge: &str) -> String {
 
 const TASK_LIB: &str = "\
 //! Reusable task definitions. Nothing here names a chip or a HAL, so these
-//! compile on their own and can be selected by any firmware.
+//! compile on their own and any firmware can select them.
 
 #![no_std]
 
-use embedded_hal::digital::StatefulOutputPin;
+use fugit::ExtU32 as _;
 
+/// Logs a count at a fixed period, forever. It needs no pins, so it runs on
+/// any board, and `ferroforge run` shows what it prints.
 #[ferroforge::task(
-    bounds = [led: StatefulOutputPin],
-    local = [led, count: u32],
+    local = [count: u32],
+    config = [period_ms: u32],
+    monotonic = Mono,
 )]
-pub fn toggle(cx: toggle::Context) {
-    let _ = StatefulOutputPin::toggle(&mut *cx.local.led);
-    *cx.local.count = cx.local.count.wrapping_add(1);
+pub async fn heartbeat(cx: heartbeat::Context) -> ! {
+    loop {
+        *cx.local.count = cx.local.count.wrapping_add(1);
+        defmt::info!(\"heartbeat {=u32}\", *cx.local.count);
+        Mono::delay(CONFIG.PERIOD_MS.millis()).await;
+    }
 }
 ";
 
-/// The composition is left deliberately small: a real `init` needs HAL calls
-/// this scaffold cannot guess, so it names the one thing it can - the device -
-/// and leaves the rest to the author.
-fn main_rs(backend: &Backend, task_crate: &str) -> String {
+/// What a new firmware needs that depends on its HAL: the imports, and the
+/// clock setup that ends by starting the monotonic.
+///
+/// Keyed by HAL rather than by chip because that is where the code differs -
+/// every STM32F4 starts the same way - and each is copied from a firmware that
+/// has run on hardware. A chip whose HAL is missing here is refused by `new`,
+/// and a test holds every built-in chip to having one.
+struct Starter {
+    hal: &'static str,
+    imports: &'static str,
+    clocks: &'static str,
+}
+
+const STARTERS: &[Starter] = &[
+    Starter {
+        hal: "stm32f4xx-hal",
+        imports: "use stm32f4xx_hal::{prelude::*, rcc::Config};",
+        clocks: "\
+        // The internal oscillator, because it is on every board. Switch to the
+        // crystal and raise `sysclk` once you know the board.
+        let rcc = cx.device.RCC.freeze(Config::hsi());
+        Mono::start(cx.core.SYST, rcc.clocks.sysclk().raw());",
+    },
+    Starter {
+        hal: "stm32h7xx-hal",
+        imports: "use stm32h7xx_hal::prelude::*;",
+        clocks: "\
+        // An H7 sets its core voltage before its clocks. The defaults run from
+        // the internal oscillator, which is on every board.
+        let pwr = cx.device.PWR.constrain();
+        let pwrcfg = pwr.freeze();
+        let rcc = cx.device.RCC.constrain();
+        let ccdr = rcc.freeze(pwrcfg, &cx.device.SYSCFG);
+        Mono::start(cx.core.SYST, ccdr.clocks.sys_ck().raw());",
+    },
+];
+
+fn starter(backend: &Backend) -> Option<&'static Starter> {
+    STARTERS
+        .iter()
+        .find(|starter| backend.platform_dependencies.contains_key(starter.hal))
+}
+
+/// A firmware that runs as soon as it is flashed: one task, selected from the
+/// project's own task crate and declared the way every other one will be.
+fn main_rs(backend: &Backend, starter: &Starter, task_crate: &str) -> String {
     let device = &backend.chip.device;
     let crate_path = task_crate.replace('-', "_");
+    let Starter {
+        imports, clocks, ..
+    } = starter;
     format!(
-        "//! Fill in `init` with your board's setup, then bind `toggle` to a pin.\n\
+        "//! One task from `tasks/{task_crate}`, selected and running.\n\
          //!\n\
-         //! `ferroforge check` compiles this; `ferroforge run` flashes it.\n\n\
+         //! `ferroforge run` flashes this and shows the heartbeat over RTT. Grow it\n\
+         //! from here: resources in `Shared` and `Local`, peripherals in `init`,\n\
+         //! and one `#[task(from = ..)]` declaration per task instance.\n\n\
          #![no_std]\n\
          #![no_main]\n\n\
          use defmt_rtt as _;\n\
-         use panic_probe as _;\n\n\
+         use panic_probe as _;\n\
+         use rtic_monotonics::systick::prelude::*;\n\n\
+         systick_monotonic!(Mono, 1000);\n\n\
          ferroforge::app! {{\n\
          \x20   device = {device},\n\
-         \x20   // Add `dispatchers = [..]` once you have software tasks, and\n\
-         \x20   // `monotonic = Mono` once one of them needs a clock.\n\n\
-         \x20   use {crate_path}::toggle;\n\n\
+         \x20   // Software tasks run from interrupts the application does not\n\
+         \x20   // otherwise use. Pick another if this one becomes a peripheral's.\n\
+         \x20   dispatchers = [SPI1],\n\
+         \x20   monotonic = Mono,\n\n\
+         \x20   use {crate_path}::heartbeat;\n\
+         \x20   {imports}\n\n\
          \x20   #[shared]\n\
          \x20   struct Shared {{}}\n\n\
          \x20   #[local]\n\
-         \x20   struct Local {{}}\n\n\
+         \x20   struct Local {{\n\
+         \x20       heartbeat_count: u32,\n\
+         \x20   }}\n\n\
          \x20   #[init]\n\
-         \x20   fn init(_cx: init::Context) -> (Shared, Local) {{\n\
-         \x20       todo!(\"set up clocks and peripherals, then return the resources\")\n\
-         \x20   }}\n\
+         \x20   fn init(cx: init::Context) -> (Shared, Local) {{\n\
+         {clocks}\n\n\
+         \x20       status::spawn().unwrap();\n\
+         \x20       (Shared {{}}, Local {{ heartbeat_count: 0 }})\n\
+         \x20   }}\n\n\
+         \x20   // `heartbeat` is the definition; `status` is this firmware's instance\n\
+         \x20   // of it, with its own resource and period.\n\
+         \x20   #[task(\n\
+         \x20       from = heartbeat,\n\
+         \x20       priority = 1,\n\
+         \x20       local = [count = heartbeat_count],\n\
+         \x20       config = [period_ms: u32 = 1000],\n\
+         \x20   )]\n\
+         \x20   async fn status(cx: status::Context) -> !;\n\
          }}\n"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A chip `new` accepts but cannot start would only fail once someone
+    /// tried it, so every built-in chip is held to having a starter here.
+    #[test]
+    fn every_built_in_chip_has_a_starting_firmware() {
+        for chip in backend::known_chips() {
+            let backend = Backend::for_chip(chip).expect("a built-in chip loads");
+            assert!(
+                starter(&backend).is_some(),
+                "`{chip}` has no starter for any of its platform crates"
+            );
+        }
+    }
 }

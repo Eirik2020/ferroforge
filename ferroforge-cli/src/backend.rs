@@ -20,19 +20,19 @@ use serde::Deserialize;
 const BUILTIN: &[(&str, &str)] = &[
     (
         "stm32f401re",
-        include_str!("../../backends/stm32f4/stm32f401re.toml"),
+        include_str!("../backends/stm32f4/stm32f401re.toml"),
     ),
     (
         "stm32f405rg",
-        include_str!("../../backends/stm32f4/stm32f405rg.toml"),
+        include_str!("../backends/stm32f4/stm32f405rg.toml"),
     ),
     (
         "stm32f411re",
-        include_str!("../../backends/stm32f4/stm32f411re.toml"),
+        include_str!("../backends/stm32f4/stm32f411re.toml"),
     ),
     (
         "stm32h753zi",
-        include_str!("../../backends/stm32h7/stm32h753zi.toml"),
+        include_str!("../backends/stm32h7/stm32h753zi.toml"),
     ),
 ];
 
@@ -503,10 +503,7 @@ mod tests {
     /// existing in the tree while being invisible to every command.
     #[test]
     fn every_backend_file_is_registered() {
-        let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("the CLI crate sits below the repository root")
-            .join("backends");
+        let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("backends");
 
         let mut found = Vec::new();
         let mut stack = vec![directory];

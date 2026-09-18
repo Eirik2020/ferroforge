@@ -59,16 +59,16 @@ links there instead of restating it.
 | What is left to build | `implementation-plan.md` |
 | What was decided, and where it is specified | `review.md` (index only) |
 
-The whole book is 1176 lines, so read a chapter when a section is not enough:
+The whole book is 1139 lines, so read a chapter when a section is not enough:
 
 - `governing-requirements.md` (64) - G1-G7. Loaded at launch for Claude.
-- `architecture.md` (244) - the agreed call-through model. Owns the canonical
+- `architecture.md` (198) - the agreed call-through model. Owns the canonical
   authoring design; other chapters link here rather than restate it.
-- `review.md` (277) - current decisions, the next open point, an index of
+- `review.md` (273) - current decisions, the next open point, an index of
   older decisions still in force, and what the call-through model superseded.
-- `implementation-plan.md` (51) - what is left, in unblocking order.
-- `workflow.md` (167) - every command, including the opt-in cross-compiles.
-- `prototype.md` (147) - what exists today and what does not.
+- `implementation-plan.md` (54) - what is left, in unblocking order.
+- `workflow.md` (180) - every command, including the opt-in cross-compiles.
+- `prototype.md` (143) - what exists today and what does not.
 - `dependencies.md` (112) - where requirements live, and how a HAL-specific
   crate names a chip without choosing one.
 

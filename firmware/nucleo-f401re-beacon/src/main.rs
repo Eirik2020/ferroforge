@@ -6,7 +6,7 @@
 //! which line serves it is the composition's choice.
 //!
 //! Two serial protocols run at once, which is what this firmware is for now.
-//! USART1 receives SBUS by circular DMA through the `stm32f4-uart-dma` group,
+//! USART1 receives SBUS by circular DMA through the `stm32f4-uart-dma` tasks,
 //! and USART6 speaks MSP DisplayPort to a video transmitter - so the channels
 //! the receiver sends come back out in a pilot's goggles.
 //!
@@ -62,7 +62,7 @@ ferroforge::app! {
     struct Shared {
         heartbeat_enabled: bool,
         beacon_enabled: bool,
-        // One resource for the whole DMA UART group, because the library models
+        // One resource for all the DMA UART tasks, because the library models
         // its state as one type.
         uart: uart_dma::Port,
         // The whole OSD conversation, for the same reason.
@@ -183,7 +183,7 @@ ferroforge::app! {
         //
         // Ordinary interrupt-driven serial rather than DMA. The OSD sends a
         // couple of hundred bytes ten times a second, which a byte interrupt
-        // absorbs without noticing - and the DMA UART group could not serve
+        // absorbs without noticing - and the DMA UART tasks could not serve
         // this port anyway, because it names `USART1` and `Stream2<DMA2>` as
         // concrete types.
         let osd_serial = Serial::<_, u8>::new(
@@ -263,32 +263,34 @@ ferroforge::app! {
     )]
     fn pulse(cx: pulse::Context);
 
-    // Four tasks that only work as a set. `from` and the shared binding are
-    // stated once; each task still names its own interrupt and priority, and
-    // `uart_dma::Wiring` decides whether those priorities are allowed.
-    #[group(
-        from = uart_dma,
-        wiring = uart_dma::Wiring,
-        shared = [port = uart],
+    // The DMA UART's four tasks. The two receive handlers share one priority
+    // because both lock `uart`, and the parser sits below them; the library's
+    // documentation says why, and nothing checks it.
+    #[task(
+        from = uart_dma::on_uart,
+        binds = USART1,
         priority = 12,
+        shared = [port = uart],
+        local = [uart = usart],
+        spawn = [frame = parse_frame],
     )]
-    mod serial {
-        #[task(from = on_uart, binds = USART1, local = [uart = usart], spawn = [frame = parse_frame])]
-        fn uart_irq(cx: uart_irq::Context);
+    fn uart_irq(cx: uart_irq::Context);
 
-        // No spawn: a wrap is not a frame, so this one only watches for the
-        // reader being lapped.
-        #[task(from = on_rx, binds = DMA2_STREAM2)]
-        fn dma_rx(cx: dma_rx::Context);
+    // No spawn: a wrap is not a frame, so this one only watches for the
+    // reader being lapped.
+    #[task(from = uart_dma::on_rx, binds = DMA2_STREAM2, priority = 12, shared = [port = uart])]
+    fn dma_rx(cx: dma_rx::Context);
 
-        // No shared state, so it opts out of the group's binding - and its
-        // priority is free because nothing it touches is shared.
-        #[task(from = on_tx, binds = DMA2_STREAM7, priority = 4, shared = [], local = [stream = tx_stream, sent = tx_sent])]
-        fn dma_tx(cx: dma_tx::Context);
+    #[task(
+        from = uart_dma::on_tx,
+        binds = DMA2_STREAM7,
+        priority = 4,
+        local = [stream = tx_stream, sent = tx_sent],
+    )]
+    fn dma_tx(cx: dma_tx::Context);
 
-        #[task(from = parse, priority = 1, shared = [], spawn = [decoded = sbus])]
-        async fn parse_frame(_cx: parse_frame::Context, bytes: usize);
-    }
+    #[task(from = uart_dma::parse, priority = 1, spawn = [decoded = sbus])]
+    async fn parse_frame(_cx: parse_frame::Context, bytes: usize);
 
     // The OSD: one portable definition, this firmware's clock, this firmware's
     // serial port. Ten refreshes a second is fast enough that a stick looks
@@ -360,7 +362,7 @@ ferroforge::app! {
     ///
     /// Without it a silent terminal is ambiguous: the firmware could be running
     /// with nothing to say, or not running at all. `deliveries` counts what the
-    /// DMA UART group handed on, so a stuck receiver and a mis-framed one look
+    /// DMA UART tasks handed on, so a stuck receiver and a mis-framed one look
     /// different from here.
     #[task(priority = 1, shared = [uart, link], local = [last_deliveries: u32 = 0])]
     async fn status(mut cx: status::Context) {
@@ -394,8 +396,8 @@ ferroforge::app! {
         }
     }
 
-    /// SBUS decoding, as an ordinary RTIC task. The group delivers bytes and
-    /// says how many; what they mean is the application's business, so there is
+    /// SBUS decoding, as an ordinary RTIC task. The DMA UART tasks deliver bytes and
+    /// say how many; what they mean is the application's business, so there is
     /// no FerroForge in this one at all.
     ///
     /// A frame is 25 bytes: `0x0F`, 22 bytes holding 16 channels of 11 bits

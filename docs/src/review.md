@@ -177,41 +177,13 @@ which names no HAL, is selected there unchanged. "Reusable across all hardware"
 means across the hardware whose HALs have migrated. That is the ecosystem's to
 fix, and worth knowing before ferro-wasp depends on it.
 
-**Task groups, 2026-09-17.** Some functionality needs several tasks that only
-work as a set - a DMA UART needs the USART's IDLE interrupt, both DMA
-transfer-complete interrupts and a parser off the interrupt - with rules about
-their priorities that no single definition can express.
-
-A library cannot supply the declarations. `#[rtic::app]` parses `mod app` before
-any inner `macro_rules!` expands, so a generated `#[task]` is never seen: RTIC
-reports "cannot find attribute `task` in this scope". Verified before designing
-around it. Task declarations are therefore always lexical, in the firmware.
-
-What is possible splits cleanly. The library owns the shared state as one type,
-so the group binds one resource rather than several that could be wired apart.
-The library also owns the *rules*, as a trait of associated priority consts with
-const assertions. The firmware owns the *numbers*, written where RTIC needs them,
-and `#[group]` states `from`, `shared` and a default priority once instead of per
-task. `app!` mirrors the chosen priorities into an impl of that trait and forces
-it to evaluate - the same mechanism as `config`.
-
-Two properties follow, both verified: a rule the firmware breaks fails in the
-library's own words, and a task omitted from the group leaves its const missing,
-so an incomplete group is `missing: ON_TX_PRIORITY in implementation` rather than
-something that builds and never transmits. This corrects an earlier judgement
-that completeness could not be enforced.
-
-Priorities are checked, not propagated. RTIC parses `priority` as a literal, so
-"set one and the other follows" is not available; writing both and rejecting a
-mismatch gets the same guarantee with the number visible at each task.
-
 **Two protocols on one firmware, 2026-09-17.** `nucleo-f401re-beacon` receives
 SBUS and drives an MSP DisplayPort OSD at once. The second port is a plain
-interrupt-driven UART rather than a second instance of the DMA group, because a
-second instance is not available: `tasks/stm32f4-uart-dma` names `USART1` and
+interrupt-driven UART rather than a second use of the DMA UART tasks, because
+those cannot serve a second port: `tasks/stm32f4-uart-dma` names `USART1` and
 `Stream2<DMA2>` as concrete types, and the streams a second port would need are
-different types again. A group written against concrete peripherals is
-single-instance by construction.
+different types again. Tasks written against concrete peripherals serve one
+port by construction.
 
 Three things came out of building it. A dispatcher is an interrupt vector RTIC
 borrows for software tasks, so a peripheral the firmware actually uses cannot
@@ -224,12 +196,36 @@ into `msp`, an ordinary dependency-free library, because a crate that depends on
 RTIC cannot carry a host test and framing is exactly the thing worth testing
 before wiring anything up.
 
-**Next open point:** whether a group should be generic over its peripherals.
-Doing so would let one library serve every UART on a chip instead of the one it
-names, which is what a reusable task crate is supposed to mean - against that,
-the concrete types are what make a mis-wiring an ordinary Rust error at the
-authored line, and generics would move that error somewhere less useful.
-Tracked in [remaining work](implementation-plan.md).
+**Groups removed, 2026-09-18.** Task groups were an experiment, and the first
+release carries none of their machinery: no `#[group]` block, no `Wiring`
+trait, and no `app!` mirroring of priorities into a library. Tasks that only
+work as a set are declared one by one like any others, and priorities are the
+firmware's choice, unchecked, exactly as in RTIC. The experiment's limits were
+part of the reason: a group named concrete peripherals and so could be selected
+once, a protocol that did not own its transport did not fit, and the block
+saved only the repeated `from`, `shared` and default priority.
+
+**If RTIC does not check it, neither does FerroForge, 2026-09-18.** Binding a
+task to an interrupt that belongs to a different peripheral builds - the DMA
+receive task on `DMA2_STREAM3`, the `TIM3` timer task on `TIM2` - and that is
+not a gap, because plain RTIC accepts it too. Specified in
+[architecture](architecture.md#what-checking-guarantees).
+
+**First release on crates.io, 2026-09-18.** FerroForge 0.1 is published to
+crates.io rather than installed from git, so a tester's first step is
+`cargo install ferroforge-cli` and a new project's dependency is
+`ferroforge = "0.1"`. Four crates are published, in dependency order:
+`ferroforge-contracts`, `ferroforge-macros`, `ferroforge` and `ferroforge-cli`.
+Preparing it forced three corrections. The CLI's chip data lived outside its
+crate, so a published CLI would not have compiled; it now lives in
+`ferroforge-cli/backends/`. The declared minimum Rust was 1.85 while the macros
+use let-chains, which need 1.88. And `new` wrote a firmware whose `init` was
+`todo!()`, which would have panicked on first flash; it now writes one that
+runs, specified in [workflow](workflow.md#the-cli).
+
+**Next open point:** the release itself. What is left before it, including the
+steps only the maintainer can take, is in
+[remaining work](implementation-plan.md#first-release).
 
 ## Binding Decisions Carried Forward
 

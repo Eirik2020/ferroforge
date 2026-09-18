@@ -23,8 +23,10 @@ ferroforge - compose reusable RTIC tasks into firmware
 
 USAGE:
     ferroforge new <path> [--chip <name>] [--ferroforge <path>]
-        Create a project: one firmware, a task crate, and the files its chip
-        implies.
+        Create a project: one firmware running one task, the task crate it
+        selects from, and the files its chip implies. `--chip` defaults to
+        stm32f401re; `ferroforge chips` lists the rest. `--ferroforge` depends
+        on a local checkout instead of the published crate.
 
     ferroforge sync [<firmware>]
         Refresh what the chip implies - memory.x, .cargo/config.toml,
@@ -75,22 +77,14 @@ fn run(arguments: &[String]) -> Result<ExitCode, String> {
         "new" => {
             let path = named.ok_or_else(|| format!("expected a path\n\n{USAGE}"))?;
             let chip = flag(arguments, "--chip").unwrap_or_else(|| "stm32f401re".to_owned());
-            // FerroForge is not published, so a version requirement resolves to
-            // nothing. `--ferroforge` names a checkout; without it the generated
-            // manifests are what they will be once it is published, and say so.
+            // The published crate by default. `--ferroforge` names a checkout
+            // instead, for working on FerroForge itself.
             let dependency = match flag(arguments, "--ferroforge") {
                 Some(path) => format!("{{ path = \"{}\" }}", path.replace('\\', "/")),
                 None => "\"0.1\"".to_owned(),
             };
             scaffold::create(Path::new(path), &chip, &dependency)
                 .map_err(|error| error.to_string())?;
-            if flag(arguments, "--ferroforge").is_none() {
-                println!(
-                    "\nnote: FerroForge is not published yet, so `ferroforge = \"0.1\"` will \
-                     not resolve.\n      Re-run with `--ferroforge <path-to-checkout>/ferroforge` \
-                     to build today."
-                );
-            }
             Ok(ExitCode::SUCCESS)
         }
         "sync" => {

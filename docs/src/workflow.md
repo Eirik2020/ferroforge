@@ -24,15 +24,19 @@ CLI emits from. It does not build any firmware.
 The tests that do are opt-in, because each drives a cross-compile:
 
 ```text
-cargo test -p ferroforge-macros -- --ignored
+cargo test --workspace --locked -- --ignored
 ```
 
-That checks both task crates on their own, links both firmwares, and plants five
+That checks every task crate on its own, links every firmware, and plants eight
 defects in copies of them - a hardware task given inputs, an `async` task given
 an interrupt, a configuration type disagreeing with its definition, a binding
-naming a resource that does not exist, and a resource whose type is not what a
-HAL-specific task declares - asserting the message each one must fail with. Each
-unmutated copy is checked first, so a broken harness cannot pass as a rejection.
+naming a resource that does not exist, a resource whose type is not what a
+HAL-specific task declares, a task needing a monotonic the application lacks, a
+dispatcher that is also bound, and too few dispatchers - asserting the message
+each one must fail with. Each unmutated copy is checked first, so a broken
+harness cannot pass as a rejection. It also runs `ferroforge new` and then
+`ferroforge build` for one chip per HAL family, and fails on any warning,
+because that is the first thing a new user sees.
 
 Run them when changing an expansion. A case that starts failing with the wrong
 message is the point: it means a defect stopped being diagnosable at the
@@ -43,7 +47,7 @@ authored line.
 The verbs are Cargo's, because a firmware crate is an ordinary Cargo package:
 
 ```text
-ferroforge new <path> [--chip <name>]   scaffold a project
+ferroforge new <path> [--chip <name>]   a project that runs, see below
 ferroforge sync  [<firmware>]           refresh what the chip implies
 ferroforge check [<firmware>]           sync, then cargo check
 ferroforge build [<firmware>]           sync, then cargo build --release
@@ -52,6 +56,15 @@ ferroforge chips                        the chips this build knows
 ```
 
 Anything after `--` is passed to Cargo untouched.
+
+`new` writes one firmware and one task crate, and the firmware runs as soon as
+it is flashed: it selects a `heartbeat` task that logs over RTT, starts from the
+internal oscillator and uses no pins, so it runs on any board carrying the chip.
+Its clock setup is the only HAL-specific code in it. `new` holds one per HAL,
+taken from a firmware that has run on hardware, and refuses a chip whose HAL it
+has none for rather than writing one that cannot start. The project depends on
+the published `ferroforge`; `--ferroforge <path>` points it at a checkout
+instead, for working on FerroForge itself.
 
 A project is the nearest parent directory holding a `firmware/`. That is the
 whole convention - there is no marker file and nothing to initialize, so a

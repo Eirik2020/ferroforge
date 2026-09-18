@@ -51,12 +51,11 @@ task's counterpart. It does **not** use `blink`: that bounds on `embedded-hal`
 1.0 and `stm32h7xx-hal` 0.16 implements only 0.2, so the LED is driven by a task
 in the firmware instead.
 
-`tasks/stm32f4-uart-dma` is a group: four tasks that only work as a set, with a
-`Wiring` trait stating how their priorities must relate. `nucleo-f401re-beacon`
-selects it through a `#[group]` block, configures a circular receive, and
-decodes SBUS on the bytes it delivers.
+`tasks/stm32f4-uart-dma` is four tasks that only work as a set, sharing one
+`Port`. `nucleo-f401re-beacon` selects all four as ordinary declarations,
+configures a circular receive, and decodes SBUS on the bytes they deliver.
 
-Two constraints the group exists to hold. Delivery happens on the idle line and
+Two constraints the tasks exist to hold. Delivery happens on the idle line and
 nowhere else: in circular mode a transfer-complete means the buffer filled, not
 that a frame ended, so delivering there cuts whichever frame is in flight into
 two short ones. And the USART's error flags are the receive path's business, not
@@ -66,9 +65,9 @@ so a handler that ignores them wedges reception rather than degrading it.
 `tasks/msp-displayport` is the OSD, and the portable case on something larger
 than an LED: it names no HAL and no chip, takes no forwarding feature, and
 checks for ARM on its own. `nucleo-f401re-beacon` selects it alongside the SBUS
-group, so the two protocols run at once on one firmware.
+tasks, so the two protocols run at once on one firmware.
 
-It is one task, not a group, and the shape is the point. A DisplayPort
+It is one task, and the shape is the point. A DisplayPort
 transmitter has to be answered before it hands over the canvas, so the traffic
 runs both ways - but receiving is not a task here. The firmware's own handler
 owns the port and already holds the shared state to drain the outgoing queue, so
@@ -110,8 +109,9 @@ asserting nothing. See [workflow](workflow.md) for how to run them.
 - A monotonic bound is emitted only when the task declares a monotonic, so a
   task that never reads time depends on neither `rtic-monotonics` nor `fugit`.
   The slot itself stays unconditional, as an unbounded type parameter.
-- Chip-family data is one TOML file per chip under `backends/`, embedded in the
-  CLI and depended on by nothing at compile time. A firmware names its chip and
+- Chip-family data is one TOML file per chip under `ferroforge-cli/backends/`,
+  inside the crate so a published CLI carries it, embedded in the binary and
+  depended on by nothing at compile time. A firmware names its chip and
   everything else follows: `memory.x`, `.cargo/config.toml`, `Embed.toml` and
   the platform crates in its manifest. No chip fact is maintained twice.
 - A project is the nearest parent holding a `firmware/`, with no marker file.
@@ -125,13 +125,10 @@ asserting nothing. See [workflow](workflow.md) for how to run them.
   reach the linker script and nothing else.
 - A chip feature enabled outside the generated block is refused, because the HAL
   would otherwise reject it from a build script as a panic with no cause.
-- A `#[group]` block states `from`, `shared` and a default priority once for
-  several tasks, and hands their priorities to a library trait that decides
-  whether the combination is allowed.
 
 ## Not Implemented
 
-- **Transmit.** The group's `on_tx` counts completed transfers and nothing else.
+- **Transmit.** The DMA UART's `on_tx` counts completed transfers and nothing else.
   Only the receive half has been driven by real traffic.
 - **Portability past embedded-hal 1.0.** A task bounding on it cannot be
   selected on a HAL that still implements 0.2, which `stm32h7xx-hal` does. That

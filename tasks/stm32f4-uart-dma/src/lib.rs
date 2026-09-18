@@ -8,10 +8,12 @@
 //! boundary at all but is the only warning that unread bytes are about to be
 //! overwritten. A third task does the work off the interrupt.
 //!
-//! Both interrupt handlers lock the same state, and the slow work has to run
-//! after them rather than instead of them. A firmware cannot be expected to know
-//! either, so [`Wiring`] states the rules and the numbers a firmware chooses are
-//! checked against them at compile time.
+//! Choosing priorities is the firmware's business, as in any RTIC application,
+//! and nothing here checks them. What works: `on_uart` and `on_rx` both lock
+//! [`Port`] from interrupt context, so at one priority RTIC's lock is free and
+//! at two it puts a critical section inside both handlers. `parse` exists to
+//! run after the receive interrupts rather than instead of them, so it belongs
+//! below both.
 //!
 //! Framing is left to the application: this delivers bytes and says how many,
 //! and an ordinary RTIC task decodes them.
@@ -30,7 +32,7 @@ pub const RING: usize = 64;
 /// The most a single `frame` delivery will report.
 pub const MAX_FRAME: usize = 32;
 
-/// Everything the group shares.
+/// Everything these tasks share.
 ///
 /// One type rather than a buffer, a cursor and a counter bound separately: a
 /// firmware that wired those to different resources would compile and corrupt.
@@ -43,8 +45,8 @@ pub struct Port {
     /// Written by the DMA controller, never by software.
     ///
     /// Borrowed rather than owned: the controller needs an address that never
-    /// moves, and a `static` inside this library would let the group be
-    /// instantiated only once. The firmware owns the buffer.
+    /// moves, and where that memory lives is the firmware's decision rather
+    /// than a `static` hidden in a library. The firmware owns the buffer.
     ring: &'static mut [u8; RING],
     /// How far software has consumed. The write position is not stored - it is
     /// read back from the controller, because only it knows.
@@ -104,41 +106,6 @@ impl Port {
         self.frames = self.frames.wrapping_add(1);
         taken
     }
-}
-
-
-/// How this group's tasks must be scheduled relative to each other.
-///
-/// A firmware states each priority where RTIC needs it - on the task itself -
-/// and `app!` mirrors those numbers into an implementation of this trait. The
-/// rules below are then checked against them before anything is built.
-///
-/// Every task has a required const here, so a firmware that instantiates only
-/// some of the group fails with `missing ON_TX_PRIORITY in implementation`
-/// rather than building something that silently never transmits.
-pub trait Wiring {
-    const ON_UART_PRIORITY: u8;
-    const ON_RX_PRIORITY: u8;
-    const ON_TX_PRIORITY: u8;
-    const PARSE_PRIORITY: u8;
-
-    const CHECK: () = {
-        assert!(
-            Self::ON_UART_PRIORITY == Self::ON_RX_PRIORITY,
-            "on_uart and on_rx both lock Port from interrupt context; at one \
-             priority RTIC's lock is free, and at two it puts a critical \
-             section inside both handlers"
-        );
-        assert!(
-            Self::PARSE_PRIORITY < Self::ON_RX_PRIORITY,
-            "parse exists to run after the receive interrupts rather than \
-             instead of them, so it belongs below both"
-        );
-        assert!(
-            Self::ON_TX_PRIORITY > 0,
-            "on_tx binds an interrupt, so it cannot sit at the idle priority"
-        );
-    };
 }
 
 /// The USART's own interrupt. An idle line is the end of a frame on a protocol
@@ -209,8 +176,8 @@ pub fn on_rx(mut cx: on_rx::Context) {
     });
 }
 
-/// The transmit stream drained. Nothing here touches `Port`, which is why its
-/// priority is free of the rules above.
+/// The transmit stream drained. Nothing here touches `Port`, so its priority
+/// has no bearing on the others'.
 #[ferroforge::task(local = [stream: Stream7<DMA2>, sent: u32])]
 pub fn on_tx(cx: on_tx::Context) {
     if !cx.local.stream.is_transfer_complete() {

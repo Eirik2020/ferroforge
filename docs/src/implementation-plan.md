@@ -8,31 +8,34 @@ around it.
 [Current state](prototype.md) records what exists; this chapter records what
 does not, in the order that unblocks the rest.
 
-## A Group Generic Over Its Peripherals
+## First Release
 
-`tasks/stm32f4-uart-dma` names `USART1` and `Stream2<DMA2>`, so it serves one
-port on one chip and a second serial port has no way to select it. That is what
-sent the OSD down a separate, plainer transport. Making a group generic over the
-peripherals it drives would make one library serve every UART on a family; the
-cost is that the concrete types are exactly what turn a mis-wiring into an
-ordinary Rust error at the authored line. Whether that wants generics, a macro
-or a group per port is open.
+The four crates package, and each builds from its packaged form. What remains
+is not code:
+
+- **Repository rename.** The published metadata and README links point at
+  `github.com/Eirik2020/ferroforge`. The GitHub repository still has its
+  pre-FerroForge name and has to be renamed to match before publishing,
+  because a published version's metadata cannot be edited.
+- **`main`.** It still carries the transplant-era design, and the README links
+  point at it, so this branch has to be merged there first.
+- **Publishing,** which cannot be undone: versions can be yanked, never deleted.
 
 ## OSD Hardware Validation
 
-`tasks/msp-displayport` and its host tests say the frames are well formed. No
-transmitter has drawn one. The number to watch is `answered` in the firmware's
+`tasks/msp-displayport` and its host tests say the frames are well formed. On
+hardware, a transmitter drew nothing, and the cause has not been looked for. The number to watch is `answered` in the firmware's
 status line: it counts requests replied to, so it separates a transmitter that
 is not connected from one that is being talked to wrongly.
 
 ## A DMA UART That Transmits
 
-The group's receive half has been driven by real SBUS traffic, which is what
-settled whether the four tasks divide the work correctly rather than merely
-wiring consistently. `on_tx` has had no such test: nothing starts a transmit, so
-it counts completions that never happen. The open question is whether a
-transmitting firmware needs anything from the group that the receive side did
-not already force into `Port`.
+The receive half of `tasks/stm32f4-uart-dma` has been driven by real SBUS
+traffic, which is what settled whether its four tasks divide the work correctly.
+`on_tx` has had no such test: nothing starts a transmit, so it counts
+completions that never happen. The open question is whether a transmitting
+firmware needs anything from these tasks that the receive side did not already
+force into `Port`.
 
 ## Evidence Rules
 

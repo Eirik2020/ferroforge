@@ -2,9 +2,10 @@
 name = "ferroforge-contracts"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "Shared source declaration contracts for FerroForge macros and host tools"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/Eirik2020/ferroforge"
 
 [dependencies]
 proc-macro2 = "1"

@@ -2,9 +2,10 @@
 name = "ferroforge"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "Compose reusable RTIC tasks and project-owned initialization into a real RTIC firmware application"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/Eirik2020/ferroforge"
 readme = "README.md"
 keywords = ["embedded", "rtic", "proc-macro"]
 categories = ["development-tools", "embedded"]
