@@ -98,10 +98,17 @@ asserting nothing. See [workflow](workflow.md) for how to run them.
 - `app!` expands in place into `#[rtic::app]`, passing `Shared`, `Local`,
   `init` and ordinary items through untouched, and emitting a config impl and an
   adapter per instance.
-- Configuration is an associated-const trait, so values stay compile-time. They
-  do not work in const positions such as array lengths: the trait reaches the
-  body as a generic parameter, and stable Rust refuses a generic's constant
-  there.
+- Every RTIC task shape ferro-wasp's flight apps use is expressible as a
+  definition: spawn aliases of any arity, timestamps from `Mono::now()`,
+  shared resources bounded by a trait, `#[lock_free]` shared resources, and
+  task-local initial values - on the definition, or on the instance when they
+  depend on the board. One compiled fixture holds all of them. The Foxeer
+  flight app is built from these definitions for every task but its USB and
+  storage tasks.
+- Configuration is an associated-const trait read as `CONFIG::FIELD`, so values
+  stay compile-time and work inside macro calls. They do not work in const
+  positions such as array lengths: the trait reaches the body as a generic
+  parameter, and stable Rust refuses a generic's constant there.
 - Selecting a crate that is not a FerroForge library fails to compile: the
   composition names that crate's own `Context`, `Local` and `Config`, so there
   is nothing for a separate library check to catch.
