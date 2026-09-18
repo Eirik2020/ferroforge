@@ -383,6 +383,9 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
     // below with the same name, so the body still says `cx`.
     function.sig.inputs = function.sig.inputs.into_iter().skip(1).collect();
     let body = function.block;
+    // The definition's own attributes - its documentation, `#[allow]`s and
+    // `#[cfg]`s - belong to the function it becomes.
+    let attributes = &function.attrs;
     let signature_inputs = &function.sig.inputs;
     let output = &function.sig.output;
     let asyncness = (contract.kind == TaskKind::Software).then(|| quote!(async));
@@ -461,6 +464,7 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
             }
         }
 
+        #(#attributes)*
         #[allow(non_snake_case, non_camel_case_types)]
         #visibility #asyncness fn #task_name<#context_generics>(
             mut #context_parameter: #task_name::Context<#context_generics>,
@@ -512,5 +516,20 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(error.contains("`CONFIG::PERIOD_MS`"), "{error}");
+    }
+
+    /// Documentation and lint attributes on a definition reach the function.
+    #[test]
+    fn a_definitions_attributes_are_kept() {
+        let output = expanded(
+            "",
+            "/// Blink.\n#[allow(clippy::unnecessary_unwrap)]\nasync fn run(cx: run::Context) {}",
+        )
+        .unwrap();
+        assert!(output.contains("doc = \" Blink.\""), "{output}");
+        assert!(
+            output.contains("allow (clippy :: unnecessary_unwrap)"),
+            "{output}"
+        );
     }
 }
