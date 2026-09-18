@@ -33,11 +33,14 @@ it runs on any board with the chip.
 | Command | Does |
 | --- | --- |
 | `ferroforge new <path> [--chip <name>]` | Create a project |
+| `ferroforge add <name> --chip <name>` | Add a firmware to the project you are in |
 | `ferroforge check [<firmware>]` | Sync, then `cargo check` |
 | `ferroforge build [<firmware>]` | Sync, then `cargo build --release` |
 | `ferroforge run [<firmware>]` | Sync, then flash and run with probe-rs |
 | `ferroforge sync [<firmware>]` | Rewrite the files the chip implies |
-| `ferroforge chips` | List the supported chips |
+| `ferroforge check --all`, `build --all`, `sync --all` | The same for every firmware, one status line each |
+| `ferroforge drift` | Compare code marked as copied between firmwares |
+| `ferroforge chips [--names]` | List the supported chips, with HAL, target and memory |
 
 A project is the nearest directory above you holding a `firmware/`. Each
 firmware names its chip in its `Cargo.toml`, and `sync` derives `memory.x`,

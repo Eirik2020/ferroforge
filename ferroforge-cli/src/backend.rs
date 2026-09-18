@@ -41,6 +41,53 @@ pub fn known_chips() -> Vec<&'static str> {
     BUILTIN.iter().map(|(name, _)| *name).collect()
 }
 
+/// Every known chip with the facts a person picks one by: its HAL, target and
+/// memory. Read from the same data a build uses, so it cannot disagree with it.
+pub fn chip_table() -> Result<String, Error> {
+    let mut rows = vec![[
+        "CHIP".to_owned(),
+        "HAL".to_owned(),
+        "TARGET".to_owned(),
+        "FLASH".to_owned(),
+        "RAM".to_owned(),
+    ]];
+    for chip in known_chips() {
+        let backend = Backend::for_chip(chip)?;
+        let hal = backend
+            .platform_dependencies
+            .keys()
+            .find(|name| name.ends_with("-hal"))
+            .cloned()
+            .unwrap_or_else(|| "-".to_owned());
+        rows.push([
+            chip.to_owned(),
+            hal,
+            backend.chip.rust_target.clone(),
+            human_size(backend.memory.flash_size),
+            human_size(backend.memory.ram_size),
+        ]);
+    }
+
+    let mut widths = [0; 5];
+    for row in &rows {
+        for (width, cell) in widths.iter_mut().zip(row) {
+            *width = (*width).max(cell.len());
+        }
+    }
+    let mut table = String::new();
+    for row in &rows {
+        let line = row
+            .iter()
+            .zip(widths)
+            .map(|(cell, width)| format!("{cell:width$}"))
+            .collect::<Vec<_>>()
+            .join("   ");
+        table.push_str(line.trim_end());
+        table.push('\n');
+    }
+    Ok(table)
+}
+
 /// Every chip feature any known backend enables on a platform crate, such as
 /// `stm32f401`. A firmware enabling one of these itself is naming a chip outside
 /// the generated block, where nothing keeps it in step.

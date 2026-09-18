@@ -20,21 +20,17 @@
 
 use defmt_rtt as _;
 use panic_probe as _;
-use rtic_monotonics::systick::prelude::*;
-
-systick_monotonic!(Mono, 1000);
 
 ferroforge::app! {
     device = stm32h7xx_hal::pac,
     dispatchers = [USART1],
-    monotonic = Mono,
+
+    use rtic_monotonics::systick::prelude::*;
+
+    systick_monotonic!(Mono, 1000);
 
     use ferroforge_task_blinky::report;
     use ferroforge_task_stm32h7_timer::on_timer;
-    // The firmware's own task below reads the clock, so the trait and the
-    // duration extension have to be in scope here. `app!` no longer imports
-    // them for you - the monotonic is yours, as in ordinary RTIC.
-    use rtic_monotonics::{Monotonic as _, fugit::ExtU32 as _};
     use stm32h7xx_hal::{
         gpio::{Output, PushPull, gpiob::PB0},
         pac::TIM2,

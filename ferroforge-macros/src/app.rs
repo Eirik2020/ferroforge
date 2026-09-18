@@ -140,6 +140,10 @@ fn instance_attribute(attributes: &[Attribute]) -> Option<TaskAttribute> {
 /// The type name substituted for a task's monotonic slot. An alias rather than
 /// the author's own name, so an application that declares no monotonic still
 /// has something to put in the slot.
+///
+/// The name comes from the declaration itself: every `rtic-monotonics` macro is
+/// `<timer>_monotonic!(Name, ..)`, written inside the application as in ordinary
+/// RTIC, so there is nothing for the header to restate.
 const MONOTONIC_SLOT: &str = "__FfMonotonic";
 
 /// What the slot resolves to when nothing was declared. Named for what it means,
@@ -151,9 +155,6 @@ pub struct App {
     dispatchers: Vec<Ident>,
     /// `None` leaves RTIC's own default alone rather than restating it.
     peripherals: Option<LitBool>,
-    /// The application's monotonic, declared outside this macro as in ordinary
-    /// RTIC and named here so adapters can hand it to tasks.
-    monotonic: Option<Ident>,
     elements: Vec<Element>,
 }
 
@@ -164,7 +165,6 @@ impl Parse for App {
         let mut device: Option<Path> = None;
         let mut dispatchers = Vec::new();
         let mut peripherals = None;
-        let mut monotonic = None;
         let mut seen: Vec<String> = Vec::new();
 
         // A header entry is `ident = ...`. Items begin with `#`, or a keyword
@@ -186,13 +186,21 @@ impl Parse for App {
                 "device" => device = Some(input.parse()?),
                 "dispatchers" => dispatchers = bracketed_list(input)?,
                 "peripherals" => peripherals = Some(input.parse()?),
-                "monotonic" => monotonic = Some(input.parse()?),
+                // It was one, and RTIC never had it. Saying where it went is
+                // cheaper than leaving the author to find out.
+                "monotonic" => {
+                    return Err(syn::Error::new(
+                        key.span(),
+                        "`monotonic` is not an argument: declare the monotonic inside \
+                         `app!`, as in RTIC, e.g. `systick_monotonic!(Mono, 1000);`",
+                    ));
+                }
                 other => {
                     return Err(syn::Error::new(
                         key.span(),
                         format!(
                             "unknown argument `{other}`; expected `device`, \
-                             `dispatchers`, `peripherals` or `monotonic`"
+                             `dispatchers` or `peripherals`"
                         ),
                     ));
                 }
@@ -225,10 +233,58 @@ impl Parse for App {
             device,
             dispatchers,
             peripherals,
-            monotonic,
             elements,
         })
     }
+}
+
+/// The type a `<timer>_monotonic!(Name, ..)` item declares, if it is one.
+fn declared_monotonic(item: &Item) -> syn::Result<Option<Ident>> {
+    let Item::Macro(item) = item else {
+        return Ok(None);
+    };
+    let is_monotonic = item
+        .mac
+        .path
+        .segments
+        .last()
+        .is_some_and(|segment| segment.ident.to_string().ends_with("_monotonic"));
+    if !is_monotonic {
+        return Ok(None);
+    }
+    item.mac
+        .parse_body_with(|input: ParseStream<'_>| {
+            let name = input.parse::<Ident>()?;
+            input.parse::<TokenStream>()?;
+            Ok(name)
+        })
+        .map(Some)
+}
+
+/// The application's monotonic. Tasks are handed one clock type, so two
+/// declarations would leave the adapters with a choice only the author can
+/// make; that is refused at the second rather than resolved by position.
+fn application_monotonic(elements: &[Element]) -> syn::Result<Option<Ident>> {
+    let mut found: Option<Ident> = None;
+    for element in elements {
+        let Element::Verbatim(item) = element else {
+            continue;
+        };
+        let Some(name) = declared_monotonic(item)? else {
+            continue;
+        };
+        if let Some(first) = &found {
+            return Err(syn::Error::new(
+                name.span(),
+                format!(
+                    "a second monotonic; tasks are handed one clock, and `{first}` is \
+                     already declared"
+                ),
+            ));
+        }
+        found = Some(name);
+    }
+    Ok(found)
 }
 
 fn prepend_attributes(item: &mut Item, mut attributes: Vec<Attribute>) -> syn::Result<()> {
@@ -240,6 +296,7 @@ fn prepend_attributes(item: &mut Item, mut attributes: Vec<Attribute>) -> syn::R
         Item::Const(item) => &mut item.attrs,
         Item::Type(item) => &mut item.attrs,
         Item::Mod(item) => &mut item.attrs,
+        Item::Macro(item) => &mut item.attrs,
         other => {
             return Err(syn::Error::new(
                 other.span(),
@@ -368,9 +425,9 @@ pub fn expand(application: App) -> syn::Result<TokenStream> {
         device,
         dispatchers,
         peripherals,
-        monotonic,
         elements,
     } = application;
+    let monotonic = application_monotonic(&elements)?;
 
     let mut body = Vec::new();
     for element in &elements {
@@ -389,13 +446,11 @@ pub fn expand(application: App) -> syn::Result<TokenStream> {
     // Every task context carries a monotonic slot, so the slot always needs a
     // type. An application that declared one aliases it; one that did not gets
     // an uninhabited stand-in, and a task that actually needs a clock then fails
-    // against a name that says why.
+    // against a name that says why. The declaration itself stays where the
+    // author wrote it, among the items, so `init` and tasks name it directly.
     let slot = format_ident!("{MONOTONIC_SLOT}");
     let monotonic = match monotonic {
-        // Imported under the author's own name as well, because `init` starts it
-        // and tasks may use it directly, exactly as in ordinary RTIC.
         Some(name) => quote! {
-            use super::#name;
             type #slot = #name;
         },
         None => {
@@ -423,8 +478,7 @@ mod tests {
     use super::*;
 
     fn expand_source(tasks: &str) -> syn::Result<TokenStream> {
-        let source =
-            format!("device = chip::pac, dispatchers = [SPARE], monotonic = Mono,\n{tasks}");
+        let source = format!("device = chip::pac, dispatchers = [SPARE],\n{tasks}");
         expand(syn::parse_str::<App>(&source)?)
     }
 
@@ -481,7 +535,7 @@ mod header {
     #[test]
     fn arguments_may_appear_in_any_order() {
         assert!(
-            parse("dispatchers = [A], monotonic = Mono, device = chip::pac,").is_ok(),
+            parse("dispatchers = [A], peripherals = true, device = chip::pac,").is_ok(),
             "order must not matter, as in RTIC"
         );
     }
@@ -522,7 +576,14 @@ mod header {
         let error = refused("device = chip::pac, monotonic_hz = 1000,");
         assert!(error.contains("monotonic_hz"), "{error}");
         assert!(error.contains("dispatchers"), "{error}");
-        assert!(error.contains("monotonic"), "{error}");
+        assert!(error.contains("peripherals"), "{error}");
+    }
+
+    /// The header argument it used to be must say where the declaration went.
+    #[test]
+    fn monotonic_in_the_header_points_at_the_declaration() {
+        let error = refused("device = chip::pac, monotonic = Mono,");
+        assert!(error.contains("systick_monotonic!"), "{error}");
     }
 
     /// An application without a monotonic still has a slot to fill, so it gets
@@ -533,11 +594,45 @@ mod header {
         assert!(output.contains(NO_MONOTONIC), "{output}");
     }
 
-    /// With one, the author's own name is in scope too - `init` starts it.
+    /// Declared inside, as in RTIC: the declaration stays among the items, and
+    /// its type fills the slot.
     #[test]
-    fn a_declared_monotonic_is_imported_under_its_own_name() {
-        let output = rendered("device = chip::pac, monotonic = Mono,");
-        assert!(output.contains("use super :: Mono"), "{output}");
+    fn a_monotonic_declared_inside_fills_the_slot() {
+        let output = rendered("device = chip::pac, systick_monotonic!(Mono, 1000);");
+        assert!(
+            output.contains("systick_monotonic ! (Mono , 1000)"),
+            "{output}"
+        );
+        assert!(output.contains("type __FfMonotonic = Mono"), "{output}");
         assert!(!output.contains(NO_MONOTONIC), "{output}");
+    }
+
+    /// Any timer's macro, by any path: they all share the `_monotonic` suffix.
+    #[test]
+    fn any_rtic_monotonics_macro_is_recognized() {
+        let output = rendered(
+            "device = chip::pac, rtic_monotonics::stm32_tim2_monotonic!(Clock, 1_000_000);",
+        );
+        assert!(output.contains("type __FfMonotonic = Clock"), "{output}");
+    }
+
+    /// Other item macros are the author's and pass through untouched.
+    #[test]
+    fn other_item_macros_are_not_monotonics() {
+        let output = rendered("device = chip::pac, some_macro!(Thing);");
+        assert!(output.contains("some_macro ! (Thing)"), "{output}");
+        assert!(output.contains(NO_MONOTONIC), "{output}");
+    }
+
+    #[test]
+    fn a_second_monotonic_is_refused() {
+        let application = parse(
+            "device = chip::pac, systick_monotonic!(A, 1000); \
+             stm32_tim2_monotonic!(B, 1000);",
+        )
+        .unwrap();
+        let error = expand(application).unwrap_err().to_string();
+        assert!(error.contains("second monotonic"), "{error}");
+        assert!(error.contains('A'), "{error}");
     }
 }

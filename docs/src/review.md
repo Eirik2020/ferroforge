@@ -121,6 +121,25 @@ mandatory; RTIC parses a loop with defaults. Swapping two arguments reported
 `dispatchers` optional and defaulting to empty as RTIC's does, and `peripherals`
 passed through when stated rather than restated here where it could drift.
 
+**Drift checking for code that must be duplicated, 2026-09-18.** Some code
+cannot be a reusable task and has to be copied between firmwares. Copies marked
+`// ferroforge:begin <name>` / `// ferroforge:end <name>` are compared by
+`ferroforge drift`, one to one after ignoring layout and `//` notes. It is not
+a way to share code: anything that can be a task should be one. Nested regions
+are compared individually, outer first; unmatched markers are errors. Settings
+such as ignoring interrupt bindings will come from one project-wide file, and
+without it the comparison stays one to one - see
+[remaining work](implementation-plan.md). Specified in
+[workflow](workflow.md#the-cli).
+
+**The monotonic is declared inside `app!`, 2026-09-18.** The `monotonic = Mono`
+header argument is gone; RTIC has no such argument, and the declaration already
+names the type. `app!` reads it from any `<timer>_monotonic!(Name, ..)` item in
+the application, refuses a second, and points a header that still names one at
+the declaration. This replaces "above `app!`" and the header naming in the
+decision below; the rest of it stands. See
+[architecture](architecture.md#firmware-composition).
+
 **`monotonic_hz` replaced by `monotonic`, 2026-09-17.** It had no RTIC
 counterpart, invented a frequency, and made every application claim SysTick
 whether or not anything read time. A firmware now declares its own monotonic

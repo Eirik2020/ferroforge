@@ -35,8 +35,9 @@ HAL-specific task declares, a task needing a monotonic the application lacks, a
 dispatcher that is also bound, and too few dispatchers - asserting the message
 each one must fail with. Each unmutated copy is checked first, so a broken
 harness cannot pass as a rejection. It also runs `ferroforge new` and then
-`ferroforge build` for one chip per HAL family, and fails on any warning,
-because that is the first thing a new user sees.
+`ferroforge build` for one chip per HAL family, then `ferroforge add` and
+`build` for each family into one project, and fails on any warning, because
+that is the first thing a new user sees.
 
 Run them when changing an expansion. A case that starts failing with the wrong
 message is the point: it means a defect stopped being diagnosable at the
@@ -48,23 +49,63 @@ The verbs are Cargo's, because a firmware crate is an ordinary Cargo package:
 
 ```text
 ferroforge new <path> [--chip <name>]   a project that runs, see below
-ferroforge sync  [<firmware>]           refresh what the chip implies
-ferroforge check [<firmware>]           sync, then cargo check
-ferroforge build [<firmware>]           sync, then cargo build --release
+ferroforge add <name> --chip <name>     another firmware in this project
+ferroforge sync  [<firmware> | --all]   refresh what the chip implies
+ferroforge check [<firmware> | --all]   sync, then cargo check
+ferroforge build [<firmware> | --all]   sync, then cargo build --release
 ferroforge run   [<firmware>]           sync, then cargo run --release
-ferroforge chips                        the chips this build knows
+ferroforge drift                        compare code copied between firmwares
+ferroforge chips [--names]              the chips this build knows
 ```
 
 Anything after `--` is passed to Cargo untouched.
 
-`new` writes one firmware and one task crate, and the firmware runs as soon as
-it is flashed: it selects a `heartbeat` task that logs over RTT, starts from the
-internal oscillator and uses no pins, so it runs on any board carrying the chip.
-Its clock setup is the only HAL-specific code in it. `new` holds one per HAL,
-taken from a firmware that has run on hardware, and refuses a chip whose HAL it
-has none for rather than writing one that cannot start. The project depends on
-the published `ferroforge`; `--ferroforge <path>` points it at a checkout
-instead, for working on FerroForge itself.
+`new` writes one firmware and one task crate, `tasks/heartbeat`, and the
+firmware runs as soon as it is flashed: it selects a `heartbeat` task that logs
+over RTT, starts from the internal oscillator and uses no pins, so it runs on
+any board carrying the chip. Its clock setup is the only HAL-specific code in
+it. `new` holds one per HAL, taken from a firmware that has run on hardware, and
+refuses a chip whose HAL it has none for rather than writing one that cannot
+start. The project depends on the published `ferroforge`; `--ferroforge <path>`
+points it at a checkout instead, for working on FerroForge itself.
+
+`add` writes `firmware/<name>/` in the project you are in, and nothing else. It
+selects `heartbeat` from `tasks/heartbeat`, the crate `new` wrote, the way a
+second firmware reuses any definition, and creates no tasks: once that crate is
+authored code, it is the project's, and a firmware selecting a task that is gone
+fails to build in Cargo like any other missing dependency. `--chip` is required,
+because a guessed chip gives a firmware that links and cannot run. It depends on
+FerroForge as the project's existing firmware does, so a project made against a
+checkout stays on it; `--ferroforge` overrides that. A name that is not a valid
+package name, an existing firmware or an unknown chip is refused before anything
+is written. Neither command accepts `heartbeat` as a firmware name, because a
+package cannot depend on another with its own name.
+
+`drift` is for code that has to be duplicated between firmwares because it
+cannot become a reusable task: an `init` fragment, a resource layout, a task
+declaration. Code that can be a task should be one, and then it cannot drift.
+Each copy is marked with the same name, in any `.rs` file under a firmware's
+`src/`:
+
+```rust,ignore
+// ferroforge:begin control_loop
+...
+// ferroforge:end control_loop
+```
+
+Copies are compared one to one, ignoring indentation, blank lines and
+whole-line `//` comments; doc comments and marker lines count. Each region
+gets one line - `same`, `DRIFT`, or `alone` when only one firmware marks it,
+which is also what a misspelt name looks like. Drift shows the differing lines
+with their line numbers, against the first firmware that marks the region.
+Regions may nest, and each is compared on its own, outer first with inner ones
+indented beneath, so the inner results narrow down drift in the outer one. A
+name marks one region per firmware. A begin without an end, an end without a
+begin, or markers that cross are errors at their line, and nothing is compared
+until they are fixed. The command fails on drift or an error, not on `alone`.
+
+`chips` prints each chip with its HAL, target and memory, read from the same
+data a build uses. `--names` prints the names alone, for scripts.
 
 A project is the nearest parent directory holding a `firmware/`. That is the
 whole convention - there is no marker file and nothing to initialize, so a
@@ -75,6 +116,15 @@ Which application a command applies to is resolved the way Cargo resolves a
 package: a name if you give one, otherwise the firmware you are standing in,
 otherwise the only one there is. Anything else is ambiguous and lists the
 candidates.
+
+`--all` runs `sync`, `check` or `build` over every firmware in the project
+instead, and nothing under `tasks/`: a task crate is checked by the firmware
+that selects it, or on its own as below. Each firmware is its own Cargo
+workspace, so this is one Cargo invocation per firmware, in name order. Each
+gets one line - `ok`, `warn` or `FAILED` - and Cargo's output is shown under a
+`warn` or a `FAILED` only. A failure does not stop the rest, because the point
+is to learn which are broken; the command fails if any did. Warnings alone do
+not fail it. Arguments after `--` go to every invocation.
 
 Each firmware declares its chip, and everything the chip implies follows from
 that alone:

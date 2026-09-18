@@ -1,4 +1,5 @@
-//! `ferroforge new`: a project that builds before you have written anything.
+//! `ferroforge new` and `ferroforge add`: firmware that builds before you have
+//! written anything.
 //!
 //! The layout it writes is the convention the rest of the CLI recognizes -
 //! `firmware/` holding applications, `tasks/` holding reusable definitions -
@@ -12,6 +13,7 @@ use crate::backend::{self, Backend};
 #[derive(Debug)]
 pub enum Error {
     Exists { path: String },
+    InvalidName { name: String, reason: &'static str },
     UnknownChip { chip: String, known: String },
     NoStarter { chip: String },
     Backend(backend::Error),
@@ -23,6 +25,9 @@ impl fmt::Display for Error {
         match self {
             Self::Exists { path } => {
                 write!(formatter, "{path} already exists")
+            }
+            Self::InvalidName { name, reason } => {
+                write!(formatter, "`{name}` cannot name a firmware: {reason}")
             }
             Self::UnknownChip { chip, known } => write!(
                 formatter,
@@ -53,6 +58,25 @@ fn write(path: &Path, contents: &str) -> Result<(), Error> {
     })
 }
 
+/// The backend for a chip and the starting firmware for its HAL. Both are
+/// needed before anything is written, so a chip that cannot be started is
+/// refused up front rather than leaving half a firmware behind.
+fn resolve(chip: &str) -> Result<(Backend, &'static Starter), Error> {
+    let backend = Backend::for_chip(chip).map_err(|error| match error {
+        backend::Error::UnknownChip { chip, known } => Error::UnknownChip { chip, known },
+        other => Error::Backend(other),
+    })?;
+    let starter = starter(&backend).ok_or_else(|| Error::NoStarter {
+        chip: chip.to_owned(),
+    })?;
+    Ok((backend, starter))
+}
+
+/// The task crate `new` writes and every firmware it or `add` writes selects
+/// from. A fixed name, not the project's: `add` has to find it again, and a
+/// project directory can be renamed.
+const TASK_CRATE: &str = "heartbeat";
+
 /// `ferroforge` is how the generated manifests depend on FerroForge: the
 /// published version requirement, or a path to a checkout.
 pub fn create(root: &Path, chip: &str, ferroforge: &str) -> Result<(), Error> {
@@ -61,53 +85,166 @@ pub fn create(root: &Path, chip: &str, ferroforge: &str) -> Result<(), Error> {
             path: root.display().to_string(),
         });
     }
-    // Fail before writing anything if the chip is unknown, rather than leaving
-    // half a project behind.
-    let backend = Backend::for_chip(chip).map_err(|error| match error {
-        backend::Error::UnknownChip { chip, known } => Error::UnknownChip { chip, known },
-        other => Error::Backend(other),
-    })?;
-    let starter = starter(&backend).ok_or_else(|| Error::NoStarter {
-        chip: chip.to_owned(),
-    })?;
+    let (backend, starter) = resolve(chip)?;
 
     let name = root
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| "firmware".to_owned());
-    let firmware = root.join("firmware").join(&name);
-    let task_crate = format!("{name}-tasks");
+    validate_name(&name)?;
+    let task_crate = TASK_CRATE;
 
-    write(
-        &firmware.join("Cargo.toml"),
-        &firmware_manifest(&name, chip, &task_crate, ferroforge),
+    let derived = write_firmware(
+        &root.join("firmware").join(&name),
+        &name,
+        chip,
+        &backend,
+        starter,
+        task_crate,
+        ferroforge,
     )?;
-    write(
-        &firmware.join("src/main.rs"),
-        &main_rs(&backend, starter, &task_crate),
-    )?;
-    let tasks = root.join("tasks").join(&task_crate);
-    write(
-        &tasks.join("Cargo.toml"),
-        &task_manifest(&task_crate, ferroforge),
-    )?;
-    write(&tasks.join("src/lib.rs"), TASK_LIB)?;
+    write_task_crate(root, task_crate, ferroforge)?;
     write(&root.join(".gitignore"), "target/\n")?;
-
-    // Everything the chip implies, written by the same code a later `sync`
-    // uses, so a new project is already in the state `sync` would leave it.
-    let written = backend.emit(&firmware, "info").map_err(Error::Backend)?;
 
     let shown = root.display().to_string().replace('\\', "/");
     println!("created {shown}");
     println!("  firmware/{name}/ for {}", backend.chip.name);
     println!("  tasks/{task_crate}/");
-    println!(
-        "  {} files derived from the chip, already written",
-        written.len()
-    );
+    println!("  {derived} files derived from the chip, already written");
     println!("\nnext: cd {shown} && ferroforge run");
     Ok(())
+}
+
+/// `ferroforge add`: another firmware in a project that already exists.
+///
+/// It selects `heartbeat` from the task crate `new` wrote, and writes no tasks
+/// of its own: the task crate is authored code by now, and a firmware reusing
+/// a definition is the point. If that crate has since been removed, the new
+/// firmware fails to build in Cargo, on the dependency it names.
+///
+/// `ferroforge` is how its manifest depends on FerroForge. Without one it is
+/// taken from a firmware already in the project, so a project made against a
+/// checkout stays on that checkout.
+pub fn add(root: &Path, name: &str, chip: &str, ferroforge: Option<&str>) -> Result<(), Error> {
+    validate_name(name)?;
+    let firmware = root.join("firmware").join(name);
+    if firmware.exists() {
+        return Err(Error::Exists {
+            path: format!("firmware/{name}"),
+        });
+    }
+    let (backend, starter) = resolve(chip)?;
+
+    let ferroforge = match ferroforge {
+        Some(dependency) => dependency.to_owned(),
+        None => inherited_dependency(root).unwrap_or_else(|| PUBLISHED.to_owned()),
+    };
+    let task_crate = TASK_CRATE;
+    let derived = write_firmware(
+        &firmware,
+        name,
+        chip,
+        &backend,
+        starter,
+        task_crate,
+        &ferroforge,
+    )?;
+
+    println!("added firmware/{name}/ for {}", backend.chip.name);
+    println!("  selects `heartbeat` from tasks/{task_crate}/");
+    println!("  {derived} files derived from the chip, already written");
+    println!("\nnext: ferroforge run {name}");
+    Ok(())
+}
+
+/// The published crate, as a manifest value.
+pub const PUBLISHED: &str = "\"0.1\"";
+
+/// The `ferroforge = ...` value of the first firmware in the project that has
+/// one. Firmwares all sit at `firmware/<name>/`, so a relative path means the
+/// same thing copied into a sibling.
+fn inherited_dependency(root: &Path) -> Option<String> {
+    let mut manifests = fs::read_dir(root.join("firmware"))
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path().join("Cargo.toml"))
+        .collect::<Vec<_>>();
+    manifests.sort();
+    manifests.iter().find_map(|manifest| {
+        let text = fs::read_to_string(manifest).ok()?;
+        let mut in_dependencies = false;
+        text.lines().find_map(|line| {
+            let line = line.trim();
+            if line.starts_with('[') {
+                in_dependencies = line == "[dependencies]";
+                return None;
+            }
+            let (key, value) = line.split_once('=')?;
+            (in_dependencies && key.trim() == "ferroforge").then(|| value.trim().to_owned())
+        })
+    })
+}
+
+/// The name becomes a directory, a Cargo package and a binary, so it has to be
+/// all three. Cargo would refuse a bad one later, but from inside a build and
+/// after the directory had been written.
+fn validate_name(name: &str) -> Result<(), Error> {
+    let refuse = |reason| {
+        Err(Error::InvalidName {
+            name: name.to_owned(),
+            reason,
+        })
+    };
+    let Some(first) = name.chars().next() else {
+        return refuse("it is empty");
+    };
+    if !first.is_ascii_alphabetic() {
+        return refuse("it must start with a letter");
+    }
+    if !name
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+    {
+        return refuse("use letters, digits, `-` and `_` only");
+    }
+    if name == TASK_CRATE {
+        return refuse("it is the task crate's name, and a package cannot depend on its own name");
+    }
+    Ok(())
+}
+
+/// One firmware: its manifest, its source, and everything its chip implies.
+/// Returns how many files came from the chip.
+fn write_firmware(
+    firmware: &Path,
+    name: &str,
+    chip: &str,
+    backend: &Backend,
+    starter: &Starter,
+    task_crate: &str,
+    ferroforge: &str,
+) -> Result<usize, Error> {
+    write(
+        &firmware.join("Cargo.toml"),
+        &firmware_manifest(name, chip, task_crate, ferroforge),
+    )?;
+    write(
+        &firmware.join("src/main.rs"),
+        &main_rs(backend, starter, task_crate),
+    )?;
+    // Written by the same code a later `sync` uses, so a new firmware is
+    // already in the state `sync` would leave it.
+    let written = backend.emit(firmware, "info").map_err(Error::Backend)?;
+    Ok(written.len())
+}
+
+fn write_task_crate(root: &Path, task_crate: &str, ferroforge: &str) -> Result<(), Error> {
+    let tasks = root.join("tasks").join(task_crate);
+    write(
+        &tasks.join("Cargo.toml"),
+        &task_manifest(task_crate, ferroforge),
+    )?;
+    write(&tasks.join("src/lib.rs"), TASK_LIB)
 }
 
 fn firmware_manifest(name: &str, chip: &str, task_crate: &str, ferroforge: &str) -> String {
@@ -251,15 +388,15 @@ fn main_rs(backend: &Backend, starter: &Starter, task_crate: &str) -> String {
          #![no_std]\n\
          #![no_main]\n\n\
          use defmt_rtt as _;\n\
-         use panic_probe as _;\n\
-         use rtic_monotonics::systick::prelude::*;\n\n\
-         systick_monotonic!(Mono, 1000);\n\n\
+         use panic_probe as _;\n\n\
          ferroforge::app! {{\n\
          \x20   device = {device},\n\
          \x20   // Software tasks run from interrupts the application does not\n\
          \x20   // otherwise use. Pick another if this one becomes a peripheral's.\n\
-         \x20   dispatchers = [SPI1],\n\
-         \x20   monotonic = Mono,\n\n\
+         \x20   dispatchers = [SPI1],\n\n\
+         \x20   use rtic_monotonics::systick::prelude::*;\n\n\
+         \x20   // The clock tasks are handed. `heartbeat` needs 1 kHz.\n\
+         \x20   systick_monotonic!(Mono, 1000);\n\n\
          \x20   use {crate_path}::heartbeat;\n\
          \x20   {imports}\n\n\
          \x20   #[shared]\n\

@@ -30,7 +30,9 @@ its needs to the firmware's own resources and values:
 ferroforge::app! {
     device = stm32f4xx_hal::pac,
     dispatchers = [SPI1],
-    monotonic = Mono,
+
+    use rtic_monotonics::systick::prelude::*;
+    systick_monotonic!(Mono, 1000);
 
     use my_tasks::heartbeat;
 

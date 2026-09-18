@@ -75,13 +75,15 @@ const CASES: &[Case] = &[
         expected: "expected `u32`, found `Counter",
     },
     // A task that needs a clock, in an application that declares no monotonic.
-    // The slot is filled with a stand-in named for exactly that.
+    // The slot is filled with a stand-in named for exactly that. `Mono` still
+    // exists, hidden behind a macro `app!` does not recognize, so `init` still
+    // compiles and the only failure is the task's.
     Case {
         name: "task-needs-a-monotonic-the-application-lacks",
         firmware: BASE,
-        from: "    monotonic = Mono,
-",
-        to: "",
+        from: "systick_monotonic!(Mono, 1000);",
+        to: "macro_rules! clock { () => { systick_monotonic!(Mono, 1000); } }
+    clock!();",
         expected: "NoMonotonicDeclared",
     },
     // Dispatchers are the author's choice, passed through unchanged - so RTIC's

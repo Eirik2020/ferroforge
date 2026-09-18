@@ -115,10 +115,14 @@ asserting nothing. See [workflow](workflow.md) for how to run them.
   everything else follows: `memory.x`, `.cargo/config.toml`, `Embed.toml` and
   the platform crates in its manifest. No chip fact is maintained twice.
 - A project is the nearest parent holding a `firmware/`, with no marker file.
-  `ferroforge new` writes that layout, and the CLI's verbs are Cargo's.
+  `ferroforge new` writes that layout, `ferroforge add` adds a firmware to it,
+  and the CLI's verbs are Cargo's.
+- `ferroforge drift` compares code marked as copied between firmwares, one to
+  one, with no settings yet.
 - `app!`'s header is RTIC's: parsed as a loop so order does not matter, with
   `dispatchers` and `peripherals` optional and defaulting to RTIC's own
-  behaviour. The firmware declares its monotonic itself, as in ordinary RTIC.
+  behaviour. The firmware declares its monotonic inside `app!`, as in ordinary
+  RTIC, and `app!` takes the type tasks are handed from that declaration.
 - Four chips are known, across two HAL families, and switching one line of a
   firmware's `Cargo.toml` rewrites every derived artifact. A part with more
   memory than the `FLASH`/`RAM` pair lists the rest as extra regions, which

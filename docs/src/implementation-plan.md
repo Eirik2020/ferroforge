@@ -24,6 +24,16 @@ completions that never happen. The open question is whether a transmitting
 firmware needs anything from these tasks that the receive side did not already
 force into `Port`.
 
+## Drift Settings
+
+`ferroforge drift` compares marked copies one to one. Differences that are
+expected between firmwares - interrupt bindings, pins, peripheral names - need
+settings, and they will live in one project-wide file; a project without one
+keeps the one-to-one comparison. Undecided: the file's name, and what a setting
+can express. "Ignore interrupt bindings" and "only look for a keyword" are the
+first two wanted. This would be the first project-level file, where so far a
+project has been only a directory holding `firmware/`.
+
 ## Evidence Rules
 
 Recording that something builds is not evidence; record exact paths, targets,

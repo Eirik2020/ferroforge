@@ -123,19 +123,21 @@ not matter, with a default for everything a firmware need not say:
 | `device` | required; the PAC, as RTIC's |
 | `dispatchers` | optional, empty by default, passed through unchanged |
 | `peripherals` | optional, passed through only when stated |
-| `monotonic` | optional; names a monotonic the firmware declared itself |
 
 Which interrupts are free to dispatch software tasks depends on the
 application's own peripheral use, so the list is the author's and `app!` adds
 nothing to it. RTIC checks the choice: a dispatcher that is also bound, or too
 few for the priorities in use, is an error on the authored line.
 
-Only `monotonic` is not RTIC's, and it exists because call-through needs it: a
-task crate is generic over the clock, so the adapter has to be handed a type.
-The monotonic is declared outside `app!` exactly as an RTIC user declares one,
-and `init` starts it the same way. An application that needs no clock names none,
-and a task that does need one then fails against a type called
-`NoMonotonicDeclared`.
+The monotonic is declared inside `app!` exactly as an RTIC user declares one
+inside `#[rtic::app]`, `systick_monotonic!(Mono, 1000);`, and `init` starts it
+the same way. Call-through still needs its type, because a task crate is
+generic over the clock and the adapter has to hand it one: `app!` reads it from
+that declaration, recognizing any `<timer>_monotonic!(Name, ..)` item, which is
+how every `rtic-monotonics` macro is named. Tasks are handed one clock, so a
+second declaration is refused. An application that declares none leaves the
+slot to a type called `NoMonotonicDeclared`, which a task needing a clock then
+fails against. A monotonic declared outside `app!` is not seen.
 
 Each instance declaration names the definition it comes from and maps the
 reusable names onto the firmware's own:

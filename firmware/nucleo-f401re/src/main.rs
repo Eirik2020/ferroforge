@@ -9,17 +9,17 @@
 
 use defmt_rtt as _;
 use panic_probe as _;
-use rtic_monotonics::systick::prelude::*;
-
-// The monotonic is this firmware's, declared as in ordinary RTIC. 1 kHz is not
-// a free choice: a task declaring `monotonic = Mono` is bounded on
-// `Duration<u32, 1, 1000>`, so anything else fails to unify.
-systick_monotonic!(Mono, 1000);
 
 ferroforge::app! {
     device = stm32f4xx_hal::pac,
     dispatchers = [USART1],
-    monotonic = Mono,
+
+    use rtic_monotonics::systick::prelude::*;
+
+    // The monotonic is this firmware's, declared as in ordinary RTIC. 1 kHz is
+    // not a free choice: a task declaring `monotonic = Mono` is bounded on
+    // `Duration<u32, 1, 1000>`, so anything else fails to unify.
+    systick_monotonic!(Mono, 1000);
 
     use ferroforge_task_blinky::{blink, on_tick, report};
     use stm32f4xx_hal::{

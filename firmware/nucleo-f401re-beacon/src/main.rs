@@ -26,9 +26,6 @@
 
 use defmt_rtt as _;
 use panic_probe as _;
-use rtic_monotonics::systick::prelude::*;
-
-systick_monotonic!(Mono, 1000);
 
 ferroforge::app! {
     device = stm32f4xx_hal::pac,
@@ -37,14 +34,15 @@ ferroforge::app! {
     // peripheral raising the same vector would land in the dispatcher instead
     // of its own handler. SPI1 is unused on this board.
     dispatchers = [USART2, SPI1],
-    monotonic = Mono,
+
+    use rtic_monotonics::systick::prelude::*;
+
+    systick_monotonic!(Mono, 1000);
 
     use ferroforge_task_blinky::{blink, report};
     use ferroforge_task_msp_displayport::{self as osd, msp::Line, paint};
     use ferroforge_task_stm32f4_timer::on_timer;
     use ferroforge_task_stm32f4_uart_dma as uart_dma;
-    // The status task below reads the clock, so these have to be in scope here.
-    use rtic_monotonics::{Monotonic as _, fugit::ExtU32 as _};
     use stm32f4xx_hal::{
         dma::{
             DmaChannel, DmaDirection, DmaEvent, Stream7, StreamsTuple,
