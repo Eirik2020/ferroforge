@@ -91,8 +91,27 @@ selects for the tasks it touched.
    which overlaps with FerroForge, so the two do not drift. Entry: phase 5
    flown.
 
+## FCU3 Drift
+
+Where FCU3's copy of a task matches Foxeer's, both select one definition.
+Where it differs, FCU3 keeps its own until someone decides which behaviour
+is right; unifying changes one board's behaviour or its logs. Foxeer is the
+golden app, so the default answer is Foxeer's, but each needs a decision:
+
+| Task | How FCU3 differs |
+| --- | --- |
+| `esc_manager_task` | Log wording only; its motor map is a table where Foxeer's is a function, with the same values. |
+| `usart1_rx_dma_transfer`, `usart1_rx_peripheral` | Log wording and layout only. |
+| `safety_master` | No actuator-output inhibit or capped bench mode; a different arming-failure report. |
+| `heartbeat` | A much smaller status report. |
+| `spi1_poll`, `spi1_parser` | An older, timer-driven, MPU6500-only IMU path. |
+| `dma_adc1` | A fixed cell count and an older current formula. |
+| `usb_fs` | A much smaller USB task, without Foxeer's storage CLI or configurator. |
+
 ## Open Decisions
 
+- Each row of [FCU3 drift](#fcu3-drift): unify on Foxeer's behaviour, or keep
+  FCU3's.
 - Overriding a backend's platform crate source (CLI gaps, HAL source).
 - Where a firmware records probe arguments and environment variables (CLI
   gaps, probe and environment settings).
