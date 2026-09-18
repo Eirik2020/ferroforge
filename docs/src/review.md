@@ -246,6 +246,12 @@ A published version cannot be changed, only superseded, so from here a change
 to the context a task receives, to `app!`'s grammar or to the CLI's verbs
 reaches users only as a new version - 0.2 for anything that breaks them.
 
+**0.2, 2026-09-18.** Breaking for 0.1 firmware: `app!` no longer accepts
+`monotonic =` in its header, and the monotonic is declared inside `app!`
+instead. A project made by `new` depends on `ferroforge = "0.2"`, because the
+firmware it writes uses that form. The CLI gains `add`, `--all`, `drift` and the
+chip table, and names the scaffolded task crate `tasks/heartbeat`.
+
 **Next open point:** none in FerroForge itself. What is left in
 [remaining work](implementation-plan.md) concerns the example task crates and
 firmware, not the tool.

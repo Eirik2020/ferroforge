@@ -231,7 +231,7 @@ fn a_scaffolded_project_is_recognized_by_the_convention() {
 
     // A new project depends on the published crate unless told otherwise.
     let manifest = fs::read_to_string(root.join("firmware/scaffolded/Cargo.toml")).unwrap();
-    assert!(manifest.contains("ferroforge = \"0.1\""), "{manifest}");
+    assert!(manifest.contains("ferroforge = \"0.2\""), "{manifest}");
 
     // And the convention must recognize what it just wrote.
     let resynced = ferroforge_in(&root, &["sync"]);
@@ -335,7 +335,7 @@ fn an_added_firmware_reuses_the_projects_task() {
         manifest.contains("heartbeat = { path = \"../../tasks/heartbeat\" }"),
         "{manifest}"
     );
-    assert!(manifest.contains("ferroforge = \"0.1\""), "{manifest}");
+    assert!(manifest.contains("ferroforge = \"0.2\""), "{manifest}");
     let main = fs::read_to_string(firmware.join("src/main.rs")).unwrap();
     assert!(main.contains("use heartbeat::heartbeat;"), "{main}");
     assert!(main.contains("stm32h7xx_hal::pac"), "{main}");

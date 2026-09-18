@@ -159,14 +159,14 @@ dependencies = [
 
 [[package]]
 name = "ferroforge"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ferroforge-macros",
 ]
 
 [[package]]
 name = "ferroforge-contracts"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "proc-macro2",
  "syn",
@@ -174,7 +174,7 @@ dependencies = [
 
 [[package]]
 name = "ferroforge-macros"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ferroforge-contracts",
  "proc-macro2",
