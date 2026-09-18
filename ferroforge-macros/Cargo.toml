@@ -1,6 +1,6 @@
 [package]
 name = "ferroforge-macros"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Procedural macros for the FerroForge RTIC-like application model"
@@ -16,7 +16,7 @@ exclude = ["tests/"]
 proc-macro = true
 
 [dependencies]
-ferroforge-contracts = { version = "0.2.0", path = "../ferroforge-contracts" }
+ferroforge-contracts = { version = "0.3.0", path = "../ferroforge-contracts" }
 proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["full", "visit"] }

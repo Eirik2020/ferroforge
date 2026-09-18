@@ -49,7 +49,7 @@ after `--` go to Cargo.
 
 ## Status
 
-A 0.2 release for testing. Supported chips are the STM32F401RE, F405RG, F411RE
+A 0.3 release for testing. Supported chips are the STM32F401RE, F405RG, F411RE
 and H753ZI. The context a task receives is an interface between task crates and
 firmware and may change between 0.x versions.
 

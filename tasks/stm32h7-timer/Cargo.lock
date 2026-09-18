@@ -94,14 +94,14 @@ checksum = "a21dea9854beb860f3062d10228ce9b976da520a73474aed3171ec276bc0c032"
 
 [[package]]
 name = "ferroforge"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ferroforge-macros",
 ]
 
 [[package]]
 name = "ferroforge-contracts"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "proc-macro2",
  "syn",
@@ -109,7 +109,7 @@ dependencies = [
 
 [[package]]
 name = "ferroforge-macros"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ferroforge-contracts",
  "proc-macro2",

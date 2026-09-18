@@ -158,7 +158,7 @@ pub fn add(root: &Path, name: &str, chip: &str, ferroforge: Option<&str>) -> Res
 }
 
 /// The published crate, as a manifest value.
-pub const PUBLISHED: &str = "\"0.2\"";
+pub const PUBLISHED: &str = "\"0.3\"";
 
 /// The `ferroforge = ...` value of the first firmware in the project that has
 /// one. Firmwares all sit at `firmware/<name>/`, so a relative path means the
