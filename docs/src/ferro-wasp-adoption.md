@@ -6,10 +6,9 @@ chapter is the plan for that: what ferro-wasp needs from FerroForge before it ca
 adopt it, and the order to migrate in. It was written against FerroForge 0.2.0
 and ferro-wasp `370460b`.
 
-Short answer: the macros fit ferro-wasp's architecture except for lock-free
-shared resources, and the CLI cannot manage ferro-wasp's firmware until a few
-decisions are made. The macros are usable without the CLI, so adoption can start
-with the next macro release.
+Short answer: the macros fit ferro-wasp's architecture, and the CLI cannot
+manage ferro-wasp's firmware until a few decisions are made. The macros are
+usable without the CLI, so adoption can start with the next macro release.
 
 ## What Already Fits
 
@@ -29,26 +28,15 @@ with the next macro release.
 
 ## Macro Gaps
 
-Two were settled, both specified in
-[task authoring](architecture.md#task-authoring): a definition declares
-task-local initial values as RTIC does, so `flash_manager_task`'s list moves
-into its definition unchanged, and configuration is read as `CONFIG::FIELD`,
-which works inside `defmt::info!` and every other macro call. Converting a task
-means changing each `CONFIG`-style constant it reads to that form. One remains.
+None remain. Three were settled, all specified in
+[task authoring](architecture.md#task-authoring):
 
-### Lock-Free Shared Resources
-
-RTIC hands a `#[lock_free]` shared resource to a task as `&mut T`, and a
-definition always receives a shared resource as a lock. ferro-wasp's UART
-receive handlers use three - `uart1_rx`, `uart2_rx` and `uart4_rx`, each shared
-by a DMA handler and an idle-line handler at one priority - and call methods on
-them directly, so those handlers cannot become definitions. They can stay plain
-RTIC tasks inside `app!` meanwhile; they belong to phase 4.
-
-Proposal, not yet tried: a definition declares the resource lock-free, as RTIC
-declares it on the resource, and receives `&mut T`. The adapter would not
-change, because it already passes along whatever RTIC hands it. **Needs a
-decision** on the spelling.
+- a definition declares task-local initial values as RTIC does, so
+  `flash_manager_task`'s list moves into its definition unchanged;
+- configuration is read as `CONFIG::FIELD`, which works inside `defmt::info!`
+  and every other macro call;
+- a shared resource can be `#[lock_free]`, so the UART receive handlers sharing
+  `uart1_rx`, `uart2_rx` and `uart4_rx` can become definitions.
 
 ## CLI Gaps
 
@@ -84,8 +72,7 @@ ferro-wasp phase re-runs the tests its own
 [test catalog](https://github.com/Eirik2020/ferro-wasp/tree/main/project_meta/testing)
 selects for the tasks it touched.
 
-1. **FerroForge release.** Release the macro changes. Entry: nothing. The
-   lock-free gap need not hold it: only phase 4 needs it.
+1. **FerroForge release.** Release the macro changes. Entry: nothing.
 2. **Bring-up app.** Move ferro-wasp's NUCLEO-F401RE app under `firmware/` and
    express it with `app!`, depending on `ferroforge` only, not the CLI. Entry:
    phase 1 released.
@@ -106,7 +93,6 @@ selects for the tasks it touched.
 
 ## Open Decisions
 
-- How a definition declares a lock-free shared resource (macro gaps).
 - Overriding a backend's platform crate source (CLI gaps, HAL source).
 - Where a firmware records probe arguments and environment variables (CLI
   gaps, probe and environment settings).

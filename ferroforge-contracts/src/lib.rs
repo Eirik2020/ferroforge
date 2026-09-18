@@ -5,6 +5,8 @@
 
 use std::collections::BTreeSet;
 
+use proc_macro2::Span;
+
 use syn::{
     Error, Expr, FnArg, Ident, LitStr, Pat, Path, ReturnType, Signature, Token, Type,
     TypeParamBound, bracketed, parenthesized,
@@ -25,15 +27,34 @@ pub fn identifier_key(name: &Ident) -> String {
 /// A local resource may also carry an initial value, `name: Type = expr`, as
 /// in RTIC. It is then the task's own state: the definition supplies it, and a
 /// firmware selecting the task binds nothing for it.
+///
+/// A shared resource may be marked `#[lock_free]`, RTIC's own word for a
+/// resource every task sharing it runs at one priority. The task then receives
+/// it as `&mut T` rather than as a lock, exactly as RTIC hands it over.
 #[derive(Clone, Debug)]
 pub struct Resource {
     pub name: Ident,
     pub ty: Option<Type>,
     pub init: Option<Expr>,
+    pub lock_free: Option<Span>,
 }
 
 impl Parse for Resource {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let mut lock_free = None;
+        for attribute in input.call(syn::Attribute::parse_outer)? {
+            match &attribute.meta {
+                syn::Meta::Path(path) if path.is_ident("lock_free") => {
+                    lock_free = Some(path.span());
+                }
+                other => {
+                    return Err(Error::new(
+                        other.span(),
+                        "the only attribute on a resource is `#[lock_free]`",
+                    ));
+                }
+            }
+        }
         let name = input.parse()?;
         let ty = if input.peek(Token![:]) {
             input.parse::<Token![:]>()?;
@@ -47,7 +68,12 @@ impl Parse for Resource {
         } else {
             None
         };
-        Ok(Self { name, ty, init })
+        Ok(Self {
+            name,
+            ty,
+            init,
+            lock_free,
+        })
     }
 }
 
@@ -243,6 +269,15 @@ impl TaskArguments {
                     init.span(),
                     "a configuration value is supplied by the firmware that \
                      selects the task, not by the definition",
+                ));
+            }
+        }
+        for resource in self.local.iter().chain(&self.config) {
+            if let Some(span) = resource.lock_free {
+                return Err(Error::new(
+                    span,
+                    "only a shared resource can be `#[lock_free]`; a local one \
+                     is never locked",
                 ));
             }
         }
@@ -566,6 +601,11 @@ mod tests {
             ("shared = [state: bool = false]", "only a local resource"),
             ("config = [period_ms: u32 = 5]", "supplied by the firmware"),
             ("local = [count = 0]", "needs its type"),
+            (
+                "local = [#[lock_free] count: u32]",
+                "only a shared resource",
+            ),
+            ("shared = [#[cfg(x)] count: u32]", "only attribute"),
             ("bounds = [led: Pin], local = [led: u32 = 0]", "not both"),
         ] {
             let error = contract(args, "async fn run(cx: run::Context) {}").unwrap_err();

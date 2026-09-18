@@ -62,6 +62,12 @@ each was settled.
 - RTIC-familiar access: `cx.local.<name>`, and `cx.shared.<name>.lock(..)` for
   shared resources. Both categories are in scope, including state that persists
   across invocations.
+- A shared resource marked `shared = [#[lock_free] rx: UartRx]`, RTIC's own
+  word, is received as `&mut T` rather than as a lock, as RTIC hands a
+  `#[lock_free]` resource over. The firmware's `Shared` field must be
+  `#[lock_free]` too, and RTIC checks that every task sharing it runs at one
+  priority; a field that is not fails at the binding. The binding itself is
+  written as for any shared resource.
 - A local with an initial value, `local = [retries: u8 = 0]`, is the task's own
   state, written as RTIC writes a task-local. The definition owns the value, so
   every firmware selecting the task gets it and binds only the locals without

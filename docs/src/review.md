@@ -132,6 +132,13 @@ without it the comparison stays one to one - see
 [remaining work](implementation-plan.md). Specified in
 [workflow](workflow.md#the-cli).
 
+**Lock-free shared resources are marked `#[lock_free]`, 2026-09-18.** A
+definition writes `shared = [#[lock_free] rx: T]` and receives `&mut T`. RTIC's
+word, as an attribute on the resource, the way RTIC marks the `Shared` field;
+a separate `lock_free = [..]` list was rejected because RTIC has none. Needed
+for ferro-wasp's UART receive handlers. Specified in
+[architecture](architecture.md#task-authoring).
+
 **Configuration is read as `CONFIG::FIELD`, 2026-09-18.** It was
 `CONFIG.FIELD`, rewritten by `#[task]` into an associated constant - the last
 body rewrite, and one that could not reach inside a macro call, so

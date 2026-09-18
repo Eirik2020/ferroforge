@@ -97,12 +97,42 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
         quote!(pub #name: &'__ff mut #ty,)
     });
 
-    // A shared resource is whatever RTIC hands over: a real proxy implementing
-    // `Mutex`, so `cx.shared.x.lock(..)` in the body is the real operation.
+    // A `#[lock_free]` shared resource is handed over as `&mut T`, exactly as
+    // RTIC hands it, so a bounded one is a generic appearing in its field -
+    // like a bounded local, unlike a bounded locked resource.
+    let lock_free_bounds = arguments
+        .bounds
+        .iter()
+        .enumerate()
+        .filter(|(_, bound)| {
+            arguments.shared.iter().any(|resource| {
+                resource.lock_free.is_some()
+                    && identifier_key(&resource.name) == identifier_key(&bound.name)
+            })
+        })
+        .collect::<Vec<_>>();
+    let lock_free_generics = lock_free_bounds
+        .iter()
+        .map(|(index, bound)| {
+            (
+                identifier_key(&bound.name),
+                format_ident!("__FfResource{index}", span = bound.name.span()),
+            )
+        })
+        .collect::<Vec<_>>();
+    let has_lock_free = arguments
+        .shared
+        .iter()
+        .any(|resource| resource.lock_free.is_some());
+
+    // Any other shared resource is whatever RTIC hands over: a real proxy
+    // implementing `Mutex`, so `cx.shared.x.lock(..)` in the body is the real
+    // operation.
     let shared_generics = arguments
         .shared
         .iter()
         .enumerate()
+        .filter(|(_, resource)| resource.lock_free.is_none())
         .map(|(index, resource)| {
             (
                 resource.clone(),
@@ -110,10 +140,23 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
             )
         })
         .collect::<Vec<_>>();
-    let shared_fields = shared_generics.iter().map(|(resource, generic)| {
-        let name = &resource.name;
-        quote!(pub #name: #generic,)
-    });
+    let shared_fields = arguments
+        .shared
+        .iter()
+        .map(|resource| {
+            let name = &resource.name;
+            match shared_generics
+                .iter()
+                .find(|(locked, _)| locked.name == resource.name)
+            {
+                Some((_, generic)) => quote!(pub #name: #generic,),
+                None => {
+                    let ty = resource_type(resource, &lock_free_generics);
+                    quote!(pub #name: &'__ffs mut #ty,)
+                }
+            }
+        })
+        .collect::<Vec<_>>();
     let shared_bounds = shared_generics.iter().map(|(resource, generic)| {
         let bound = arguments
             .bounds
@@ -216,14 +259,14 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
         })
         .transpose()?;
 
-    let bound_params =
-        local_bounds
-            .iter()
-            .zip(&bound_generics)
-            .map(|((_, bound), (_, generic))| {
-                let traits = &bound.traits;
-                quote!(#generic: #traits)
-            });
+    let bound_params = local_bounds
+        .iter()
+        .zip(&bound_generics)
+        .chain(lock_free_bounds.iter().zip(&lock_free_generics))
+        .map(|((_, bound), (_, generic))| {
+            let traits = &bound.traits;
+            quote!(#generic: #traits)
+        });
     let bound_names = bound_generics
         .iter()
         .map(|(_, generic)| generic)
@@ -236,21 +279,30 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
         .iter()
         .map(|(_, generic)| generic)
         .collect::<Vec<_>>();
+    let lock_free_names = lock_free_generics
+        .iter()
+        .map(|(_, generic)| generic)
+        .collect::<Vec<_>>();
     // Built once: `quote!` consumes an iterator, and each list is used several
-    // times below. The lifetime only appears when a task has local resources,
-    // because otherwise nothing borrows and Rust rejects it as unused.
+    // times below. A lifetime only appears where something borrows - locals,
+    // or lock-free shared resources - because Rust rejects an unused one.
     let has_local = !arguments.local.is_empty();
+    let local_lifetime = has_local.then(|| quote!('__ff));
+    let shared_lifetime = has_lock_free.then(|| quote!('__ffs));
     let mut local_params = Vec::new();
-    if has_local {
-        local_params.push(quote!('__ff));
-    }
+    local_params.extend(local_lifetime.clone());
     local_params.extend(bound_names.iter().map(|generic| quote!(#generic)));
     let local_list = quote!(#(#local_params),*);
 
     // Every parameter lives on the context, so the caller specifies nothing:
     // constructing the context infers all of them, including the configuration
-    // type and the monotonic carried as `PhantomData`.
-    let mut context_params = local_params.clone();
+    // type and the monotonic carried as `PhantomData`. Lifetimes come first,
+    // as Rust requires.
+    let mut context_params = Vec::new();
+    context_params.extend(local_lifetime);
+    context_params.extend(shared_lifetime.clone());
+    context_params.extend(bound_names.iter().map(|generic| quote!(#generic)));
+    context_params.extend(lock_free_names.iter().map(|generic| quote!(#generic)));
     context_params.extend(shared_names.iter().map(|generic| quote!(#generic)));
     context_params.extend(spawn_names.iter().map(|generic| quote!(#generic)));
     // Named `CONFIG`, so the body reads configuration as `CONFIG::PERIOD_MS`:
@@ -303,7 +355,11 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
         false => quote!(#(#bound_names),*),
     };
 
-    let shared_list = quote!(#(#shared_names),*);
+    let mut shared_params = Vec::new();
+    shared_params.extend(shared_lifetime);
+    shared_params.extend(lock_free_names.iter().map(|generic| quote!(#generic)));
+    shared_params.extend(shared_names.iter().map(|generic| quote!(#generic)));
+    let shared_list = quote!(#(#shared_params),*);
     let spawn_list = quote!(#(#spawn_names),*);
     // Bounded only when the task declared a monotonic, because the bound is what
     // drags `rtic-monotonics` and `fugit` into the task crate's dependencies. The

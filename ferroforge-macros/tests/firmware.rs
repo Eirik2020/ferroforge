@@ -139,7 +139,9 @@ fn a_firmware_on_another_hal_links() {
 /// asserted from an expansion: spawn aliases taking zero, one and two inputs,
 /// a timestamp from `Mono::now()`, configuration read inside a macro call,
 /// local resources whose initial values the definition owns beside one the
-/// firmware supplies, and a shared resource known only by a trait bound. Each was a defect that expanded cleanly
+/// firmware supplies, a shared resource known only by a trait bound, and a
+/// lock-free shared resource used by two interrupt handlers at one priority -
+/// by type in one and by bound in the other. Each was a defect that expanded cleanly
 /// and failed only in the compiler, which is why this builds instead.
 ///
 /// Defined and selected in one crate, on the F401RE firmware's manifest and
@@ -200,6 +202,16 @@ pub async fn writer(mut cx: writer::Context) {
     cx.shared.out.lock(|out| out.put(1));
 }
 
+#[ferroforge::task(shared = [#[lock_free] rx: Counter])]
+pub fn on_dma(cx: on_dma::Context) {
+    cx.shared.rx.put(1);
+}
+
+#[ferroforge::task(bounds = [rx: Sink], shared = [#[lock_free] rx])]
+pub fn on_idle(cx: on_idle::Context) {
+    cx.shared.rx.put(2);
+}
+
 ferroforge::app! {
     device = stm32f4xx_hal::pac,
     dispatchers = [USART1],
@@ -207,11 +219,13 @@ ferroforge::app! {
     use rtic_monotonics::systick::prelude::*;
     systick_monotonic!(Mono, 1000);
 
-    use super::{Counter, source, takes_none, takes_one, takes_two, writer};
+    use super::{Counter, on_dma, on_idle, source, takes_none, takes_one, takes_two, writer};
 
     #[shared]
     struct Shared {
         sink: Counter,
+        #[lock_free]
+        uart_rx: Counter,
     }
 
     #[local]
@@ -223,7 +237,13 @@ ferroforge::app! {
     fn init(cx: init::Context) -> (Shared, Local) {
         Mono::start(cx.core.SYST, 16_000_000);
         first::spawn().unwrap();
-        (Shared { sink: Counter(0) }, Local { zero_count: 0 })
+        (
+            Shared {
+                sink: Counter(0),
+                uart_rx: Counter(0),
+            },
+            Local { zero_count: 0 },
+        )
     }
 
     #[task(
@@ -240,6 +260,12 @@ ferroforge::app! {
 
     #[task(from = writer, priority = 1, shared = [out = sink])]
     async fn write(cx: write::Context);
+
+    #[task(from = on_dma, binds = EXTI0, priority = 2, shared = [rx = uart_rx])]
+    fn dma(cx: dma::Context);
+
+    #[task(from = on_idle, binds = EXTI1, priority = 2, shared = [rx = uart_rx])]
+    fn idle_line(cx: idle_line::Context);
 
     #[task(from = takes_one, priority = 1)]
     async fn one(cx: one::Context, value: u32);
@@ -283,7 +309,8 @@ fn shapes_the_example_firmware_does_not_use_compile() {
     assert!(
         output.status.success(),
         "every spawn arity, `Mono::now()`, `CONFIG` in a macro, task-owned \
-         locals and a bounded shared resource must compile:\n{}",
+         locals, a bounded shared resource and lock-free sharing must \
+         compile:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
 }
