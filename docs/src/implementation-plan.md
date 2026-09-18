@@ -13,10 +13,6 @@ does not, in the order that unblocks the rest.
 The four crates package, and each builds from its packaged form. What remains
 is not code:
 
-- **Repository rename.** The published metadata and README links point at
-  `github.com/Eirik2020/ferroforge`. The GitHub repository still has its
-  pre-FerroForge name and has to be renamed to match before publishing,
-  because a published version's metadata cannot be edited.
 - **`main`.** It still carries the transplant-era design, and the README links
   point at it, so this branch has to be merged there first.
 - **Publishing,** which cannot be undone: versions can be yanked, never deleted.
