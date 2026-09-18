@@ -132,6 +132,12 @@ without it the comparison stays one to one - see
 [remaining work](implementation-plan.md). Specified in
 [workflow](workflow.md#the-cli).
 
+**A bare binding names the resource of the same name, 2026-09-18.** An
+instance writes `local = [osd_uart]` for `local = [osd_uart = osd_uart]`, as
+RTIC writes a claim. Converting ferro-wasp's Foxeer app showed why: its OSD
+task binds 21 resources, each under the name the firmware already uses.
+Specified in [architecture](architecture.md#firmware-composition).
+
 **Lock-free shared resources are marked `#[lock_free]`, 2026-09-18.** A
 definition writes `shared = [#[lock_free] rx: T]` and receives `&mut T`. RTIC's
 word, as an attribute on the resource, the way RTIC marks the `Shared` field;

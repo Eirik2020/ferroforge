@@ -173,6 +173,11 @@ reusable names onto the firmware's own:
 async fn status_blink(cx: status_blink::Context) -> !;
 ```
 
+Where the definition's name and the firmware's are the same, the binding is the
+bare name, as RTIC writes a claim: `local = [led]` is `local = [led = led]`.
+`from` is a path, so a firmware can select a definition by its crate path when
+an instance shares the definition's name.
+
 `app!` emits a config impl and an adapter that constructs the definition's
 own context and calls it. Every path it emits is a real Rust path, so a wrong
 definition, binding, type or interrupt is an ordinary compile error on the

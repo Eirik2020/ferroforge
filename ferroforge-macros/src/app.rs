@@ -19,6 +19,8 @@ use syn::{
 };
 
 /// `requirement = resource`, the only genuinely new spelling in the grammar.
+/// A bare name binds a requirement to the resource of the same name, as RTIC
+/// writes a claim and as Rust writes a struct field it already has in scope.
 struct Rebind {
     requirement: Ident,
     target: Ident,
@@ -26,7 +28,13 @@ struct Rebind {
 
 impl Parse for Rebind {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let requirement = input.parse()?;
+        let requirement: Ident = input.parse()?;
+        if !input.peek(Token![=]) {
+            return Ok(Self {
+                target: requirement.clone(),
+                requirement,
+            });
+        }
         input.parse::<Token![=]>()?;
         Ok(Self {
             requirement,
@@ -574,6 +582,26 @@ mod tests {
             "#[task(priority = 1, local = [n: u32 = 0])] async fn own(cx: own::Context) {}",
         )
         .expect("RTIC's own local initializers must pass through");
+    }
+
+    /// A bare name binds to the resource of the same name, as RTIC writes it.
+    #[test]
+    fn a_bare_binding_names_the_resource_of_the_same_name() {
+        let output = expand_source(
+            "#[task(from = blink, local = [led, count = blink_count], shared = [enabled])] \
+             async fn status(cx: status::Context);",
+        )
+        .unwrap()
+        .to_string();
+        assert!(output.contains("led : cx . local . led"), "{output}");
+        assert!(
+            output.contains("count : cx . local . blink_count"),
+            "{output}"
+        );
+        assert!(
+            output.contains("enabled : cx . shared . enabled"),
+            "{output}"
+        );
     }
 
     /// RTIC's `spawn` function itself, which fits any number of inputs.
