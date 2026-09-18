@@ -101,6 +101,7 @@ golden app, so the default answer is Foxeer's, but each needs a decision:
 | Task | How FCU3 differs |
 | --- | --- |
 | `actuator_output` and `ActuatorHardware` | Safety-relevant. FCU3's wrapper refuses a non-finite or out-of-range throttle vector itself, stops the motors on any rejected command, and aborts arming by commanding low throttle; Foxeer's validates armed commands in the task and relies on the bank's own rejection in the wrapper, then forces the motors off. Both appear to fail safe, differently. |
+| `control_loop` | Roughly 86% the same; the rest has not been reviewed line by line and needs to be before unifying. |
 | `dshot_service`, DShot DMA handlers | Log wording; FCU3 reports a spurious DMA interrupt once rather than every time. |
 | `esc_manager_task` | Log wording only; its motor map is a table where Foxeer's is a function, with the same values. |
 | `usart1_rx_dma_transfer`, `usart1_rx_peripheral` | Log wording and layout only. |
