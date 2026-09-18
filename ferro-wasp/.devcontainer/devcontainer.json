@@ -1,0 +1,11 @@
+{
+  "name": "FerroWasp",
+  "dockerComposeFile": "../compose.yaml",
+  "service": "dev",
+  "workspaceFolder": "/workspace/ferro-wasp",
+  "remoteUser": "ferrowasp",
+  "overrideCommand": false,
+  "initializeCommand": "docker volume create ferrowasp-codex-home",
+  "postStartCommand": "bash tools/dev/check-git-ssh.sh --require-agent",
+  "shutdownAction": "stopCompose"
+}
