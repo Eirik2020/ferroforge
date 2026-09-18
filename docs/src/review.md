@@ -132,6 +132,15 @@ without it the comparison stays one to one - see
 [remaining work](implementation-plan.md). Specified in
 [workflow](workflow.md#the-cli).
 
+**An instance may supply a local as an RTIC task-local, 2026-09-18.** For a
+local the definition leaves to the firmware, the instance may write RTIC's
+own `name: Type = value` instead of routing it through `#[local]` and `init`.
+This complements, and does not reverse, initial values belonging to the
+definition: that rule is for values intrinsic to the task, and a definition's
+constant cannot depend on the board. Foxeer's ADC task needed it - its battery
+cell detector starts from the board's calibration profile. Specified in
+[architecture](architecture.md#task-authoring).
+
 **A bare binding names the resource of the same name, 2026-09-18.** An
 instance writes `local = [osd_uart]` for `local = [osd_uart = osd_uart]`, as
 RTIC writes a claim. Converting ferro-wasp's Foxeer app showed why: its OSD

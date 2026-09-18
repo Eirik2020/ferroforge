@@ -73,7 +73,10 @@ each was settled.
   every firmware selecting the task gets it and binds only the locals without
   one. As in RTIC, the type is concrete and the value a constant expression.
   `app!` gives each instance one RTIC task-local holding all of them, so it
-  still reads nothing from the definition.
+  still reads nothing from the definition. A local the firmware supplies may
+  be supplied on the instance in the same form, `local = [detector: Detector =
+  Detector::new(..)]`, rather than through `#[local]` and `init` - for a value
+  that depends on the board, which a definition's own constant cannot.
 - Configuration is read as `CONFIG::FIELD`, declared `config = [period_ms: u32]`.
   `CONFIG` is the task's type parameter for the firmware's configuration, so a
   read is an associated constant the compiler resolves wherever it is written,

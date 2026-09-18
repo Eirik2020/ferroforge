@@ -139,7 +139,8 @@ fn a_firmware_on_another_hal_links() {
 /// asserted from an expansion: spawn aliases taking zero, one and two inputs,
 /// a timestamp from `Mono::now()`, configuration read inside a macro call,
 /// local resources whose initial values the definition owns beside one the
-/// firmware supplies, a shared resource known only by a trait bound, and a
+/// firmware supplies - one through `#[local]`, one as an RTIC task-local on the
+/// instance - a shared resource known only by a trait bound, and a
 /// lock-free shared resource used by two interrupt handlers at one priority -
 /// by type in one and by bound in the other. Each was a defect that expanded cleanly
 /// and failed only in the compiler, which is why this builds instead.
@@ -182,8 +183,10 @@ pub async fn takes_none(cx: takes_none::Context) {
 #[ferroforge::task]
 pub async fn takes_one(_cx: takes_one::Context, _value: u32) {}
 
-#[ferroforge::task]
-pub async fn takes_two(_cx: takes_two::Context, _a: u32, _b: bool) {}
+#[ferroforge::task(local = [total: u32])]
+pub async fn takes_two(cx: takes_two::Context, a: u32, _b: bool) {
+    *cx.local.total += a;
+}
 
 pub trait Sink {
     fn put(&mut self, value: u8);
@@ -270,7 +273,8 @@ ferroforge::app! {
     #[task(from = takes_one, priority = 1)]
     async fn one(cx: one::Context, value: u32);
 
-    #[task(from = takes_two, priority = 1)]
+    // `total` is supplied here, on the task, in RTIC's own task-local form.
+    #[task(from = takes_two, priority = 1, local = [total: u32 = 7])]
     async fn two(cx: two::Context, a: u32, b: bool);
 }
 "#;

@@ -66,12 +66,62 @@ impl Parse for ConfigValue {
     }
 }
 
+/// One entry of an instance's `local = [..]`: a binding to a firmware resource,
+/// or RTIC's own task-local form, `name: Type = value`, which the firmware
+/// supplies on the task itself rather than through `#[local]` and `init`.
+enum LocalBinding {
+    Resource(Rebind),
+    TaskLocal {
+        name: Ident,
+        ty: Box<Type>,
+        value: Box<Expr>,
+    },
+}
+
+impl Parse for LocalBinding {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        if input.peek(Ident) && input.peek2(Token![:]) && !input.peek2(Token![::]) {
+            let name = input.parse()?;
+            input.parse::<Token![:]>()?;
+            let ty = Box::new(input.parse()?);
+            input.parse::<Token![=]>()?;
+            return Ok(Self::TaskLocal {
+                name,
+                ty,
+                value: Box::new(input.parse()?),
+            });
+        }
+        input.parse().map(Self::Resource)
+    }
+}
+
+impl LocalBinding {
+    /// The definition's name for it, and the firmware's.
+    fn names(&self) -> (&Ident, &Ident) {
+        match self {
+            Self::Resource(rebind) => (&rebind.requirement, &rebind.target),
+            Self::TaskLocal { name, .. } => (name, name),
+        }
+    }
+
+    /// How RTIC claims it: by name, or with its type and initial value.
+    fn claim(&self) -> TokenStream {
+        match self {
+            Self::Resource(rebind) => {
+                let target = &rebind.target;
+                quote!(#target)
+            }
+            Self::TaskLocal { name, ty, value } => quote!(#name: #ty = #value),
+        }
+    }
+}
+
 #[derive(Default)]
 struct TaskAttribute {
     from: Option<Path>,
     priority: Option<LitInt>,
     binds: Option<Path>,
-    local: Vec<Rebind>,
+    local: Vec<LocalBinding>,
     shared: Vec<Rebind>,
     config: Vec<ConfigValue>,
     spawn: Vec<Rebind>,
@@ -373,8 +423,8 @@ fn render_instance(instance: &Instance) -> syn::Result<TokenStream> {
     // Every piece of the adapter carries the span of the authored binding it
     // came from, so a type error in it is reported on that line of the
     // declaration rather than at `ferroforge::app! {`.
-    let local_fields = attribute.local.iter().map(|rebind| {
-        let (requirement, resource) = (&rebind.requirement, &rebind.target);
+    let local_fields = attribute.local.iter().map(|binding| {
+        let (requirement, resource) = binding.names();
         quote_spanned!(resource.span()=> #requirement: #cx.local.#resource)
     });
     let shared = &attribute.shared;
@@ -386,7 +436,7 @@ fn render_instance(instance: &Instance) -> syn::Result<TokenStream> {
     // instance, because the macro does not read the definition to know whether
     // it has any; with none, the struct is empty and costs nothing.
     let task_local = format_ident!("__ff_task_{}", name);
-    let local_claims = attribute.local.iter().map(|rebind| &rebind.target);
+    let local_claims = attribute.local.iter().map(LocalBinding::claim);
     let local_attribute = quote!(
         , local = [#(#local_claims,)* #task_local: #from::__FfTaskLocal = #from::__FfTaskLocal::INIT]
     );
@@ -602,6 +652,27 @@ mod tests {
             output.contains("enabled : cx . shared . enabled"),
             "{output}"
         );
+    }
+
+    /// A firmware may supply a local on the task itself, as RTIC writes a
+    /// task-local: passed to RTIC as written, and bound by its own name.
+    #[test]
+    fn an_instance_may_supply_a_local_as_an_rtic_task_local() {
+        let output = expand_source(
+            "#[task(from = blink, local = [led, detector: Detector = Detector::new(3, 4)])] \
+             async fn status(cx: status::Context);",
+        )
+        .unwrap()
+        .to_string();
+        assert!(
+            output.contains("detector : Detector = Detector :: new (3 , 4)"),
+            "{output}"
+        );
+        assert!(
+            output.contains("detector : cx . local . detector"),
+            "{output}"
+        );
+        assert!(output.contains("led : cx . local . led"), "{output}");
     }
 
     /// RTIC's `spawn` function itself, which fits any number of inputs.
