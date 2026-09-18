@@ -8,15 +8,6 @@ around it.
 [Current state](prototype.md) records what exists; this chapter records what
 does not, in the order that unblocks the rest.
 
-## First Release
-
-The four crates package, and each builds from its packaged form. What remains
-is not code:
-
-- **`main`.** It still carries the transplant-era design, and the README links
-  point at it, so this branch has to be merged there first.
-- **Publishing,** which cannot be undone: versions can be yanked, never deleted.
-
 ## OSD Hardware Validation
 
 `tasks/msp-displayport` and its host tests say the frames are well formed. On

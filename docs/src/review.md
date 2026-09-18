@@ -223,9 +223,13 @@ use let-chains, which need 1.88. And `new` wrote a firmware whose `init` was
 `todo!()`, which would have panicked on first flash; it now writes one that
 runs, specified in [workflow](workflow.md#the-cli).
 
-**Next open point:** the release itself. What is left before it, including the
-steps only the maintainer can take, is in
-[remaining work](implementation-plan.md#first-release).
+A published version cannot be changed, only superseded, so from here a change
+to the context a task receives, to `app!`'s grammar or to the CLI's verbs
+reaches users only as a new version - 0.2 for anything that breaks them.
+
+**Next open point:** none in FerroForge itself. What is left in
+[remaining work](implementation-plan.md) concerns the example task crates and
+firmware, not the tool.
 
 ## Binding Decisions Carried Forward
 
