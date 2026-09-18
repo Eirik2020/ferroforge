@@ -6,8 +6,8 @@
 use std::collections::BTreeSet;
 
 use syn::{
-    Error, FnArg, Ident, LitStr, Pat, Path, ReturnType, Signature, Token, Type, TypeParamBound,
-    bracketed, parenthesized,
+    Error, Expr, FnArg, Ident, LitStr, Pat, Path, ReturnType, Signature, Token, Type,
+    TypeParamBound, bracketed, parenthesized,
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
     spanned::Spanned,
@@ -21,10 +21,15 @@ pub fn identifier_key(name: &Ident) -> String {
 /// An inline resource or configuration entry. A resource needs either a type or
 /// a matching bound; `None` is the bare-name form, which `#[task]` rejects for
 /// resources because it cannot infer a field type from a name alone.
+///
+/// A local resource may also carry an initial value, `name: Type = expr`, as
+/// in RTIC. It is then the task's own state: the definition supplies it, and a
+/// firmware selecting the task binds nothing for it.
 #[derive(Clone, Debug)]
 pub struct Resource {
     pub name: Ident,
     pub ty: Option<Type>,
+    pub init: Option<Expr>,
 }
 
 impl Parse for Resource {
@@ -36,7 +41,13 @@ impl Parse for Resource {
         } else {
             None
         };
-        Ok(Self { name, ty })
+        let init = if input.peek(Token![=]) {
+            input.parse::<Token![=]>()?;
+            Some(input.parse()?)
+        } else {
+            None
+        };
+        Ok(Self { name, ty, init })
     }
 }
 
@@ -217,6 +228,33 @@ impl TaskArguments {
             self.dependencies.iter().map(|d| &d.id),
             "duplicate task dependency",
         )?;
+        for resource in &self.shared {
+            if let Some(init) = &resource.init {
+                return Err(Error::new(
+                    init.span(),
+                    "only a local resource can have an initial value; a shared \
+                     resource is initialized by the firmware's `init`",
+                ));
+            }
+        }
+        for config in &self.config {
+            if let Some(init) = &config.init {
+                return Err(Error::new(
+                    init.span(),
+                    "a configuration value is supplied by the firmware that \
+                     selects the task, not by the definition",
+                ));
+            }
+        }
+        for local in &self.local {
+            if local.init.is_some() && local.ty.is_none() {
+                return Err(Error::new(
+                    local.name.span(),
+                    "a local resource with an initial value needs its type, \
+                     `name: Type = value`, as in RTIC",
+                ));
+            }
+        }
         for local in &self.local {
             if self
                 .shared
@@ -525,6 +563,10 @@ mod tests {
             ),
             ("dependencies = [Fugit]", "Cargo.toml"),
             ("bounds = [led: 'static], local = [led]", "trait bounds"),
+            ("shared = [state: bool = false]", "only a local resource"),
+            ("config = [period_ms: u32 = 5]", "supplied by the firmware"),
+            ("local = [count = 0]", "needs its type"),
+            ("bounds = [led: Pin], local = [led: u32 = 0]", "not both"),
         ] {
             let error = contract(args, "async fn run(cx: run::Context) {}").unwrap_err();
             assert!(error.to_string().contains(message), "{args}: {error}");

@@ -34,6 +34,12 @@ can express. "Ignore interrupt bindings" and "only look for a keyword" are the
 first two wanted. This would be the first project-level file, where so far a
 project has been only a directory holding `firmware/`.
 
+## ferro-wasp Adoption
+
+What ferro-wasp needs before it can adopt FerroForge - two macro gaps and two
+CLI gaps awaiting decisions, and the migration order - is planned in
+[adopting FerroForge in ferro-wasp](ferro-wasp-adoption.md).
+
 ## Evidence Rules
 
 Recording that something builds is not evidence; record exact paths, targets,

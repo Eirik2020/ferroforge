@@ -323,7 +323,7 @@ pub async fn heartbeat(cx: heartbeat::Context) -> ! {
     loop {
         *cx.local.count = cx.local.count.wrapping_add(1);
         defmt::info!(\"heartbeat {=u32}\", *cx.local.count);
-        Mono::delay(CONFIG.PERIOD_MS.millis()).await;
+        Mono::delay(CONFIG::PERIOD_MS.millis()).await;
     }
 }
 ";

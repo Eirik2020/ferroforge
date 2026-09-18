@@ -176,6 +176,6 @@ pub async fn paint(mut cx: paint::Context) -> ! {
         if pending > 0 {
             let _: Result<(), usize> = cx.spawn.kick(pending);
         }
-        Mono::delay(CONFIG.REFRESH_MS.millis()).await;
+        Mono::delay(CONFIG::REFRESH_MS.millis()).await;
     }
 }

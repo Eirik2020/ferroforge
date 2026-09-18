@@ -44,6 +44,7 @@ Start from the task, not the chapter. Read the named sections, not whole files.
 | Building or checking anything | `workflow.md` |
 | What the code does today | `prototype.md` |
 | What is left to build | `implementation-plan.md` |
+| Adopting FerroForge in ferro-wasp | `ferro-wasp-adoption.md` |
 | Checking whether something was already decided | `review.md` |
 
 One topic, one owner. Specify a topic in its owning chapter; every other mention
@@ -57,18 +58,21 @@ links there instead of restating it.
 | What the code does today | `prototype.md` |
 | Commands | `workflow.md` |
 | What is left to build | `implementation-plan.md` |
+| ferro-wasp adoption: its gaps and migration order | `ferro-wasp-adoption.md` |
 | What was decided, and where it is specified | `review.md` (index only) |
 
-The whole book is 1215 lines, so read a chapter when a section is not enough:
+The whole book is 1382 lines, so read a chapter when a section is not enough:
 
 - `governing-requirements.md` (64) - G1-G7. Loaded at launch for Claude.
-- `architecture.md` (200) - the agreed call-through model. Owns the canonical
+- `architecture.md` (213) - the agreed call-through model. Owns the canonical
   authoring design; other chapters link here rather than restate it.
-- `review.md` (296) - current decisions, the next open point, an index of
+- `review.md` (322) - current decisions, the next open point, an index of
   older decisions still in force, and what the call-through model superseded.
-- `implementation-plan.md` (51) - what is left, in unblocking order.
-- `workflow.md` (230) - every command, including the opt-in cross-compiles.
-- `prototype.md` (148) - what exists today and what does not.
+- `implementation-plan.md` (57) - what is left, in unblocking order.
+- `ferro-wasp-adoption.md` (116) - what ferro-wasp needs, and the migration
+  order.
+- `workflow.md` (233) - every command, including the opt-in cross-compiles.
+- `prototype.md` (150) - what exists today and what does not.
 - `dependencies.md` (112) - where requirements live, and how a HAL-specific
   crate names a chip without choosing one.
 

@@ -8,7 +8,7 @@
 use ferroforge_contracts::{Resource, TaskArguments, TaskContract, TaskKind, identifier_key};
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use syn::{Error, ItemFn, Result, spanned::Spanned, visit_mut::VisitMut};
+use syn::{Error, ItemFn, Result, spanned::Spanned, visit::Visit};
 
 /// Uppercase configuration names become const generic parameters, so a value
 /// supplied by composition is a constant inside the body.
@@ -31,27 +31,26 @@ fn resource_type(resource: &Resource, bounds: &[(String, syn::Ident)]) -> TokenS
     }
 }
 
-/// Rewrite `CONFIG.FIELD` reads to `__FfConfig::FIELD`, an associated const on
-/// the configuration type the firmware supplies. Associated consts stay
-/// compile-time, and unlike const generics they are inferred from the context
-/// the caller constructs - so the adapter needs no turbofish.
-///
-/// This is a local rewrite inside the task's own expansion, not a cross-crate
-/// move.
-struct ConfigReader;
+/// Finds `CONFIG.FIELD`, the spelling before configuration became `CONFIG::FIELD`.
+/// Diagnosis only: nothing in the body is rewritten. The compiler's own message
+/// for it, "expected value, found type parameter", does not say what to write.
+/// Like any reader of the body, it cannot see inside a macro call, where the
+/// compiler's message is all there is.
+#[derive(Default)]
+struct OldConfigSpelling {
+    found: Option<(proc_macro2::Span, String)>,
+}
 
-impl VisitMut for ConfigReader {
-    fn visit_expr_mut(&mut self, expr: &mut syn::Expr) {
-        if let syn::Expr::Field(field) = expr
+impl<'a> Visit<'a> for OldConfigSpelling {
+    fn visit_expr_field(&mut self, field: &'a syn::ExprField) {
+        if self.found.is_none()
             && let syn::Expr::Path(base) = field.base.as_ref()
             && base.path.is_ident("CONFIG")
             && let syn::Member::Named(name) = &field.member
         {
-            let name = name.clone();
-            *expr = syn::parse_quote!(__FfConfig::#name);
-            return;
+            self.found = Some((field.span(), name.to_string()));
         }
-        syn::visit_mut::visit_expr_mut(self, expr);
+        syn::visit::visit_expr_field(self, field);
     }
 }
 
@@ -67,12 +66,23 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
         ));
     }
 
-    // One generic per bounded resource, named after its position so the
-    // authored resource name stays the field name.
-    let bound_generics = arguments
+    // One generic per bounded local resource, named after its position so the
+    // authored resource name stays the field name. A bounded shared resource
+    // gets none: its bound is stated on the lock, `Mutex<T: Trait>`, because a
+    // generic for it would appear in no struct field and could not be inferred.
+    let local_bounds = arguments
         .bounds
         .iter()
         .enumerate()
+        .filter(|(_, bound)| {
+            arguments
+                .local
+                .iter()
+                .any(|resource| identifier_key(&resource.name) == identifier_key(&bound.name))
+        })
+        .collect::<Vec<_>>();
+    let bound_generics = local_bounds
+        .iter()
         .map(|(index, bound)| {
             (
                 identifier_key(&bound.name),
@@ -105,8 +115,20 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
         quote!(pub #name: #generic,)
     });
     let shared_bounds = shared_generics.iter().map(|(resource, generic)| {
-        let ty = resource_type(resource, &bound_generics);
-        quote!(#generic: ::rtic::Mutex<T = #ty>)
+        let bound = arguments
+            .bounds
+            .iter()
+            .find(|bound| identifier_key(&bound.name) == identifier_key(&resource.name));
+        match bound {
+            Some(bound) => {
+                let traits = &bound.traits;
+                quote!(#generic: ::rtic::Mutex<T: #traits>)
+            }
+            None => {
+                let ty = resource_type(resource, &bound_generics);
+                quote!(#generic: ::rtic::Mutex<T = #ty>)
+            }
+        }
     });
 
     // Each outgoing alias is a closure field plus a same-named method, so the
@@ -171,7 +193,15 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
             Ok(quote!(const #name: #ty;))
         })
         .collect::<Result<Vec<_>>>()?;
-    ConfigReader.visit_block_mut(&mut function.block);
+
+    let mut old_spelling = OldConfigSpelling::default();
+    old_spelling.visit_block(&function.block);
+    if let Some((span, name)) = old_spelling.found {
+        return Err(Error::new(
+            span,
+            format!("configuration is read as `CONFIG::{name}`, an associated constant"),
+        ));
+    }
 
     // The monotonic keeps the name the author imported, so `Mono::delay(..)` in
     // the body resolves to this type parameter, which the firmware fills with
@@ -186,14 +216,14 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
         })
         .transpose()?;
 
-    let bound_params = arguments
-        .bounds
-        .iter()
-        .zip(&bound_generics)
-        .map(|(bound, (_, generic))| {
-            let traits = &bound.traits;
-            quote!(#generic: #traits)
-        });
+    let bound_params =
+        local_bounds
+            .iter()
+            .zip(&bound_generics)
+            .map(|((_, bound), (_, generic))| {
+                let traits = &bound.traits;
+                quote!(#generic: #traits)
+            });
     let bound_names = bound_generics
         .iter()
         .map(|(_, generic)| generic)
@@ -223,7 +253,10 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
     let mut context_params = local_params.clone();
     context_params.extend(shared_names.iter().map(|generic| quote!(#generic)));
     context_params.extend(spawn_names.iter().map(|generic| quote!(#generic)));
-    context_params.push(quote!(__FfConfig));
+    // Named `CONFIG`, so the body reads configuration as `CONFIG::PERIOD_MS`:
+    // an associated const of this parameter, resolved by the compiler wherever
+    // it is written - inside a macro call too - with nothing rewritten.
+    context_params.push(quote!(CONFIG));
     // Every task carries a monotonic slot whether or not its body uses one, so
     // the caller can construct any context without knowing the definition's
     // internals. The type parameter takes the name the author imported, so
@@ -234,6 +267,42 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
     context_params.push(quote!(#monotonic_name));
     let context_generics = quote!(#(#context_params),*);
 
+    // A local with an initial value is the task's own state. The definition
+    // holds the values, in one struct with one constant, so the firmware
+    // declares a single RTIC task-local of that type whatever it contains and
+    // never needs to know the fields. `__FfBound` is what the firmware does
+    // bind, plus that struct; `into_local` splits both into the `Local` the
+    // body reads, so `cx.local.name` means the same either way.
+    let (owned, supplied): (Vec<_>, Vec<_>) = arguments
+        .local
+        .iter()
+        .partition(|resource| resource.init.is_some());
+    let owned_names = owned
+        .iter()
+        .map(|resource| &resource.name)
+        .collect::<Vec<_>>();
+    let owned_types = owned
+        .iter()
+        .map(|resource| resource_type(resource, &bound_generics))
+        .collect::<Vec<_>>();
+    let owned_inits = owned
+        .iter()
+        .map(|resource| &resource.init)
+        .collect::<Vec<_>>();
+    let supplied_names = supplied
+        .iter()
+        .map(|resource| &resource.name)
+        .collect::<Vec<_>>();
+    let supplied_types = supplied
+        .iter()
+        .map(|resource| resource_type(resource, &bound_generics))
+        .collect::<Vec<_>>();
+    let bound_list = quote!('__ffb, #(#bound_names),*);
+    let local_from_bound = match has_local {
+        true => quote!('__ffb, #(#bound_names),*),
+        false => quote!(#(#bound_names),*),
+    };
+
     let shared_list = quote!(#(#shared_names),*);
     let spawn_list = quote!(#(#spawn_names),*);
     // Bounded only when the task declared a monotonic, because the bound is what
@@ -242,10 +311,14 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
     // context the same way - but a task that never reads time must not have to
     // depend on the crates that describe time.
     //
-    // The agreed initial profile: SysTick at 1 kHz with u32 time values.
+    // The agreed initial profile: SysTick at 1 kHz with u32 time values. Both
+    // associated types are fixed, because a bound that fixed only `Duration`
+    // left `Mono::now()` opaque - a task could wait but not take a timestamp.
+    // Both are what `systick_monotonic!(Mono, 1000)` produces.
     let monotonic_bound = monotonic_param.as_ref().map(|_| {
         quote!(#monotonic_name: ::rtic_monotonics::Monotonic<
-            Duration = ::fugit::Duration<u32, 1, 1000>
+            Instant = ::fugit::Instant<u32, 1, 1000>,
+            Duration = ::fugit::Duration<u32, 1, 1000>,
         >,)
     });
     let monotonic_field = quote!(pub monotonic: ::core::marker::PhantomData<#monotonic_name>,);
@@ -260,7 +333,7 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
     let context_parameter = contract.context.clone();
 
     Ok(quote! {
-        #[allow(non_snake_case)]
+        #[allow(non_snake_case, non_camel_case_types)]
         #visibility mod #task_name {
             use super::*;
 
@@ -268,11 +341,45 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
                 #(#local_fields)*
             }
 
+            #[doc(hidden)]
+            pub struct __FfTaskLocal {
+                #(pub #owned_names: #owned_types,)*
+            }
+
+            impl __FfTaskLocal {
+                /// Every initial value, as RTIC evaluates a task-local's:
+                /// once, as a constant.
+                pub const INIT: Self = Self {
+                    #(#owned_names: #owned_inits,)*
+                };
+            }
+
+            #[doc(hidden)]
+            pub struct __FfBound<#bound_list> {
+                pub __ff_task: &'__ffb mut __FfTaskLocal,
+                #(pub #supplied_names: &'__ffb mut #supplied_types,)*
+            }
+
+            impl<#bound_list> __FfBound<#bound_list> {
+                #[inline]
+                pub fn into_local(self) -> Local<#local_from_bound> {
+                    let __FfTaskLocal { #(#owned_names),* } = self.__ff_task;
+                    Local {
+                        #(#owned_names,)*
+                        #(#supplied_names: self.#supplied_names,)*
+                    }
+                }
+            }
+
             pub struct Shared<#shared_list> {
                 #(#shared_fields)*
             }
 
-            pub struct Spawn<#spawn_list> {
+            // Bounded on the struct as well as the function, so a firmware
+            // binding an alias to a task with other inputs is told so at the
+            // field it wrote, where the struct is built - not at the call.
+            pub struct Spawn<#spawn_list>
+            where #(#spawn_bounds),* {
                 #(#spawn_fields)*
             }
 
@@ -282,31 +389,72 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
             }
 
             /// Configuration the firmware supplies per instance. Associated
-            /// consts stay compile-time and are usable in const positions.
+            /// consts stay compile-time, though as a generic parameter's they
+            /// cannot size an array on stable Rust.
             pub trait Config {
                 #(#config_consts)*
             }
 
-            pub struct Context<#context_generics> {
+            pub struct Context<#context_generics>
+            where #(#spawn_bounds),* {
                 pub local: Local<#local_list>,
                 pub shared: Shared<#shared_list>,
                 pub spawn: Spawn<#spawn_list>,
-                pub config: ::core::marker::PhantomData<__FfConfig>,
+                pub config: ::core::marker::PhantomData<CONFIG>,
                 #monotonic_field
             }
         }
 
-        #[allow(non_snake_case)]
+        #[allow(non_snake_case, non_camel_case_types)]
         #visibility #asyncness fn #task_name<#context_generics>(
             mut #context_parameter: #task_name::Context<#context_generics>,
             #signature_inputs
         ) #output
         where
-            __FfConfig: #task_name::Config,
+            CONFIG: #task_name::Config,
             #monotonic_bound
             #(#bound_params,)*
             #(#shared_bounds,)*
             #(#spawn_bounds,)*
         #body
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ferroforge_contracts::TaskArguments;
+
+    fn expanded(arguments: &str, function: &str) -> Result<String> {
+        let arguments = syn::parse_str::<TaskArguments>(arguments)?;
+        let function = syn::parse_str::<ItemFn>(function)?;
+        let contract = TaskContract::new(arguments, &function.sig)?;
+        expand(contract, function).map(|output| output.to_string())
+    }
+
+    /// Configuration is the `CONFIG` type parameter's associated constant, so
+    /// the body is passed through as written.
+    #[test]
+    fn configuration_is_read_through_the_config_parameter() {
+        let output = expanded(
+            "config = [period_ms: u32]",
+            "async fn run(cx: run::Context) { let _ = CONFIG::PERIOD_MS; }",
+        )
+        .unwrap();
+        assert!(output.contains("CONFIG :: PERIOD_MS"), "{output}");
+        assert!(output.contains("CONFIG : run :: Config"), "{output}");
+    }
+
+    /// The spelling before it was `CONFIG::FIELD` is named with its fix,
+    /// because the compiler's own message does not say what to write.
+    #[test]
+    fn the_old_config_spelling_says_what_to_write() {
+        let error = expanded(
+            "config = [period_ms: u32]",
+            "async fn run(cx: run::Context) { let _ = CONFIG.PERIOD_MS; }",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("`CONFIG::PERIOD_MS`"), "{error}");
+    }
 }

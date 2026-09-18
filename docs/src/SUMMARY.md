@@ -9,4 +9,5 @@
 - [Build and Development Workflow](workflow.md)
 - [Review and Open Decisions](review.md)
 - [Remaining Work](implementation-plan.md)
+- [Adopting FerroForge in ferro-wasp](ferro-wasp-adoption.md)
 - [Maintaining This Book](documentation.md)

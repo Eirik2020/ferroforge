@@ -4,7 +4,7 @@
 //!
 //! That this checks standalone for ARM is the evidence that the call-through
 //! expansion preserves the authored model - `cx.local`, `cx.shared.lock`,
-//! `cx.spawn`, `CONFIG.FIELD` and `Mono::delay` all still mean what they mean
+//! `cx.spawn`, `CONFIG::FIELD` and `Mono::delay` all still mean what they mean
 //! in ordinary RTIC.
 
 #![no_std]
@@ -31,7 +31,7 @@ pub async fn blink(mut cx: blink::Context) -> ! {
             increment(cx.local.count);
             let _: Result<(), u32> = cx.spawn.report(*cx.local.count);
         }
-        Mono::delay(CONFIG.PERIOD_MS.millis()).await;
+        Mono::delay(CONFIG::PERIOD_MS.millis()).await;
     }
 }
 

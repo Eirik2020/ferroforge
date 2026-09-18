@@ -132,6 +132,26 @@ without it the comparison stays one to one - see
 [remaining work](implementation-plan.md). Specified in
 [workflow](workflow.md#the-cli).
 
+**Configuration is read as `CONFIG::FIELD`, 2026-09-18.** It was
+`CONFIG.FIELD`, rewritten by `#[task]` into an associated constant - the last
+body rewrite, and one that could not reach inside a macro call, so
+`defmt::info!("{=u32}", CONFIG.PERIOD_MS)` did not compile. The configuration's
+type parameter is now named `CONFIG`, and a read is its associated constant,
+written as one. Two alternatives were weighed: a `let CONFIG` value opening
+every body, which keeps the old spelling at the cost of generated code in each
+task, and `cx.config.field` on the context, which is closest to RTIC but stores
+the values in each task's state. Neither sizes an array: a generic's constant
+cannot, on stable Rust, however it is spelled. Breaking for 0.2 task crates.
+Specified in [architecture](architecture.md#task-authoring).
+
+**Task-local initial values belong to the definition, 2026-09-18.** A
+definition may declare `local = [name: Type = value]`, RTIC's own form, and
+the value is the task's: a firmware selecting it binds only the locals that
+have none. Putting the values on each instance instead was rejected, because
+a task like ferro-wasp's `flash_manager_task` would have its twenty initial
+values repeated in every firmware that selects it. Specified in
+[architecture](architecture.md#task-authoring).
+
 **The monotonic is declared inside `app!`, 2026-09-18.** The `monotonic = Mono`
 header argument is gone; RTIC has no such argument, and the declaration already
 names the type. `app!` reads it from any `<timer>_monotonic!(Name, ..)` item in
@@ -266,7 +286,7 @@ the rule.
 | --- | --- |
 | Resource-keyed bounds (`bounds = [led: StatefulOutputPin]`) with `local`/`shared` claims; no separate requirement structs | [architecture](architecture.md#task-authoring) |
 | RTIC-familiar `cx.local` and `cx.shared.<name>.lock(...)` access; both categories in scope | [architecture](architecture.md#task-authoring) |
-| Task-local `CONFIG.FIELD` reads, declared `config = [period_ms: u32]` | [architecture](architecture.md#task-authoring) |
+| Task-local `CONFIG::FIELD` reads, declared `config = [period_ms: u32]` | [architecture](architecture.md#task-authoring) |
 | Inputs as ordinary parameters; inline `spawn = [report(value: u32)]`; RTIC 2 result shapes | [architecture](architecture.md#task-authoring) |
 | SysTick 1 kHz / `u32` profile | [architecture](architecture.md#task-authoring) |
 | Related tasks share a source module with imports declared once at module scope | [architecture](architecture.md#task-authoring) |

@@ -10,7 +10,7 @@
 //! error at the authored line.
 
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::{format_ident, quote, quote_spanned};
 use syn::{
     Attribute, Expr, Ident, Item, LitBool, LitInt, Path, Signature, Token, Type,
     parse::{Parse, ParseStream},
@@ -129,12 +129,35 @@ fn parse_instance(input: ParseStream<'_>, attribute: TaskAttribute) -> syn::Resu
 
 /// The `#[task(..)]` attribute on an item, when it declares an instance rather
 /// than being RTIC's own.
-fn instance_attribute(attributes: &[Attribute]) -> Option<TaskAttribute> {
-    attributes
+///
+/// An attribute that names `from = ..` is an instance whatever else it says, so
+/// its parse error is the author's to see. Only one that does not is left for
+/// RTIC, whose own options - `local = [x: u32 = 0]` among them - this grammar
+/// does not read.
+fn instance_attribute(attributes: &[Attribute]) -> syn::Result<Option<TaskAttribute>> {
+    let Some(attribute) = attributes
         .iter()
         .find(|attribute| attribute.path().is_ident("task"))
-        .and_then(|attribute| attribute.parse_args_with(TaskAttribute::parse).ok())
-        .filter(|parsed| parsed.from.is_some())
+    else {
+        return Ok(None);
+    };
+    match attribute.parse_args_with(TaskAttribute::parse) {
+        Ok(parsed) => Ok(parsed.from.is_some().then_some(parsed)),
+        Err(error) if names_a_definition(attribute) => Err(error),
+        Err(_) => Ok(None),
+    }
+}
+
+/// `from =` at the top level of the attribute's arguments.
+fn names_a_definition(attribute: &Attribute) -> bool {
+    let syn::Meta::List(list) = &attribute.meta else {
+        return false;
+    };
+    let tokens = list.tokens.clone().into_iter().collect::<Vec<_>>();
+    tokens.windows(2).any(|pair| {
+        matches!(&pair[0], proc_macro2::TokenTree::Ident(ident) if ident == "from")
+            && matches!(&pair[1], proc_macro2::TokenTree::Punct(punct) if punct.as_char() == '=')
+    })
 }
 
 /// The type name substituted for a task's monotonic slot. An alias rather than
@@ -220,7 +243,7 @@ impl Parse for App {
         let mut elements = Vec::new();
         while !input.is_empty() {
             let attributes = input.call(Attribute::parse_outer)?;
-            if let Some(attribute) = instance_attribute(&attributes) {
+            if let Some(attribute) = instance_attribute(&attributes)? {
                 elements.push(Element::Instance(parse_instance(input, attribute)?));
             } else {
                 let mut item: Item = input.parse()?;
@@ -320,27 +343,55 @@ fn render_instance(instance: &Instance) -> syn::Result<TokenStream> {
         .as_ref()
         .expect("instances are recognised by their `from`");
 
+    // The adapter reads the context by the name the declaration gives it, so
+    // `_cx` works as well as `cx`.
+    let context = signature
+        .inputs
+        .first()
+        .ok_or_else(|| syn::Error::new(signature.span(), "task needs a context parameter"))?;
+    let cx = match context {
+        syn::FnArg::Typed(typed) => match typed.pat.as_ref() {
+            syn::Pat::Ident(pattern) => pattern.ident.clone(),
+            other => {
+                return Err(syn::Error::new(
+                    other.span(),
+                    "name the context, such as `cx`; the adapter reads it",
+                ));
+            }
+        },
+        other => return Err(syn::Error::new(other.span(), "expected a task context")),
+    };
+
+    // Every piece of the adapter carries the span of the authored binding it
+    // came from, so a type error in it is reported on that line of the
+    // declaration rather than at `ferroforge::app! {`.
     let local_fields = attribute.local.iter().map(|rebind| {
         let (requirement, resource) = (&rebind.requirement, &rebind.target);
-        quote!(#requirement: cx.local.#resource)
+        quote_spanned!(resource.span()=> #requirement: #cx.local.#resource)
     });
     let shared = &attribute.shared;
     let shared_fields = shared.iter().map(|rebind| {
         let (requirement, resource) = (&rebind.requirement, &rebind.target);
-        quote!(#requirement: cx.shared.#resource)
+        quote_spanned!(resource.span()=> #requirement: #cx.shared.#resource)
     });
+    // The definition's own state, as one RTIC task-local. Declared on every
+    // instance, because the macro does not read the definition to know whether
+    // it has any; with none, the struct is empty and costs nothing.
+    let task_local = format_ident!("__ff_task_{}", name);
     let local_claims = attribute.local.iter().map(|rebind| &rebind.target);
+    let local_attribute = quote!(
+        , local = [#(#local_claims,)* #task_local: #from::__FfTaskLocal = #from::__FfTaskLocal::INIT]
+    );
     let shared_claims = shared.iter().map(|rebind| &rebind.target);
-    let local_attribute =
-        (!attribute.local.is_empty()).then(|| quote!(, local = [#(#local_claims),*]));
     let shared_attribute = (!shared.is_empty()).then(|| quote!(, shared = [#(#shared_claims),*]));
 
-    // The spawn closure forwards to the bound instance's real RTIC `spawn`.
-    // Argument count comes from the definition, so the closure takes the
-    // arguments it is given rather than naming them.
+    // The bound instance's real RTIC `spawn` function, not a closure around
+    // it. A function item satisfies the definition's
+    // `Fn(A, B) -> Result<(), (A, B)>` for any number of inputs, so this needs
+    // nothing from the definition; a one-argument closure fit only one.
     let spawn_fields = attribute.spawn.iter().map(|rebind| {
         let (alias, target) = (&rebind.requirement, &rebind.target);
-        quote!(#alias: |value| #target::spawn(value))
+        quote_spanned!(target.span()=> #alias: #target::spawn)
     });
 
     let config_type = format_ident!("__FfConfig{}", name.to_string().to_uppercase());
@@ -348,7 +399,7 @@ fn render_instance(instance: &Instance) -> syn::Result<TokenStream> {
     let config_consts = attribute.config.iter().map(|value| {
         let (name, ty, value) = (&value.name, &value.ty, &value.value);
         let name = format_ident!("{}", name.to_string().to_uppercase(), span = name.span());
-        quote!(const #name: #ty = #value;)
+        quote_spanned!(name.span()=> const #name: #ty = #value;)
     });
 
     let priority = attribute
@@ -390,13 +441,25 @@ fn render_instance(instance: &Instance) -> syn::Result<TokenStream> {
             other => Err(syn::Error::new(other.span(), "unsupported task input")),
         })
         .collect::<syn::Result<Vec<_>>>()?;
-    let context = signature
-        .inputs
-        .first()
-        .ok_or_else(|| syn::Error::new(signature.span(), "task needs a context parameter"))?;
     let asyncness = &signature.asyncness;
     let awaiting = signature.asyncness.map(|_| quote!(.await));
     let output = &signature.output;
+
+    let call = quote_spanned! {from.span()=>
+        #from(
+            #from::Context {
+                local: #from::__FfBound {
+                    __ff_task: #cx.local.#task_local,
+                    #(#local_fields),*
+                }.into_local(),
+                shared: #from::Shared { #(#shared_fields),* },
+                spawn: #from::Spawn { #(#spawn_fields),* },
+                config: ::core::marker::PhantomData::<#config_type>,
+                monotonic: ::core::marker::PhantomData::<#monotonic_slot>,
+            }
+            #(, #forwarded)*
+        ) #awaiting
+    };
 
     Ok(quote! {
         struct #config_type;
@@ -406,16 +469,7 @@ fn render_instance(instance: &Instance) -> syn::Result<TokenStream> {
 
         #[task(#binds priority = #priority #local_attribute #shared_attribute)]
         #asyncness fn #name(#context #(, #inputs)*) #output {
-            #from(
-                #from::Context {
-                    local: #from::Local { #(#local_fields),* },
-                    shared: #from::Shared { #(#shared_fields),* },
-                    spawn: #from::Spawn { #(#spawn_fields),* },
-                    config: ::core::marker::PhantomData::<#config_type>,
-                    monotonic: ::core::marker::PhantomData::<#monotonic_slot>,
-                }
-                #(, #forwarded)*
-            ) #awaiting
+            #call
         }
     })
 }
@@ -496,6 +550,42 @@ mod tests {
             "the interrupt must be named: {error}"
         );
         assert!(error.contains("led"), "the instance must be named: {error}");
+    }
+
+    /// An attribute naming a definition is an instance, so a mistake in the
+    /// rest of it is reported as that mistake - not dropped, leaving the
+    /// bodyless declaration to fail later as a confusing item parse.
+    #[test]
+    fn a_bad_option_on_an_instance_is_reported() {
+        let error = match syn::parse_str::<App>(
+            "device = chip::pac, #[task(from = blink, typo = y)] async fn led(cx: led::Context);",
+        ) {
+            Ok(_) => panic!("an unknown option must be refused"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains("unknown task option `typo`"), "{error}");
+    }
+
+    /// RTIC's own task options are not this grammar's, and a task without
+    /// `from` is RTIC's to read.
+    #[test]
+    fn an_rtic_task_is_left_to_rtic() {
+        expand_source(
+            "#[task(priority = 1, local = [n: u32 = 0])] async fn own(cx: own::Context) {}",
+        )
+        .expect("RTIC's own local initializers must pass through");
+    }
+
+    /// RTIC's `spawn` function itself, which fits any number of inputs.
+    #[test]
+    fn a_spawn_alias_is_the_targets_spawn_function() {
+        let output = expand_source(
+            "#[task(from = blink, spawn = [report = telemetry])] async fn led(cx: led::Context);",
+        )
+        .unwrap()
+        .to_string();
+        assert!(output.contains("report : telemetry :: spawn"), "{output}");
+        assert!(!output.contains("| value |"), "{output}");
     }
 
     /// The control: the same binding on a synchronous task is an ordinary

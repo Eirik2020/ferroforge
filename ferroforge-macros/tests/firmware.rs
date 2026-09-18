@@ -134,3 +134,156 @@ fn a_task_crate_for_another_hal_checks_independently() {
 fn a_firmware_on_another_hal_links() {
     release_links("nucleo-h753zi");
 }
+
+/// Shapes the example firmware does not use, compiled for real rather than
+/// asserted from an expansion: spawn aliases taking zero, one and two inputs,
+/// a timestamp from `Mono::now()`, configuration read inside a macro call,
+/// local resources whose initial values the definition owns beside one the
+/// firmware supplies, and a shared resource known only by a trait bound. Each was a defect that expanded cleanly
+/// and failed only in the compiler, which is why this builds instead.
+///
+/// Defined and selected in one crate, on the F401RE firmware's manifest and
+/// lock file, so it adds no example task crate and builds offline.
+const SHAPES: &str = r#"
+#![no_std]
+#![no_main]
+
+use defmt_rtt as _;
+use panic_probe as _;
+
+#[ferroforge::task(
+    spawn = [takes_none(), takes_one(value: u32), takes_two(a: u32, b: bool)],
+    config = [period_ms: u32],
+    monotonic = Mono,
+)]
+pub async fn source(cx: source::Context) {
+    defmt::info!("period {=u32}", CONFIG::PERIOD_MS);
+    let _: Result<(), ()> = cx.spawn.takes_none();
+    let _: Result<(), u32> = cx.spawn.takes_one(1);
+    let _: Result<(), (u32, bool)> = cx.spawn.takes_two(1, true);
+    let _: u32 = Mono::now().duration_since_epoch().to_micros();
+}
+
+#[ferroforge::task(
+    local = [
+        page: Option<[u8; 4]> = None,
+        retries: u8 = 3,
+        count: u32,
+    ],
+)]
+pub async fn takes_none(cx: takes_none::Context) {
+    *cx.local.retries -= 1;
+    *cx.local.page = Some([0; 4]);
+    *cx.local.count += u32::from(*cx.local.retries);
+}
+
+#[ferroforge::task]
+pub async fn takes_one(_cx: takes_one::Context, _value: u32) {}
+
+#[ferroforge::task]
+pub async fn takes_two(_cx: takes_two::Context, _a: u32, _b: bool) {}
+
+pub trait Sink {
+    fn put(&mut self, value: u8);
+}
+
+pub struct Counter(pub u32);
+
+impl Sink for Counter {
+    fn put(&mut self, value: u8) {
+        self.0 += u32::from(value);
+    }
+}
+
+#[ferroforge::task(bounds = [out: Sink], shared = [out])]
+pub async fn writer(mut cx: writer::Context) {
+    cx.shared.out.lock(|out| out.put(1));
+}
+
+ferroforge::app! {
+    device = stm32f4xx_hal::pac,
+    dispatchers = [USART1],
+
+    use rtic_monotonics::systick::prelude::*;
+    systick_monotonic!(Mono, 1000);
+
+    use super::{Counter, source, takes_none, takes_one, takes_two, writer};
+
+    #[shared]
+    struct Shared {
+        sink: Counter,
+    }
+
+    #[local]
+    struct Local {
+        zero_count: u32,
+    }
+
+    #[init]
+    fn init(cx: init::Context) -> (Shared, Local) {
+        Mono::start(cx.core.SYST, 16_000_000);
+        first::spawn().unwrap();
+        (Shared { sink: Counter(0) }, Local { zero_count: 0 })
+    }
+
+    #[task(
+        from = source,
+        priority = 1,
+        spawn = [takes_none = zero, takes_one = one, takes_two = two],
+        config = [period_ms: u32 = 5],
+    )]
+    async fn first(cx: first::Context);
+
+    // `page` and `retries` are the definition's; only `count` is bound here.
+    #[task(from = takes_none, priority = 1, local = [count = zero_count])]
+    async fn zero(_cx: zero::Context);
+
+    #[task(from = writer, priority = 1, shared = [out = sink])]
+    async fn write(cx: write::Context);
+
+    #[task(from = takes_one, priority = 1)]
+    async fn one(cx: one::Context, value: u32);
+
+    #[task(from = takes_two, priority = 1)]
+    async fn two(cx: two::Context, a: u32, b: bool);
+}
+"#;
+
+#[test]
+#[ignore = "cross-compiles; run with --ignored"]
+fn shapes_the_example_firmware_does_not_use_compile() {
+    let root = repository_root();
+    let source = root.join("firmware/nucleo-f401re");
+    let directory = root.join("target/fixtures/shapes");
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(directory.join("src")).unwrap();
+    std::fs::create_dir_all(directory.join(".cargo")).unwrap();
+    for file in ["memory.x", "Cargo.lock", ".cargo/config.toml"] {
+        std::fs::copy(source.join(file), directory.join(file)).unwrap();
+    }
+    // The copy sits at a different depth, so its path dependencies are made
+    // absolute - with forward slashes, which a TOML string reads literally.
+    let absolute = root.display().to_string().replace('\\', "/");
+    let manifest = std::fs::read_to_string(source.join("Cargo.toml"))
+        .unwrap()
+        .replace("path = \"../../", &format!("path = \"{absolute}/"))
+        // A task that declares a monotonic names `fugit` in its bound, and
+        // these definitions live in the firmware crate, so it needs the
+        // dependency a task crate would have. Already in the lock file.
+        .replacen("[dependencies]\n", "[dependencies]\nfugit = \"0.3\"\n", 1);
+    std::fs::write(directory.join("Cargo.toml"), manifest).unwrap();
+    std::fs::write(directory.join("src/main.rs"), SHAPES).unwrap();
+
+    let output = Command::new(cargo())
+        .args(["check", "--bin", "nucleo-f401re", "--offline"])
+        .current_dir(&directory)
+        .env("CARGO_TARGET_DIR", root.join("target/fixtures/shared"))
+        .output()
+        .expect("cargo must be runnable");
+    assert!(
+        output.status.success(),
+        "every spawn arity, `Mono::now()`, `CONFIG` in a macro, task-owned \
+         locals and a bounded shared resource must compile:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

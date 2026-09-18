@@ -86,6 +86,16 @@ const CASES: &[Case] = &[
     clock!();",
         expected: "NoMonotonicDeclared",
     },
+    // A spawn alias bound to an instance whose inputs differ. The adapter is
+    // generated, so the error must still be reported on the binding that
+    // caused it - the snippet showing the authored line, not `app! {`.
+    Case {
+        name: "spawn-alias-bound-to-a-task-with-other-inputs",
+        firmware: BASE,
+        from: "spawn = [report = telemetry],",
+        to: "spawn = [report = status_blink],",
+        expected: "spawn = [report = status_blink],",
+    },
     // Dispatchers are the author's choice, passed through unchanged - so RTIC's
     // own validation of that choice must still reach the authored line.
     Case {

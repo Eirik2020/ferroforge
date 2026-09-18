@@ -98,8 +98,10 @@ asserting nothing. See [workflow](workflow.md) for how to run them.
 - `app!` expands in place into `#[rtic::app]`, passing `Shared`, `Local`,
   `init` and ordinary items through untouched, and emitting a config impl and an
   adapter per instance.
-- Configuration is an associated-const trait, so values stay compile-time and
-  work in const positions such as array lengths.
+- Configuration is an associated-const trait, so values stay compile-time. They
+  do not work in const positions such as array lengths: the trait reaches the
+  body as a generic parameter, and stable Rust refuses a generic's constant
+  there.
 - Selecting a crate that is not a FerroForge library fails to compile: the
   composition names that crate's own `Context`, `Local` and `Config`, so there
   is nothing for a separate library check to catch.

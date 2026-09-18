@@ -42,7 +42,7 @@ against real traits:
 | `cx.local.led` | `&mut Led` where `Led: StatefulOutputPin` |
 | `cx.shared.enabled.lock(..)` | a generic bounded by `rtic::Mutex<T = bool>` - RTIC's own proxy |
 | `cx.spawn.report(v)` | a method over a real `Fn(u32) -> Result<(), u32>` |
-| `CONFIG.PERIOD_MS` | an associated const on the firmware's config type |
+| `CONFIG::PERIOD_MS` | an associated const of the `CONFIG` type parameter, which the firmware fills |
 | `Mono::delay(..)` | a type parameter bounded by `rtic_monotonics::Monotonic` |
 
 Because those are real types, independent checking has nothing left to diverge
@@ -62,13 +62,26 @@ each was settled.
 - RTIC-familiar access: `cx.local.<name>`, and `cx.shared.<name>.lock(..)` for
   shared resources. Both categories are in scope, including state that persists
   across invocations.
-- Configuration is read as `CONFIG.FIELD`, declared `config = [period_ms: u32]`.
+- A local with an initial value, `local = [retries: u8 = 0]`, is the task's own
+  state, written as RTIC writes a task-local. The definition owns the value, so
+  every firmware selecting the task gets it and binds only the locals without
+  one. As in RTIC, the type is concrete and the value a constant expression.
+  `app!` gives each instance one RTIC task-local holding all of them, so it
+  still reads nothing from the definition.
+- Configuration is read as `CONFIG::FIELD`, declared `config = [period_ms: u32]`.
+  `CONFIG` is the task's type parameter for the firmware's configuration, so a
+  read is an associated constant the compiler resolves wherever it is written,
+  inside a macro call such as `defmt::info!` too. Nothing in the body is
+  rewritten. The old spelling, `CONFIG.FIELD`, is refused with the new one named
+  - except inside a macro call, which nothing reads, where the compiler's own
+  "expected value, found type parameter" is all there is.
 - Incoming inputs are ordinary parameters after the context. Outgoing calls use
   inline aliases, `spawn = [report(value: u32)]`, with RTIC 2 result shapes:
   `()` for no inputs, the value for one, a tuple for several.
 - The monotonic is named as imported, `monotonic = Mono`. The initial profile
-  is 1 kHz with `u32` time values, which the firmware satisfies by declaring a
-  matching monotonic of its own.
+  is 1 kHz with `u32` time values, fixed for both `Duration` and `Instant` so a
+  task can wait and also take timestamps from `Mono::now()`. The firmware
+  satisfies it by declaring a matching monotonic of its own.
 - Related tasks share a source module with imports declared once at module
   scope. A task crate may hold several modules.
 
