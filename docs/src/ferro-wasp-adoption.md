@@ -91,6 +91,14 @@ selects for the tasks it touched.
    which overlaps with FerroForge, so the two do not drift. Entry: phase 5
    flown.
 
+## Kept in the App
+
+Foxeer's `usb_fs` and `flash_manager_task` stay plain RTIC tasks inside its
+`app!` until FCU3 gains a configurator and onboard storage. They carry the
+board's identity from its own build script and types that exist only with
+`mspv2_configurator`, so how a board supplies those is better designed
+against two boards than one.
+
 ## FCU3 Drift
 
 Where FCU3's copy of a task matches Foxeer's, both select one definition.
