@@ -82,6 +82,8 @@ struct FerroForge {
     chip: Option<String>,
     #[serde(rename = "defmt-log")]
     defmt_log: Option<String>,
+    #[serde(rename = "defmt-location")]
+    defmt_location: Option<bool>,
 }
 
 /// One application under `firmware/`.
@@ -103,6 +105,16 @@ impl Firmware {
             .metadata()?
             .defmt_log
             .unwrap_or_else(|| "info".to_owned()))
+    }
+
+    /// Whether the probe prints the file and line each log came from.
+    /// Declared rather than passed, for the same reason `defmt-log` is: it is
+    /// written into an emitted file.
+    ///
+    /// On by default, as probe-rs has it. A firmware whose logs are read as a
+    /// running commentary rather than debugged turns it off.
+    pub fn defmt_location(&self) -> Result<bool, Error> {
+        Ok(self.metadata()?.defmt_location.unwrap_or(true))
     }
 
     /// The chip this firmware declares. Not defaulted: guessing which chip a

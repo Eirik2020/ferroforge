@@ -353,9 +353,13 @@ impl Backend {
         )
     }
 
-    pub fn cargo_config(&self, defmt_log: &str) -> String {
+    pub fn cargo_config(&self, defmt_log: &str, defmt_location: bool) -> String {
+        let location = match defmt_location {
+            true => "",
+            false => " --no-location",
+        };
         format!(
-            "[build]\ntarget = \"{target}\"\n\n[target.{target}]\nrunner = \"probe-rs run --chip {chip}\"\nrustflags = [\n    \"-C\", \"link-arg=-L.\",\n    \"-C\", \"link-arg=-Tlink.x\",\n    \"-C\", \"link-arg=-Tdefmt.x\",\n]\n\n[env]\nDEFMT_LOG = \"{defmt_log}\"\n",
+            "[build]\ntarget = \"{target}\"\n\n[target.{target}]\nrunner = \"probe-rs run --chip {chip}{location}\"\nrustflags = [\n    \"-C\", \"link-arg=-L.\",\n    \"-C\", \"link-arg=-Tlink.x\",\n    \"-C\", \"link-arg=-Tdefmt.x\",\n]\n\n[env]\nDEFMT_LOG = \"{defmt_log}\"\n",
             target = self.chip.rust_target,
             chip = self.chip.probe_rs_chip,
         )
@@ -399,11 +403,14 @@ impl Backend {
         )
     }
 
-    /// Replace the marked region of a firmware's manifest. The manifest is not
-    /// created or otherwise rewritten: absent markers are an error, because
-    /// guessing where platform crates belong in an authored file is worse than
-    /// asking for them.
-    fn sync_manifest(&self, manifest: &Path) -> Result<(), Error> {
+    /// The firmware's manifest with its marked region replaced, or the reason
+    /// it cannot be. The manifest is not created or otherwise rewritten:
+    /// absent markers are an error, because guessing where platform crates
+    /// belong in an authored file is worse than asking for them.
+    ///
+    /// This only reads, so `emit` can refuse a firmware before writing
+    /// anything: one that is not FerroForge's must keep the files it has.
+    fn synced_manifest(&self, manifest: &Path) -> Result<String, Error> {
         let display = manifest.display().to_string();
         let text = fs::read_to_string(manifest).map_err(|source| Error::Read {
             path: display.clone(),
@@ -448,14 +455,22 @@ impl Backend {
             updated.push('\n');
         }
 
-        fs::write(manifest, updated).map_err(|source| Error::Write {
-            path: display,
-            source,
-        })
+        Ok(updated)
     }
 
     /// Write every file derived from this chip into a firmware directory.
-    pub fn emit(&self, firmware: &Path, defmt_log: &str) -> Result<Vec<String>, Error> {
+    pub fn emit(
+        &self,
+        firmware: &Path,
+        defmt_log: &str,
+        defmt_location: bool,
+    ) -> Result<Vec<String>, Error> {
+        // Read and check the manifest first. A firmware this refuses keeps
+        // every file it had: the derived files are only FerroForge's to write
+        // in a firmware whose manifest says so.
+        let manifest = firmware.join("Cargo.toml");
+        let synced = self.synced_manifest(&manifest)?;
+
         let cargo_dir = firmware.join(".cargo");
         fs::create_dir_all(&cargo_dir).map_err(|source| Error::Write {
             path: cargo_dir.display().to_string(),
@@ -463,7 +478,10 @@ impl Backend {
         })?;
         let files = [
             (firmware.join("memory.x"), self.memory_x()),
-            (cargo_dir.join("config.toml"), self.cargo_config(defmt_log)),
+            (
+                cargo_dir.join("config.toml"),
+                self.cargo_config(defmt_log, defmt_location),
+            ),
             (firmware.join("Embed.toml"), self.embed_toml()),
         ];
         let mut written = Vec::new();
@@ -475,8 +493,10 @@ impl Backend {
             written.push(path.display().to_string());
         }
 
-        let manifest = firmware.join("Cargo.toml");
-        self.sync_manifest(&manifest)?;
+        fs::write(&manifest, synced).map_err(|source| Error::Write {
+            path: manifest.display().to_string(),
+            source,
+        })?;
         written.push(format!("{} (platform dependencies)", manifest.display()));
 
         Ok(written)
@@ -610,8 +630,8 @@ mod derivation {
 
         assert_ne!(first.memory_x(), second.memory_x());
         assert_ne!(
-            first.cargo_config("info"),
-            second.cargo_config("info"),
+            first.cargo_config("info", true),
+            second.cargo_config("info", true),
             "the target triple and probe chip both come from the backend"
         );
         assert_ne!(first.embed_toml(), second.embed_toml());
@@ -622,14 +642,26 @@ mod derivation {
         );
     }
 
-    /// `--defmt-log` is the caller's, not the chip's.
+    /// The log filter is the firmware's, not the chip's.
     #[test]
     fn the_log_level_reaches_the_emitted_config() {
         let backend = variant("CHIP_A", "thumbv7em-none-eabihf", 524288, 0x198);
         assert!(
             backend
-                .cargo_config("trace")
+                .cargo_config("trace", true)
                 .contains("DEFMT_LOG = \"trace\"")
+        );
+    }
+
+    /// So is whether the probe prints each log's file and line.
+    #[test]
+    fn location_is_suppressed_only_when_the_firmware_asks() {
+        let backend = variant("CHIP_A", "thumbv7em-none-eabihf", 524288, 0x198);
+        assert!(!backend.cargo_config("info", true).contains("--no-location"));
+        let quiet = backend.cargo_config("info", false);
+        assert!(
+            quiet.contains("probe-rs run --chip CHIP_A --no-location"),
+            "{quiet}"
         );
     }
 }

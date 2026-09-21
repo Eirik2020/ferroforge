@@ -136,7 +136,13 @@ that alone:
 [package.metadata.ferroforge]
 chip = "stm32f401re"
 defmt-log = "info"
+defmt-location = true
 ```
+
+`defmt-location` is optional and defaults to `true`, as probe-rs has it. A
+firmware that sets it to `false` gets `--no-location` on its runner, so the
+probe prints each log without the file and line it came from - for a log read
+as a running commentary rather than debugged.
 
 `defmt-log` is optional and defaults to `info`. It takes anything `DEFMT_LOG`
 takes, including a per-crate filter such as `info,noisy_crate=off`. It is

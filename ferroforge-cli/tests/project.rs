@@ -818,6 +818,57 @@ fn a_project_without_markers_says_how_to_add_them() {
     );
 }
 
+/// A firmware the CLI refuses keeps every file it had. Its derived files are
+/// FerroForge's to write only in a firmware whose manifest says so; writing
+/// them first and refusing afterwards replaced an unrelated project's own
+/// runner, memory map and probe configuration.
+#[test]
+fn a_refused_sync_leaves_the_firmware_untouched() {
+    let root = repository_root().join("target/project-tests/no-markers");
+    let _ = fs::remove_dir_all(&root);
+    let firmware = root.join("firmware/board");
+    fs::create_dir_all(firmware.join(".cargo")).unwrap();
+    let files = [
+        (
+            firmware.join("Cargo.toml"),
+            "[package]\nname = \"board\"\nversion = \"0.1.0\"\n\n\
+             [package.metadata.ferroforge]\nchip = \"stm32f401re\"\n\n\
+             [dependencies]\nstm32f4xx-hal = { git = \"https://example.invalid\" }\n",
+        ),
+        (
+            firmware.join(".cargo/config.toml"),
+            "[target.thumbv7em-none-eabihf]\nrunner = [\"probe-rs\", \"run\", \"--protocol\", \"swd\"]\n",
+        ),
+        (
+            firmware.join("memory.x"),
+            "MEMORY\n{\n  FLASH : ORIGIN = 0x08000000, LENGTH = 512K\n}\n",
+        ),
+        (
+            firmware.join("Embed.toml"),
+            "[default.probe]\nprotocol = \"Swd\"\n",
+        ),
+    ];
+    for (path, contents) in &files {
+        fs::write(path, contents).unwrap();
+    }
+
+    let output = ferroforge_in(&root, &["sync"]);
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("ferroforge:platform-dependencies"),
+        "{}",
+        stderr(&output)
+    );
+    for (path, contents) in &files {
+        assert_eq!(
+            &fs::read_to_string(path).unwrap(),
+            contents,
+            "{} was rewritten by a refused sync",
+            path.display()
+        );
+    }
+}
+
 /// A chip feature enabled outside the generated block is a chip named twice.
 /// The HAL does reject two at once, but from a build script, as a panic with no
 /// cause - so this must be caught before Cargo is ever reached.
@@ -1027,6 +1078,42 @@ fn a_firmware_declares_its_log_filter() {
         config.contains("DEFMT_LOG = \"warn,chatty_crate=off\""),
         "{config}"
     );
+}
+
+/// File and line on every line is for debugging; a firmware whose log is read
+/// as a running commentary turns it off, and the probe is told so.
+#[test]
+fn a_firmware_may_suppress_the_location_on_each_log() {
+    let root = repository_root().join("target/project-tests/defmt-location");
+    let _ = fs::remove_dir_all(&root);
+    let firmware = root.join("firmware/board");
+    fs::create_dir_all(&firmware).unwrap();
+    fs::write(
+        firmware.join("Cargo.toml"),
+        "[package]\nname = \"board\"\nversion = \"0.1.0\"\n\n\
+         [package.metadata.ferroforge]\nchip = \"stm32f401re\"\n\
+         defmt-location = false\n\n\
+         [dependencies]\n# ferroforge:platform-dependencies\n# ferroforge:end\n",
+    )
+    .unwrap();
+
+    let output = ferroforge_in(&root, &["sync"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let config = fs::read_to_string(firmware.join(".cargo/config.toml")).unwrap();
+    assert!(
+        config.contains("runner = \"probe-rs run --chip STM32F401RE --no-location\""),
+        "{config}"
+    );
+}
+
+/// On by default, as probe-rs has it.
+#[test]
+fn a_firmware_keeps_the_location_unless_it_says_otherwise() {
+    let root = scratch("defmt-location-default", &[("solo", Some("stm32f401re"))]);
+    let output = ferroforge_in(&root, &["sync"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let config = fs::read_to_string(root.join("firmware/solo/.cargo/config.toml")).unwrap();
+    assert!(!config.contains("--no-location"), "{config}");
 }
 
 /// Without one, `info` - the level a person wants when they have just flashed

@@ -234,7 +234,9 @@ fn write_firmware(
     )?;
     // Written by the same code a later `sync` uses, so a new firmware is
     // already in the state `sync` would leave it.
-    let written = backend.emit(firmware, "info").map_err(Error::Backend)?;
+    let written = backend
+        .emit(firmware, "info", true)
+        .map_err(Error::Backend)?;
     Ok(written.len())
 }
 
