@@ -6,6 +6,19 @@ what is left to build is in [remaining work](implementation-plan.md).
 
 ## Current Decisions
 
+**FCU3 retired, 2026-09-22.** ferro-wasp's second flight board is obsolete.
+Its test gates are retired and its procedure archived; its firmware stays in
+tree and keeps compiling so a second board can be revived cheaply. The FCU3
+drift table is gone from [ferro-wasp adoption](ferro-wasp-adoption.md), and
+with it the last open question about whose actuator validation is right:
+Foxeer's is. The cost is that nothing in ferro-wasp now exercises one
+definition across two boards, which is [G1](governing-requirements.md)'s
+central claim - FerroForge's own task crates and tests carry it instead.
+
+Consequently Foxeer's `usb_fs` and `flash_manager_task` become definitions
+shaped by Foxeer alone, rather than waiting for a second board that is not
+coming.
+
 **Call-through model adopted, 2026-09-16.** FerroForge no longer transplants
 source. A reusable task is an ordinary generic function in its own crate, and a
 firmware's `app!` expands in place into a real `#[rtic::app]` whose handlers

@@ -93,36 +93,26 @@ selects for the tasks it touched.
 
 ## Kept in the App
 
-Foxeer's `usb_fs` and `flash_manager_task` stay plain RTIC tasks inside its
-`app!` until FCU3 gains a configurator and onboard storage. They carry the
-board's identity from its own build script and types that exist only with
-`mspv2_configurator`, so how a board supplies those is better designed
-against two boards than one.
+Foxeer's `usb_fs` and `flash_manager_task` were the last two plain RTIC tasks
+inside its `app!`. They were held back to be designed against two boards, and
+FCU3's retirement voided that reason, so they become definitions shaped by
+Foxeer alone: they carry the board's identity from its own build script and
+types that exist only with `mspv2_configurator`, and a definition must take
+both from its instance.
 
-## FCU3 Drift
+## FCU3
 
-Where FCU3's copy of a task matches Foxeer's, both select one definition.
-Where it differs, FCU3 keeps its own until someone decides which behaviour
-is right; unifying changes one board's behaviour or its logs. Foxeer is the
-golden app, so the default answer is Foxeer's, but each needs a decision:
+Obsolete since 2026-09-22. Its firmware stays in ferro-wasp's tree and keeps
+compiling in CI so a second board can be revived cheaply, but it has no gates,
+no image, and no claim on a definition's design. Where its behaviour differed
+from Foxeer's - actuator validation above all - Foxeer's is now simply the
+behaviour.
 
-| Task | How FCU3 differs |
-| --- | --- |
-| `actuator_output` and `ActuatorHardware` | Safety-relevant. FCU3's wrapper refuses a non-finite or out-of-range throttle vector itself, stops the motors on any rejected command, and aborts arming by commanding low throttle; Foxeer's validates armed commands in the task and relies on the bank's own rejection in the wrapper, then forces the motors off. Both appear to fail safe, differently. |
-| `control_loop` | Roughly 86% the same; the rest has not been reviewed line by line and needs to be before unifying. |
-| `dshot_service`, DShot DMA handlers | Log wording; FCU3 reports a spurious DMA interrupt once rather than every time. |
-| `esc_manager_task` | Log wording only; its motor map is a table where Foxeer's is a function, with the same values. |
-| `usart1_rx_dma_transfer`, `usart1_rx_peripheral` | Log wording and layout only. |
-| `safety_master` | No actuator-output inhibit or capped bench mode; a different arming-failure report. |
-| `heartbeat` | A much smaller status report. |
-| `spi1_poll`, `spi1_parser` | An older, timer-driven, MPU6500-only IMU path. |
-| `dma_adc1` | A fixed cell count and an older current formula. |
-| `usb_fs` | A much smaller USB task, without Foxeer's storage CLI or configurator. |
+Only Foxeer and the NUCLEO bring-up app remain active, so nothing in
+ferro-wasp currently exercises one definition across two boards.
 
 ## Open Decisions
 
-- Each row of [FCU3 drift](#fcu3-drift): unify on Foxeer's behaviour, or keep
-  FCU3's.
 - Overriding a backend's platform crate source (CLI gaps, HAL source).
 - Where a firmware records probe arguments and environment variables (CLI
   gaps, probe and environment settings).
