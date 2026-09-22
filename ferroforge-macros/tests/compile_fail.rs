@@ -129,7 +129,7 @@ fn repository_root() -> PathBuf {
 /// dependencies are made absolute because the copy sits at a different depth.
 fn prepare(firmware: &str, name: &str, mutation: Option<&Case>) -> PathBuf {
     let root = repository_root();
-    let source = root.join("firmware").join(firmware);
+    let source = root.join("examples/firmware").join(firmware);
     let directory = root.join("target/compile-fail").join(name);
 
     let _ = fs::remove_dir_all(&directory);
@@ -144,9 +144,13 @@ fn prepare(firmware: &str, name: &str, mutation: Option<&Case>) -> PathBuf {
     // Forward slashes: a Windows path in a TOML basic string would read its
     // separators as escape sequences.
     let absolute = root.display().to_string().replace('\\', "/");
+    // The example firmwares sit at `examples/firmware/<name>/`, so `../../../`
+    // reaches the FerroForge crates and `../../` reaches a sibling task crate
+    // under `examples/`. Rewrite the longer prefix first.
     let manifest = fs::read_to_string(source.join("Cargo.toml"))
         .unwrap()
-        .replace("path = \"../../", &format!("path = \"{absolute}/"));
+        .replace("path = \"../../../", &format!("path = \"{absolute}/"))
+        .replace("path = \"../../", &format!("path = \"{absolute}/examples/"));
     fs::write(directory.join("Cargo.toml"), manifest).unwrap();
 
     let mut main = fs::read_to_string(source.join("src/main.rs")).unwrap();

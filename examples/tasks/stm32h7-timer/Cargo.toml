@@ -9,7 +9,7 @@ test = false
 bench = false
 
 [dependencies]
-ferroforge = { path = "../../ferroforge" }
+ferroforge = { path = "../../../ferroforge" }
 stm32h7xx-hal = { version = "0.16.0", default-features = false, features = [] }
 
 [features]

@@ -56,7 +56,7 @@ fn checks_standalone(crate_path: &str, extra: &[&str]) {
 #[test]
 #[ignore = "cross-compiles; run with --ignored"]
 fn a_reusable_task_crate_checks_independently() {
-    checks_standalone("tasks/blinky", &[]);
+    checks_standalone("examples/tasks/blinky", &[]);
 }
 
 /// A portable crate that is a protocol rather than a pin. It names no HAL and
@@ -66,7 +66,7 @@ fn a_reusable_task_crate_checks_independently() {
 #[test]
 #[ignore = "cross-compiles; run with --ignored"]
 fn a_portable_protocol_task_crate_checks_independently() {
-    checks_standalone("tasks/msp-displayport", &[]);
+    checks_standalone("examples/tasks/msp-displayport", &[]);
 }
 
 /// The HAL-specific case. It has to name a chip to compile at all - a HAL cannot
@@ -75,14 +75,14 @@ fn a_portable_protocol_task_crate_checks_independently() {
 #[test]
 #[ignore = "cross-compiles; run with --ignored"]
 fn a_hal_specific_task_crate_checks_independently() {
-    checks_standalone("tasks/stm32f4-timer", &["--features", "stm32f401"]);
+    checks_standalone("examples/tasks/stm32f4-timer", &["--features", "stm32f401"]);
 }
 
 /// The firmware crate is the binary, so one invocation proves the whole model:
 /// `app!` expanded into a real `#[rtic::app]`, the adapters type-checked
 /// against the task crate, and the result linked for the target.
 fn release_links(name: &str) {
-    let firmware = repository_root().join("firmware").join(name);
+    let firmware = repository_root().join("examples/firmware").join(name);
     let output = run(
         &firmware,
         &["build", "--release", "--bin", name, "--offline"],
@@ -123,7 +123,7 @@ fn a_second_firmware_reuses_the_same_definitions() {
 #[test]
 #[ignore = "cross-compiles; run with --ignored"]
 fn a_task_crate_for_another_hal_checks_independently() {
-    checks_standalone("tasks/stm32h7-timer", &["--features", "stm32h753v"]);
+    checks_standalone("examples/tasks/stm32h7-timer", &["--features", "stm32h753v"]);
 }
 
 /// The first firmware here that is not an STM32F4: a different HAL, a different
@@ -283,7 +283,7 @@ ferroforge::app! {
 #[ignore = "cross-compiles; run with --ignored"]
 fn shapes_the_example_firmware_does_not_use_compile() {
     let root = repository_root();
-    let source = root.join("firmware/nucleo-f401re");
+    let source = root.join("examples/firmware/nucleo-f401re");
     let directory = root.join("target/fixtures/shapes");
     let _ = std::fs::remove_dir_all(&directory);
     std::fs::create_dir_all(directory.join("src")).unwrap();
@@ -296,7 +296,8 @@ fn shapes_the_example_firmware_does_not_use_compile() {
     let absolute = root.display().to_string().replace('\\', "/");
     let manifest = std::fs::read_to_string(source.join("Cargo.toml"))
         .unwrap()
-        .replace("path = \"../../", &format!("path = \"{absolute}/"))
+        .replace("path = \"../../../", &format!("path = \"{absolute}/"))
+        .replace("path = \"../../", &format!("path = \"{absolute}/examples/"))
         // A task that declares a monotonic names `fugit` in its bound, and
         // these definitions live in the firmware crate, so it needs the
         // dependency a task crate would have. Already in the lock file.

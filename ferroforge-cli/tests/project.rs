@@ -16,6 +16,13 @@ fn repository_root() -> &'static Path {
         .expect("the CLI crate sits directly below the repository root")
 }
 
+/// The worked example under `examples/`, which is itself a FerroForge project:
+/// it holds `firmware/` and `tasks/` in the layout the CLI expects. The
+/// repository root deliberately is not a project.
+fn example_project() -> PathBuf {
+    repository_root().join("examples")
+}
+
 fn ferroforge_in(directory: &Path, arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_ferroforge"))
         .args(arguments)
@@ -64,7 +71,7 @@ fn scratch(name: &str, firmwares: &[(&str, Option<&str>)]) -> PathBuf {
 /// drifted between what a firmware declares and what it holds.
 #[test]
 fn syncing_the_real_project_changes_nothing() {
-    let firmware = repository_root().join("firmware");
+    let firmware = example_project().join("firmware");
     let before: Vec<(PathBuf, String)> = fs::read_dir(&firmware)
         .unwrap()
         .flatten()
@@ -82,7 +89,7 @@ fn syncing_the_real_project_changes_nothing() {
 
     for entry in fs::read_dir(&firmware).unwrap().flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        let output = ferroforge_in(repository_root(), &["sync", &name]);
+        let output = ferroforge_in(&example_project(), &["sync", &name]);
         assert!(output.status.success(), "{}", stderr(&output));
     }
 
@@ -619,7 +626,7 @@ fn all_is_refused_where_it_does_not_apply() {
 #[test]
 #[ignore = "checks every firmware in this repository; run with --ignored"]
 fn check_all_passes_on_the_real_project() {
-    let output = ferroforge_in(repository_root(), &["check", "--all"]);
+    let output = ferroforge_in(&example_project(), &["check", "--all"]);
     assert!(output.status.success(), "{}", stdout(&output));
     assert!(!stdout(&output).contains("warn"), "{}", stdout(&output));
 }

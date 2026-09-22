@@ -12,7 +12,7 @@ bench = false
 # dependencies at all and is where the host tests are; this crate is only the
 # two tasks and the state they share.
 [dependencies]
-ferroforge = { path = "../../ferroforge" }
+ferroforge = { path = "../../../ferroforge" }
 fugit = { version = "0.3.9", default-features = true, features = [] }
 msp = { path = "../../msp" }
 rtic = { version = "2.3.1", default-features = false, features = ["thumbv7-backend"] }

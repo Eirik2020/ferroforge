@@ -103,7 +103,7 @@ HAL rather than across HALs, which is what G1 asks of it.
 
 Portability has a second, sharper limit, and it is the ecosystem's rather than
 this design's: a bound is only as portable as the HALs implementing it.
-`tasks/blinky` bounds on `embedded-hal` 1.0, and `stm32h7xx-hal` 0.16 still
+`examples/tasks/blinky` bounds on `embedded-hal` 1.0, and `stm32h7xx-hal` 0.16 still
 implements only 0.2, so that task cannot be selected on an STM32H7 at all - while
 a task naming no HAL, like `report`, is selected there unchanged. "Portable
 across all hardware" means across the hardware whose HALs have migrated.

@@ -25,14 +25,19 @@ removed when the design changed. They are recoverable from branch `main` and
 
 ## Working Example
 
-`firmware/nucleo-f401re` is a Nucleo-F401RE firmware that checks and
+The worked example lives under `examples/`, which is itself a FerroForge project
+in the expected layout: it holds the `firmware/` and `tasks/` a project has, so
+CLI commands run from there. The repository root is deliberately not a project,
+because FerroForge is the tool, not a firmware.
+
+`examples/firmware/nucleo-f401re` is a Nucleo-F401RE firmware that checks and
 release-links for `thumbv7em-none-eabihf`. It carries both task kinds: a
 software blink with resource, configuration and spawn bindings, and a
 synchronous handler bound to `TIM2`. Its reusable tasks live in
-`tasks/blinky`, which checks independently for the
+`examples/tasks/blinky`, which checks independently for the
 same target with no FerroForge machinery beyond the `#[task]` attribute.
 
-`firmware/nucleo-f401re-beacon` is a second application on the same board,
+`examples/firmware/nucleo-f401re-beacon` is a second application on the same board,
 selecting the same definitions with none of the same bindings. It instantiates
 `blink` twice - different names, pins, counters, gates and periods - and the
 HAL-specific `on_timer` once against `TIM3`. Adding it required no edit to
@@ -44,14 +49,14 @@ protocols at once: SBUS in on USART1 by circular DMA, MSP DisplayPort out on
 USART6 to a video transmitter. The wiring is in its own module documentation,
 where someone about to connect a cable will look.
 
-`firmware/nucleo-h753zi` is a Cortex-M7 on a different HAL, with a part whose
+`examples/firmware/nucleo-h753zi` is a Cortex-M7 on a different HAL, with a part whose
 memory is more than the pair `cortex-m-rt` needs. It reuses `report` from the
-portable crate unchanged and pairs it with `tasks/stm32h7-timer`, the F4 timer
+portable crate unchanged and pairs it with `examples/tasks/stm32h7-timer`, the F4 timer
 task's counterpart. It does **not** use `blink`: that bounds on `embedded-hal`
 1.0 and `stm32h7xx-hal` 0.16 implements only 0.2, so the LED is driven by a task
 in the firmware instead.
 
-`tasks/stm32f4-uart-dma` is four tasks that only work as a set, sharing one
+`examples/tasks/stm32f4-uart-dma` is four tasks that only work as a set, sharing one
 `Port`. `nucleo-f401re-beacon` selects all four as ordinary declarations,
 configures a circular receive, and decodes SBUS on the bytes they deliver.
 
@@ -62,7 +67,7 @@ two short ones. And the USART's error flags are the receive path's business, not
 diagnostics - an uncleared overrun stops the peripheral requesting DMA at all,
 so a handler that ignores them wedges reception rather than degrading it.
 
-`tasks/msp-displayport` is the OSD, and the portable case on something larger
+`examples/tasks/msp-displayport` is the OSD, and the portable case on something larger
 than an LED: it names no HAL and no chip, takes no forwarding feature, and
 checks for ARM on its own. `nucleo-f401re-beacon` selects it alongside the SBUS
 tasks, so the two protocols run at once on one firmware.
@@ -75,7 +80,7 @@ a parser step costs it nothing, where a task spawned per received byte would
 drop bytes whenever the previous one had not finished. What the library keeps is
 the half that is genuinely periodic: the picture, pushed out on a timer.
 
-`tasks/stm32f4-timer` is the HAL-specific case. Reading and clearing a timer's
+`examples/tasks/stm32f4-timer` is the HAL-specific case. Reading and clearing a timer's
 update flag cannot be written against `embedded-hal`, so the task names the HAL
 type its resource has - `CounterUs<TIM3>` - and its body is the handler anyone
 would write by hand. It declares no bounds and depends on `stm32f4xx-hal` and

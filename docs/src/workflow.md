@@ -167,7 +167,7 @@ A task crate compiles on its own, against its declared bounds, with no firmware
 and no generated interfaces:
 
 ```text
-cd tasks/blinky
+cd examples/tasks/blinky
 cargo check --lib --target thumbv7em-none-eabihf --locked
 ```
 
@@ -177,7 +177,7 @@ A HAL-specific crate needs a chip to compile at all, so name one of its
 forwarding features:
 
 ```text
-cd tasks/stm32f4-timer
+cd examples/tasks/stm32f4-timer
 cargo check --lib --target thumbv7em-none-eabihf --features stm32f401
 ```
 
@@ -200,7 +200,7 @@ discovery. See the
 `ferroforge build` runs Cargo there for exactly this reason.
 
 ```text
-cd firmware/nucleo-f401re
+cd examples/firmware/nucleo-f401re
 cargo build --release --bin nucleo-f401re
 ```
 

@@ -20,7 +20,7 @@ Each is required only by the declaration that needs it. Every task does carry a
 monotonic slot whether or not its body uses a clock, so that the adapter stays
 inferable, but the slot alone is an unbounded type parameter and costs nothing: a
 task crate that declares no shared resources and no monotonic needs neither
-crate. `tasks/stm32f4-timer` is one, and depends on nothing but its HAL.
+crate. `examples/tasks/stm32f4-timer` is one, and depends on nothing but its HAL.
 
 The cost that remains is narrower than it looks: a task declaring shared
 resources is tied to RTIC, not only to `embedded-hal`.

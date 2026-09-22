@@ -76,7 +76,7 @@ no longer be recognized.
 
 **Initial scope confirmed, 2026-09-16.** The first proof is a working F401
 example carrying both task kinds. Other boards follow afterwards. This is met:
-`firmware/nucleo-f401re` checks and release-links with a software blink
+`examples/firmware/nucleo-f401re` checks and release-links with a software blink
 and a `TIM2` handler.
 
 **Library marker dropped, 2026-09-17.** G7 previously required a crate to mark
@@ -231,8 +231,8 @@ generated block too, so changing a firmware's chip tripped it on the block that
 was about to be rewritten - which would have made the one workflow derived files
 exist for impossible.
 
-**A second HAL, 2026-09-17.** `firmware/nucleo-h753zi` is a Cortex-M7 on
-`stm32h7xx-hal`, with `tasks/stm32h7-timer` as the F4 timer task's counterpart.
+**A second HAL, 2026-09-17.** `examples/firmware/nucleo-h753zi` is a Cortex-M7 on
+`stm32h7xx-hal`, with `examples/tasks/stm32h7-timer` as the F4 timer task's counterpart.
 Three things came out of it.
 
 `device` is confirmed a HAL fact and not a constant: it is `stm32h7xx_hal::pac`
@@ -245,7 +245,7 @@ automatically - which memory suits which data is the application's decision, and
 a backend choosing would choose for every firmware on that chip.
 
 The unexpected finding is a limit on G1 rather than on this design.
-`tasks/blinky` bounds on `embedded-hal` 1.0 and `stm32h7xx-hal` 0.16 implements
+`examples/tasks/blinky` bounds on `embedded-hal` 1.0 and `stm32h7xx-hal` 0.16 implements
 only 0.2, so a portable task cannot be selected on an H7 at all, while `report`,
 which names no HAL, is selected there unchanged. "Reusable across all hardware"
 means across the hardware whose HALs have migrated. That is the ecosystem's to
@@ -254,7 +254,7 @@ fix, and worth knowing before ferro-wasp depends on it.
 **Two protocols on one firmware, 2026-09-17.** `nucleo-f401re-beacon` receives
 SBUS and drives an MSP DisplayPort OSD at once. The second port is a plain
 interrupt-driven UART rather than a second use of the DMA UART tasks, because
-those cannot serve a second port: `tasks/stm32f4-uart-dma` names `USART1` and
+those cannot serve a second port: `examples/tasks/stm32f4-uart-dma` names `USART1` and
 `Stream2<DMA2>` as concrete types, and the streams a second port would need are
 different types again. Tasks written against concrete peripherals serve one
 port by construction.

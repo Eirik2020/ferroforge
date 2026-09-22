@@ -10,14 +10,14 @@ does not, in the order that unblocks the rest.
 
 ## OSD Hardware Validation
 
-`tasks/msp-displayport` and its host tests say the frames are well formed. On
+`examples/tasks/msp-displayport` and its host tests say the frames are well formed. On
 hardware, a transmitter drew nothing, and the cause has not been looked for. The number to watch is `answered` in the firmware's
 status line: it counts requests replied to, so it separates a transmitter that
 is not connected from one that is being talked to wrongly.
 
 ## A DMA UART That Transmits
 
-The receive half of `tasks/stm32f4-uart-dma` has been driven by real SBUS
+The receive half of `examples/tasks/stm32f4-uart-dma` has been driven by real SBUS
 traffic, which is what settled whether its four tasks divide the work correctly.
 `on_tx` has had no such test: nothing starts a transmit, so it counts
 completions that never happen. The open question is whether a transmitting
