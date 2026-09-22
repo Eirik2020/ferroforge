@@ -1,3 +1,0 @@
-pub mod manifest;
-
-pub use manifest::{BOARD_CAPABILITIES, BOARD_IDENTITY, CLAIMS, HEARTBEAT_BAUD, PIN_MAP};

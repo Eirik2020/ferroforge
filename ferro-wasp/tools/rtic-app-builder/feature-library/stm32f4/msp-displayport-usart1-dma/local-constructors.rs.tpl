@@ -1,5 +1,0 @@
-osd_component: OsdComponent::new(),
-osd_output: [0; {{BUFFER_SIZE}}],
-osd_work_idle_tx,
-osd_work_dma_tx,
-tx_completion_tx,

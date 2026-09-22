@@ -1,4 +1,0 @@
-{{RX_DMA_RESOURCE}}: Usart1RxDma<{{BUFFER_SIZE}}>,
-{{TX_DMA_RESOURCE}}: Usart1TxDma<{{BUFFER_SIZE}}>,
-{{OSD_TELEMETRY_RESOURCE}}: OsdTelemetryState,
-{{OSD_FAULT_RESOURCE}}: OsdFaultState,
