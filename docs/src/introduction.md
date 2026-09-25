@@ -47,8 +47,8 @@ were built and measured before being set aside.
 
 | Design | Task bodies | Init | Recoverable from |
 | --- | --- | --- | --- |
-| Full transplantation | copied, rewritten | copied | `main` |
-| Transplanted init | called | copied into a generated project | `test/new_task_method` |
+| Full transplantation | copied, rewritten | copied | `test/new_task_method`, first commit |
+| Transplanted init | called | copied into a generated project | `test/new_task_method`, tip |
 | Call-through (current) | called | authored in place | this branch |
 
 Their chapters are preserved under `archive/2026-09-16/`. Archived content is

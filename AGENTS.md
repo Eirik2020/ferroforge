@@ -77,7 +77,7 @@ The whole book is 1455 lines, so read a chapter when a section is not enough:
   crate names a chip without choosing one.
 
 Superseded transplant-era chapters are under `archive/2026-09-16/`, and the code
-they describe is on branch `main` and `test/new_task_method`.
+they describe is on branch `test/new_task_method`; `main` no longer carries it.
 
 ## Always-Loaded Context Budget
 

@@ -20,8 +20,7 @@ can reach them. Keeping the two apart is what makes that possible.
 
 The transplant-era crates - the renderer, the pipeline, the example composer,
 the embedded and generated projects, and the two `systems/` firmwares - were
-removed when the design changed. They are recoverable from branch `main` and
-`test/new_task_method`.
+removed when the design changed. They are recoverable from branch `test/new_task_method`.
 
 ## Working Example
 
