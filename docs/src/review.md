@@ -33,8 +33,7 @@ call it. Three designs were built and measured before choosing:
 The call-through model removes the renderer, the mock layer, generated checking
 interfaces, the generated project and the second Cargo invocation, at a code
 size within 3% of transplantation. Only it satisfies the confirmed scope today.
-The superseded designs are recoverable from branch `main` and
-`test/new_task_method`.
+The superseded designs are recoverable from branch `test/new_task_method`.
 
 Accepted costs: the macro-generated context is a versioned ABI between task
 crates and firmware, so changing it breaks consumers; task crates now depend on
@@ -352,6 +351,6 @@ are recorded so a reader meeting them in older material knows they are dead.
 
 The transplant-era chapters were archived on 2026-09-16 under
 `archive/2026-09-16/docs/src/`, and the code they describe is recoverable from
-branch `main` (full transplantation) and `test/new_task_method` (transplanted
-init). The archive is not active design authority and requires explicit
-permission to read.
+branch `test/new_task_method`: full transplantation at its first commit, and
+transplanted init at its tip. `main` no longer carries either. The archive is
+not active design authority and requires explicit permission to read.
