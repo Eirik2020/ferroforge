@@ -1,0 +1,36 @@
+[package]
+name = "spike-dual-h755zi-cm7"
+version = "0.1.0"
+edition = "2024"
+publish = false
+build = false
+
+# EXPERIMENT: the M7 image of the H755 dual-core spike. RTIC via
+# ferroforge::app!, embassy-stm32 as the HAL. Compile-only.
+
+[[bin]]
+name = "spike-dual-h755zi-cm7"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+ferroforge = { path = "../../../../ferroforge" }
+ferroforge-task-blinky = { path = "../../../../examples/tasks/blinky" }
+spike-dual-mailbox = { path = "../mailbox" }
+defmt = "1.0.1"
+defmt-rtt = "1.0.0"
+panic-probe = { version = "1.0.0", features = ["print-defmt"] }
+cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7.6"
+rtic = { version = "2.3.1", default-features = false, features = ["thumbv7-backend"] }
+rtic-monotonics = { version = "2.2.1", default-features = false, features = ["cortex-m-systick"] }
+embassy-stm32 = { version = "0.6.0", features = ["stm32h755zi-cm7", "defmt", "unstable-pac"] }
+
+[profile.release]
+codegen-units = 1
+debug = 2
+lto = true
+opt-level = "s"
+
+[workspace]

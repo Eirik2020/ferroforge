@@ -8,6 +8,9 @@ agreed design. Nothing here has been flashed.
   `examples/tasks/blinky` unchanged.
 - `tasks-async/` - portable tasks on `embedded-io-async` and embassy-time,
   with no `monotonic = Mono`.
+- `dual-h755zi/` - STM32H755 (the H753 is single-core): RTIC on the M7 and
+  plain embassy on the M4, two images sharing an SRAM4 mailbox. Build
+  `cm7/` and `cm4/` separately.
 
 Build: `cargo build --release` in `firmware-h753zi/`. It lives outside
 `examples/firmware/` because `ferroforge sync` would rewrite its hand-picked

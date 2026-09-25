@@ -1,0 +1,35 @@
+[package]
+name = "spike-dual-h755zi-cm4"
+version = "0.1.0"
+edition = "2024"
+publish = false
+build = false
+
+# EXPERIMENT: the M4 image of the H755 dual-core spike. Plain embassy:
+# executor, async drivers, embassy-time. Compile-only.
+
+[[bin]]
+name = "spike-dual-h755zi-cm4"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+spike-dual-mailbox = { path = "../mailbox" }
+defmt = "1.0.1"
+defmt-rtt = "1.0.0"
+panic-probe = { version = "1.0.0", features = ["print-defmt"] }
+cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7.6"
+embassy-executor = { version = "0.9", features = ["arch-cortex-m", "executor-thread", "defmt"] }
+embassy-stm32 = { version = "0.6.0", features = ["stm32h755zi-cm4", "defmt", "time-driver-tim3", "unstable-pac"] }
+embassy-time = { version = "0.5.1", features = ["defmt"] }
+embedded-io-async = "0.7.0"
+
+[profile.release]
+codegen-units = 1
+debug = 2
+lto = true
+opt-level = "s"
+
+[workspace]
