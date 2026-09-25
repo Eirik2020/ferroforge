@@ -1,0 +1,25 @@
+[package]
+name = "ferroforge-task-spike-embassy-async"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# EXPERIMENT (claude/embassy-spike-*): a portable task that waits on an
+# async driver and on embassy-time instead of an RTIC monotonic. It names no
+# HAL and no chip.
+
+[lib]
+test = false
+bench = false
+
+[dependencies]
+defmt = "1.0.1"
+embassy-time = "0.5.1"
+embedded-io-async = "0.7.0"
+ferroforge = { path = "../../../ferroforge" }
+rtic = { version = "2.3.1", default-features = false, features = ["thumbv7-backend"] }
+
+[package.metadata.ferroforge]
+check-only-dependencies = ["ferroforge"]
+
+[workspace]

@@ -1,0 +1,42 @@
+[package]
+name = "spike-embassy-h753zi"
+version = "0.1.0"
+edition = "2024"
+publish = false
+build = false
+
+# EXPERIMENT (claude/embassy-spike-*): embassy-stm32 as the HAL under a
+# FerroForge `app!`. Compile-only; nothing here has been flashed. The
+# platform block below is hand-edited, so `ferroforge sync` would revert it.
+[package.metadata.ferroforge]
+chip = "stm32h753zi"
+
+[[bin]]
+name = "spike-embassy-h753zi"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+ferroforge = { path = "../../../ferroforge" }
+ferroforge-task-blinky = { path = "../../../examples/tasks/blinky" }
+ferroforge-task-spike-embassy-async = { path = "../tasks-async" }
+
+defmt = "1.0.1"
+defmt-rtt = "1.0.0"
+panic-probe = { version = "1.0.0", features = ["print-defmt"] }
+
+cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7.6"
+rtic = { version = "2.3.1", default-features = false, features = ["thumbv7-backend"] }
+rtic-monotonics = { version = "2.2.1", default-features = false, features = ["cortex-m-systick"] }
+embassy-stm32 = { version = "0.6.0", features = ["stm32h753zi", "defmt", "time-driver-tim2", "exti", "unstable-pac"] }
+embassy-time = { version = "0.5.1", features = ["defmt", "generic-queue-16"] }
+
+[profile.release]
+codegen-units = 1
+debug = 2
+lto = true
+opt-level = "s"
+
+[workspace]
