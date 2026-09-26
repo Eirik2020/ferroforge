@@ -53,9 +53,7 @@ A 0.3 release for testing. Supported chips are the STM32F401RE, F405RG, F411RE
 and H753ZI. The context a task receives is an interface between task crates and
 firmware and may change between 0.x versions.
 
-Known limits: a task that reads time needs a 1 kHz monotonic, and tasks bounded
-on `embedded-hal` 1.0 cannot be used with HALs still on 0.2, which includes
-`stm32h7xx-hal`.
+Known limit: a task that reads time needs a 1 kHz monotonic.
 
 How tasks are written and selected:
 [`ferroforge`](https://crates.io/crates/ferroforge). Design and decisions: the

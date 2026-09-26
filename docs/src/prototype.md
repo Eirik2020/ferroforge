@@ -148,10 +148,6 @@ asserting nothing. See [workflow](workflow.md) for how to run them.
 
 - **Transmit.** The DMA UART's `on_tx` counts completed transfers and nothing else.
   Only the receive half has been driven by real traffic.
-- **Portability past embedded-hal 1.0.** A task bounding on it cannot be
-  selected on a HAL that still implements 0.2, which `stm32h7xx-hal` does. That
-  is the ecosystem's to fix, not FerroForge's, but it bounds what G1's "all
-  hardware" means today.
 - **A project-local backend.** Chip data ships with FerroForge, embedded in the
   binary. A project needing a chip FerroForge does not know cannot add one
   without upstreaming it.
