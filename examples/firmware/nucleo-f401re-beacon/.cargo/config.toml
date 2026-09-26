@@ -2,7 +2,12 @@
 target = "thumbv7em-none-eabihf"
 
 [target.thumbv7em-none-eabihf]
-runner = "probe-rs run --chip STM32F401RE"
+runner = [
+    "probe-rs",
+    "run",
+    "--chip",
+    "STM32F401RE",
+]
 rustflags = [
     "-C", "link-arg=-L.",
     "-C", "link-arg=-Tlink.x",

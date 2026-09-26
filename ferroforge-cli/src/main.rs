@@ -202,12 +202,9 @@ fn sync(named: Option<&str>) -> Result<(PathBuf, PathBuf, Vec<String>), String> 
 fn sync_firmware(firmware: &Firmware) -> Result<Vec<String>, String> {
     let chip = firmware.chip().map_err(|error| error.to_string())?;
     let backend = Backend::for_chip(&chip).map_err(|error| error.to_string())?;
-    let defmt_log = firmware.defmt_log().map_err(|error| error.to_string())?;
-    let defmt_location = firmware
-        .defmt_location()
-        .map_err(|error| error.to_string())?;
+    let settings = firmware.settings().map_err(|error| error.to_string())?;
     backend
-        .emit(&firmware.path, &defmt_log, defmt_location)
+        .emit(&firmware.path, &settings)
         .map_err(|error| error.to_string())
 }
 

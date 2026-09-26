@@ -1107,10 +1107,147 @@ fn a_firmware_may_suppress_the_location_on_each_log() {
     let output = ferroforge_in(&root, &["sync"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let config = fs::read_to_string(firmware.join(".cargo/config.toml")).unwrap();
-    assert!(
-        config.contains("runner = \"probe-rs run --chip STM32F401RE --no-location\""),
-        "{config}"
+    assert!(config.contains("\"--no-location\","), "{config}");
+}
+
+/// A firmware that attaches to what is already running, adds its own probe
+/// arguments and needs a variable of its own must be able to say so, because
+/// `sync` owns the whole of the file all three end up in.
+#[test]
+fn a_firmware_declares_its_probe_command_arguments_and_environment() {
+    let root = scratch("probe-settings", &[("board", Some("stm32f405rg"))]);
+    let firmware = root.join("firmware/board");
+    let manifest = fs::read_to_string(firmware.join("Cargo.toml")).unwrap();
+    fs::write(
+        firmware.join("Cargo.toml"),
+        manifest.replace(
+            "chip = \"stm32f405rg\"",
+            "chip = \"stm32f405rg\"\n\
+             probe-command = \"attach\"\n\
+             probe-args = [\"--protocol\", \"swd\"]\n\
+             env = { CHIPSERIE = \"stm32f405\" }",
+        ),
+    )
+    .unwrap();
+
+    let output = ferroforge_in(&root, &["sync"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let config = fs::read_to_string(firmware.join(".cargo/config.toml")).unwrap();
+    for expected in [
+        "\"attach\",",
+        "\"--protocol\",",
+        "\"swd\",",
+        "CHIPSERIE = \"stm32f405\"",
+        "DEFMT_LOG = \"info\"",
+    ] {
+        assert!(config.contains(expected), "{expected} missing from {config}");
+    }
+}
+
+/// An argument the generated runner already carries would appear twice, with
+/// nothing deciding which wins. The setting that owns it is named.
+#[test]
+fn a_probe_argument_the_cli_owns_is_refused() {
+    let root = scratch("probe-args-owned", &[("board", Some("stm32f405rg"))]);
+    let firmware = root.join("firmware/board");
+    let manifest = fs::read_to_string(firmware.join("Cargo.toml")).unwrap();
+    let before = fs::read_to_string(firmware.join(".cargo/config.toml")).ok();
+    fs::write(
+        firmware.join("Cargo.toml"),
+        manifest.replace(
+            "chip = \"stm32f405rg\"",
+            "chip = \"stm32f405rg\"\nprobe-args = [\"--chip\", \"STM32F401RE\"]",
+        ),
+    )
+    .unwrap();
+
+    let output = ferroforge_in(&root, &["sync"]);
+    assert!(!output.status.success());
+    let message = stderr(&output);
+    assert!(message.contains("--chip"), "{message}");
+    assert!(message.contains("`chip`"), "{message}");
+    assert_eq!(
+        fs::read_to_string(firmware.join(".cargo/config.toml")).ok(),
+        before,
+        "a refused firmware keeps the files it had"
     );
+}
+
+/// A misspelled setting that is ignored is a setting that looks applied and is
+/// not, and the emitted file cannot tell the two apart.
+#[test]
+fn an_unknown_setting_is_refused_rather_than_ignored() {
+    let root = scratch("unknown-setting", &[("board", Some("stm32f405rg"))]);
+    let firmware = root.join("firmware/board");
+    let manifest = fs::read_to_string(firmware.join("Cargo.toml")).unwrap();
+    fs::write(
+        firmware.join("Cargo.toml"),
+        manifest.replace(
+            "chip = \"stm32f405rg\"",
+            "chip = \"stm32f405rg\"\nprobe-comand = \"attach\"",
+        ),
+    )
+    .unwrap();
+
+    let output = ferroforge_in(&root, &["sync"]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("probe-comand"), "{}", stderr(&output));
+}
+
+/// `[package.metadata.ferroforge]` is one table with two audiences: a task crate
+/// declares its check-only dependencies in it. A firmware's `ferroforge` is as
+/// check-only as a task crate's, so declaring it must not be refused as an
+/// unknown setting.
+#[test]
+fn a_firmware_may_declare_its_check_only_dependencies() {
+    let root = scratch("check-only", &[("board", Some("stm32f405rg"))]);
+    let firmware = root.join("firmware/board");
+    let manifest = fs::read_to_string(firmware.join("Cargo.toml")).unwrap();
+    fs::write(
+        firmware.join("Cargo.toml"),
+        manifest.replace(
+            "chip = \"stm32f405rg\"",
+            "chip = \"stm32f405rg\"\ncheck-only-dependencies = [\"ferroforge\"]",
+        ),
+    )
+    .unwrap();
+
+    let output = ferroforge_in(&root, &["sync"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+}
+
+/// The pin a firmware writes must reach the generated block, and the chip
+/// feature must survive it: the block exists so that selecting another chip
+/// rewrites it.
+#[test]
+fn a_firmware_may_say_where_a_platform_crate_comes_from() {
+    let root = scratch("platform-source", &[("board", Some("stm32f405rg"))]);
+    let firmware = root.join("firmware/board");
+    let manifest = fs::read_to_string(firmware.join("Cargo.toml")).unwrap();
+    fs::write(
+        firmware.join("Cargo.toml"),
+        manifest.replace(
+            "chip = \"stm32f405rg\"",
+            "chip = \"stm32f405rg\"\n\n             [package.metadata.ferroforge.platform.stm32f4xx-hal]\n\
+             git = \"https://github.com/stm32-rs/stm32f4xx-hal.git\"\n\
+             rev = \"78d79609137d5c380320f7bf1a9120967babc61d\"\n\
+             features = [\"uart4\"]",
+        ),
+    )
+    .unwrap();
+
+    let output = ferroforge_in(&root, &["sync"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let synced = fs::read_to_string(firmware.join("Cargo.toml")).unwrap();
+    let line = synced
+        .lines()
+        .find(|line| line.starts_with("stm32f4xx-hal"))
+        .unwrap_or_else(|| panic!("{synced}"));
+    assert!(line.contains("git = "), "{line}");
+    assert!(line.contains("rev = "), "{line}");
+    assert!(!line.contains("version = "), "{line}");
+    assert!(line.contains("\"stm32f405\""), "{line}");
+    assert!(line.contains("\"uart4\""), "{line}");
 }
 
 /// On by default, as probe-rs has it.

@@ -137,18 +137,68 @@ that alone:
 chip = "stm32f401re"
 defmt-log = "info"
 defmt-location = true
+probe-command = "run"
+probe-args = ["--protocol", "swd"]
+env = { PROBE_SERIAL = "0483:3748:0670FF..." }
 ```
 
-`defmt-location` is optional and defaults to `true`, as probe-rs has it. A
-firmware that sets it to `false` gets `--no-location` on its runner, so the
-probe prints each log without the file and line it came from - for a log read
-as a running commentary rather than debugged.
+Only `chip` is required. Everything else here ends up in a file the CLI writes,
+which is why none of it is a command-line flag: a flag would leave the emitted
+file disagreeing with the manifest, which is the drift the derived files exist
+to prevent.
 
-`defmt-log` is optional and defaults to `info`. It takes anything `DEFMT_LOG`
-takes, including a per-crate filter such as `info,noisy_crate=off`. It is
-declared rather than passed on the command line because it is written into an
-emitted file: a flag would leave that file disagreeing with the manifest, which
-is the drift the derived files exist to prevent.
+An unknown key is an error. A misspelled setting that is silently ignored looks
+applied and is not, and the emitted file gives no hint which of the two
+happened.
+
+`defmt-location` defaults to `true`, as probe-rs has it. A firmware that sets it
+to `false` gets `--no-location` on its runner, so the probe prints each log
+without the file and line it came from - for a log read as a running commentary
+rather than debugged.
+
+`defmt-log` defaults to `info`. It takes anything `DEFMT_LOG` takes, including a
+per-crate filter such as `info,noisy_crate=off`.
+
+`probe-command` defaults to `run`, which is what `cargo run` means everywhere
+else. A firmware that connects to what is already on the board rather than
+flashing it sets `attach`.
+
+`probe-args` adds arguments after the chip: what the probe needs and FerroForge
+has no opinion about, such as `--protocol swd` on a board wired for it. The
+runner is emitted as a list rather than one string, so an argument containing a
+space needs no quoting rules.
+
+`env` adds environment variables beside `DEFMT_LOG`.
+
+An argument or variable the CLI already writes is refused there, naming the
+setting that owns it: the same flag twice has nothing deciding which wins.
+
+### Where a Platform Crate Comes From
+
+The backend chooses which platform crates a chip needs and which chip features
+they carry. A firmware may say where one of them is fetched from, which is a
+property of a project's supply chain rather than of a chip family:
+
+```toml
+[package.metadata.ferroforge.platform.stm32f4xx-hal]
+git = "https://github.com/stm32-rs/stm32f4xx-hal.git"
+rev = "78d79609137d5c380320f7bf1a9120967babc61d"
+features = ["uart4"]
+```
+
+Any source Cargo accepts: `version`, `path`, or `git` with at most one of `rev`,
+`branch` and `tag`. It replaces the version the backend would have written, and
+nothing else about the entry changes - the chip feature stays, so selecting a
+different chip still rewrites the block correctly, and `features` here are added
+to the backend's rather than substituted for them. A chip feature here is
+refused, because the chip is named by `chip`.
+
+Naming a crate the backend does not select is an error that lists the ones it
+does. A source matching nothing would leave a pin absent from the very block it
+was written for.
+
+Where this applies, the generated block says so, so a reader meeting a git
+dependency inside it is told where it is edited.
 
 `sync` rewrites `memory.x`, `.cargo/config.toml` and `Embed.toml`, and replaces
 the region of that firmware's `Cargo.toml` between

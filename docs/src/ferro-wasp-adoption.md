@@ -6,9 +6,9 @@ chapter is the plan for that: what ferro-wasp needs from FerroForge before it ca
 adopt it, and the order to migrate in. It was written against FerroForge 0.2.0
 and ferro-wasp `370460b`.
 
-Short answer: the macros fit ferro-wasp's architecture, and the CLI cannot
-manage ferro-wasp's firmware until a few decisions are made. The macros are
-usable without the CLI, so adoption can start with the next macro release.
+Short answer: the macros fit ferro-wasp's architecture, and so does the CLI.
+The macros are usable without the CLI, so adoption started with the macro
+release and the CLI is no longer what holds the rest back.
 
 ## What Already Fits
 
@@ -40,7 +40,7 @@ None remain. Three were settled, all specified in
 
 ## CLI Gaps
 
-None of these block using the macros alone.
+None of these block using the macros alone, and none of them is now undecided.
 
 - **Layout.** [G5](governing-requirements.md) requires `firmware/`, and
   ferro-wasp uses `apps/`. Its apps are already one Cargo workspace each, as G5
@@ -48,19 +48,19 @@ None of these block using the macros alone.
   FerroForge's layout configurable.
 - **HAL source.** ferro-wasp pins `stm32f4xx-hal` to a git revision that is
   version 0.22.1, and the F405 backend selects 0.23.0 from crates.io.
-  `[patch.crates-io]` cannot bridge a semver-incompatible version, so either
-  ferro-wasp moves to 0.23.0, once someone checks that it has everything the
-  revision was pinned for, or a firmware gets a way to override a backend's
-  platform crate source. The second touches G2a. **Needs a decision.** The HAL
-  features it enables (`rtic2`, `defmt`, `usb_fs`, `uart4`) are not a problem:
-  `ferrowasp-stm32f4` already enables them, and Cargo unifies features.
-- **Probe and environment settings.** `sync` rewrites `.cargo/config.toml`.
-  ferro-wasp's apps use `probe-rs attach`, `--protocol swd` and a `CHIPSERIE`
-  environment variable, which would be lost. G5 says nothing but target files
-  is generated, and these are firmware choices inside a generated file.
-  **Needs a decision** on where a firmware records them. `[env]` in a parent
-  `.cargo/config.toml` would carry the variable. Runner arguments have no
-  such route.
+  `[patch.crates-io]` cannot bridge a semver-incompatible version, so a firmware
+  says where a platform crate comes from, specified in [where a platform crate
+  comes from](workflow.md#where-a-platform-crate-comes-from). ferro-wasp keeps
+  its revision and does not have to move to 0.23.0 to adopt the CLI. The HAL
+  features it enables (`rtic2`, `defmt`, `usb_fs`, `uart4`) were never the
+  problem: `ferrowasp-stm32f4` already enables them, Cargo unifies features, and
+  a source may add features of its own besides.
+- **Probe and environment settings.** `sync` rewrites `.cargo/config.toml`, so
+  the firmware declares what goes in it: `probe-command`, `probe-args` and `env`,
+  specified with the other settings in [the CLI](workflow.md#the-cli). Against
+  the Foxeer app this reproduces its hand-written runner argument for argument.
+  `CHIPSERIE` needs no route at all - nothing in ferro-wasp reads it, and it
+  should be deleted rather than carried over.
 - **Linker search path.** The generated config adds `-L.`, and ferro-wasp's
   `build.rs` copies `memory.x` into `OUT_DIR`. Both work. The copy can go, but
   the build script stays for its git metadata.
@@ -113,10 +113,4 @@ ferro-wasp currently exercises one definition across two boards.
 
 ## Open Decisions
 
-- Overriding a backend's platform crate source (CLI gaps, HAL source).
-- Where a firmware records probe arguments and environment variables (CLI
-  gaps, probe and environment settings).
-
-When one of these is settled, record it in the [review chapter](review.md) and
-specify it in its owning chapter, as [maintaining this book](documentation.md)
-requires.
+None. What remains is migration, not design: the phases above, in order.

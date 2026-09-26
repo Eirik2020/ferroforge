@@ -8,7 +8,10 @@
 
 use std::{fmt, fs, io, path::Path};
 
-use crate::backend::{self, Backend};
+use crate::{
+    backend::{self, Backend},
+    project::{self, Firmware},
+};
 
 #[derive(Debug)]
 pub enum Error {
@@ -17,6 +20,7 @@ pub enum Error {
     UnknownChip { chip: String, known: String },
     NoStarter { chip: String },
     Backend(backend::Error),
+    Project(project::Error),
     Write { path: String, source: io::Error },
 }
 
@@ -38,6 +42,7 @@ impl fmt::Display for Error {
                 "FerroForge knows `{chip}` but has no starting firmware for its HAL"
             ),
             Self::Backend(error) => write!(formatter, "{error}"),
+            Self::Project(error) => write!(formatter, "{error}"),
             Self::Write { path, source } => write!(formatter, "cannot write {path}: {source}"),
         }
     }
@@ -232,11 +237,16 @@ fn write_firmware(
         &firmware.join("src/main.rs"),
         &main_rs(backend, starter, task_crate),
     )?;
-    // Written by the same code a later `sync` uses, so a new firmware is
-    // already in the state `sync` would leave it.
-    let written = backend
-        .emit(firmware, "info", true)
-        .map_err(Error::Backend)?;
+    // Written by the same code a later `sync` uses, and from the manifest just
+    // written rather than from repeated defaults, so a new firmware is already
+    // in the state `sync` would leave it.
+    let settings = Firmware {
+        name: name.to_owned(),
+        path: firmware.to_owned(),
+    }
+    .settings()
+    .map_err(Error::Project)?;
+    let written = backend.emit(firmware, &settings).map_err(Error::Backend)?;
     Ok(written.len())
 }
 

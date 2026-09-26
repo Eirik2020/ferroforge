@@ -13,6 +13,8 @@ use std::{collections::BTreeMap, fmt, fs, io, path::Path};
 
 use serde::Deserialize;
 
+use crate::project::Settings;
+
 /// Every chip FerroForge knows, keyed by the name a firmware declares.
 ///
 /// Listed rather than globbed so that adding a file is a deliberate act; a test
@@ -184,6 +186,17 @@ pub enum Error {
         feature: String,
         chip: String,
     },
+    UnknownPlatformCrate {
+        path: String,
+        name: String,
+        chip: String,
+        known: String,
+    },
+    ChipFeatureInSource {
+        path: String,
+        name: String,
+        feature: String,
+    },
 }
 
 impl fmt::Display for Error {
@@ -208,6 +221,28 @@ impl fmt::Display for Error {
                  chip named twice, and the HAL refuses two at once. Drop it: a \
                  task crate's own HAL dependency takes the chip from this \
                  firmware's platform crates, because Cargo features are additive."
+            ),
+            Self::UnknownPlatformCrate {
+                path,
+                name,
+                chip,
+                known,
+            } => write!(
+                formatter,
+                "{path} gives a source for `{name}`, which is not a platform \
+                 crate for {chip}. A source can only redirect a crate the \
+                 backend selects: {known}"
+            ),
+            Self::ChipFeatureInSource {
+                path,
+                name,
+                feature,
+            } => write!(
+                formatter,
+                "{path} enables `{feature}` on `{name}` under \
+                 [package.metadata.ferroforge.platform]. That names a chip, and \
+                 the chip comes from `chip`; the backend already enables the \
+                 right one"
             ),
             Self::NoManifestMarkers { path } => write!(
                 formatter,
@@ -353,15 +388,38 @@ impl Backend {
         )
     }
 
-    pub fn cargo_config(&self, defmt_log: &str, defmt_location: bool) -> String {
-        let location = match defmt_location {
-            true => "",
-            false => " --no-location",
-        };
+    /// The runner the probe is invoked through, as Cargo's argument list.
+    ///
+    /// A list rather than one string: a firmware supplies its own arguments
+    /// here, and quoting them into a single command line would make an argument
+    /// containing a space unrepresentable for no gain.
+    fn runner(&self, settings: &Settings) -> Vec<String> {
+        let mut runner = vec![
+            "probe-rs".to_owned(),
+            settings.probe_command().to_owned(),
+            "--chip".to_owned(),
+            self.chip.probe_rs_chip.clone(),
+        ];
+        runner.extend(settings.probe_args().iter().cloned());
+        if !settings.defmt_location() {
+            runner.push("--no-location".to_owned());
+        }
+        runner
+    }
+
+    pub fn cargo_config(&self, settings: &Settings) -> String {
+        let runner = self
+            .runner(settings)
+            .iter()
+            .map(|argument| format!("    \"{argument}\",\n"))
+            .collect::<String>();
+        let mut environment = format!("DEFMT_LOG = \"{}\"\n", settings.defmt_log());
+        for (name, value) in settings.env() {
+            environment.push_str(&format!("{name} = \"{value}\"\n"));
+        }
         format!(
-            "[build]\ntarget = \"{target}\"\n\n[target.{target}]\nrunner = \"probe-rs run --chip {chip}{location}\"\nrustflags = [\n    \"-C\", \"link-arg=-L.\",\n    \"-C\", \"link-arg=-Tlink.x\",\n    \"-C\", \"link-arg=-Tdefmt.x\",\n]\n\n[env]\nDEFMT_LOG = \"{defmt_log}\"\n",
+            "[build]\ntarget = \"{target}\"\n\n[target.{target}]\nrunner = [\n{runner}]\nrustflags = [\n    \"-C\", \"link-arg=-L.\",\n    \"-C\", \"link-arg=-Tlink.x\",\n    \"-C\", \"link-arg=-Tdefmt.x\",\n]\n\n[env]\n{environment}",
             target = self.chip.rust_target,
-            chip = self.chip.probe_rs_chip,
         )
     }
 
@@ -375,18 +433,38 @@ impl Backend {
     /// The platform crates a firmware for this chip cannot build without, as
     /// manifest lines. The firmware still owns its logging and panic backends
     /// and its task crates.
-    pub fn platform_dependency_lines(&self) -> String {
+    ///
+    /// A firmware may say where one of these comes from, which replaces the
+    /// version this backend would have written. What it cannot do is change
+    /// which crates are here or drop the chip feature: those are the chip's,
+    /// and keeping them is what makes selecting a different chip rewrite this
+    /// block correctly.
+    pub fn platform_dependency_lines(&self, settings: &Settings) -> String {
         let mut lines = String::new();
         for (name, dependency) in &self.platform_dependencies {
+            let overridden = settings.platform().get(name);
+            let source = match overridden {
+                Some(source) => source
+                    .keys()
+                    .iter()
+                    .map(|(key, value)| format!("{key} = \"{value}\""))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                None => format!("version = \"{}\"", dependency.version),
+            };
             let features = dependency
                 .features
                 .iter()
+                .chain(
+                    overridden
+                        .map(|source| source.features.iter())
+                        .unwrap_or_default(),
+                )
                 .map(|feature| format!("\"{feature}\""))
                 .collect::<Vec<_>>()
                 .join(", ");
             lines.push_str(&format!(
-                "{name} = {{ version = \"{}\", default-features = {}, features = [{features}] }}\n",
-                dependency.version,
+                "{name} = {{ {source}, default-features = {}, features = [{features}] }}\n",
                 dependency.default_features.unwrap_or(true),
             ));
         }
@@ -395,11 +473,28 @@ impl Backend {
 
     /// The marked manifest region, markers included. The chip is named on the
     /// opening line so selecting a different one visibly rewrites the block.
-    pub fn manifest_platform_block(&self) -> String {
+    ///
+    /// Where a firmware supplied the source, the block says so: a reader who
+    /// sees a git dependency in a generated block needs to be told where it is
+    /// edited, or the only remaining guess is this block.
+    pub fn manifest_platform_block(&self, settings: &Settings) -> String {
+        let overridden = self
+            .platform_dependencies
+            .keys()
+            .filter(|name| settings.platform().contains_key(*name))
+            .cloned()
+            .collect::<Vec<_>>();
+        let note = match overridden.is_empty() {
+            true => String::new(),
+            false => format!(
+                "# source for {} from [package.metadata.ferroforge.platform]\n",
+                overridden.join(", "),
+            ),
+        };
         format!(
-            "{MARKER_BEGIN} for {} - generated, do not edit\n{}{MARKER_END}\n",
+            "{MARKER_BEGIN} for {} - generated, do not edit\n{note}{}{MARKER_END}\n",
             self.chip.name,
-            self.platform_dependency_lines(),
+            self.platform_dependency_lines(settings),
         )
     }
 
@@ -410,7 +505,7 @@ impl Backend {
     ///
     /// This only reads, so `emit` can refuse a firmware before writing
     /// anything: one that is not FerroForge's must keep the files it has.
-    fn synced_manifest(&self, manifest: &Path) -> Result<String, Error> {
+    fn synced_manifest(&self, manifest: &Path, settings: &Settings) -> Result<String, Error> {
         let display = manifest.display().to_string();
         let text = fs::read_to_string(manifest).map_err(|source| Error::Read {
             path: display.clone(),
@@ -431,6 +526,7 @@ impl Backend {
                 chip: self.chip.name.clone(),
             });
         }
+        self.check_sources(&display, settings)?;
 
         let lines = text.lines().collect::<Vec<_>>();
         let begin = lines
@@ -449,7 +545,7 @@ impl Backend {
 
         let mut updated = lines[..begin].join("\n");
         updated.push('\n');
-        updated.push_str(&self.manifest_platform_block());
+        updated.push_str(&self.manifest_platform_block(settings));
         if end + 1 < lines.len() {
             updated.push_str(&lines[end + 1..].join("\n"));
             updated.push('\n');
@@ -458,18 +554,46 @@ impl Backend {
         Ok(updated)
     }
 
+    /// Whether a firmware's sources redirect crates this chip actually needs,
+    /// and nothing else. A name that matches nothing is a typo that would
+    /// otherwise be silently dropped, leaving the pin a person wrote absent
+    /// from the block they wrote it for.
+    fn check_sources(&self, path: &str, settings: &Settings) -> Result<(), Error> {
+        let owned = chip_features();
+        for (name, source) in settings.platform() {
+            if !self.platform_dependencies.contains_key(name) {
+                return Err(Error::UnknownPlatformCrate {
+                    path: path.to_owned(),
+                    name: name.clone(),
+                    chip: self.chip.name.clone(),
+                    known: self
+                        .platform_dependencies
+                        .keys()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                });
+            }
+            for feature in &source.features {
+                if owned.contains(feature) {
+                    return Err(Error::ChipFeatureInSource {
+                        path: path.to_owned(),
+                        name: name.clone(),
+                        feature: feature.clone(),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Write every file derived from this chip into a firmware directory.
-    pub fn emit(
-        &self,
-        firmware: &Path,
-        defmt_log: &str,
-        defmt_location: bool,
-    ) -> Result<Vec<String>, Error> {
+    pub fn emit(&self, firmware: &Path, settings: &Settings) -> Result<Vec<String>, Error> {
         // Read and check the manifest first. A firmware this refuses keeps
         // every file it had: the derived files are only FerroForge's to write
         // in a firmware whose manifest says so.
         let manifest = firmware.join("Cargo.toml");
-        let synced = self.synced_manifest(&manifest)?;
+        let synced = self.synced_manifest(&manifest, settings)?;
 
         let cargo_dir = firmware.join(".cargo");
         fs::create_dir_all(&cargo_dir).map_err(|source| Error::Write {
@@ -478,10 +602,7 @@ impl Backend {
         })?;
         let files = [
             (firmware.join("memory.x"), self.memory_x()),
-            (
-                cargo_dir.join("config.toml"),
-                self.cargo_config(defmt_log, defmt_location),
-            ),
+            (cargo_dir.join("config.toml"), self.cargo_config(settings)),
             (firmware.join("Embed.toml"), self.embed_toml()),
         ];
         let mut written = Vec::new();
@@ -620,6 +741,12 @@ mod derivation {
         Backend::parse("under test", &text).expect("the fixture must parse")
     }
 
+    /// Settings as a firmware declares them, so these read like the manifest
+    /// they come from rather than like a struct literal.
+    fn declared(text: &str) -> Settings {
+        toml::from_str(text).expect("the fixture must parse")
+    }
+
     /// Every emitted file must be derived, so two chips must produce three
     /// different files. One that stays put is hardcoded here rather than read
     /// from the backend.
@@ -627,17 +754,18 @@ mod derivation {
     fn a_different_chip_changes_every_emitted_file() {
         let first = variant("CHIP_A", "thumbv7em-none-eabihf", 524288, 0x198);
         let second = variant("CHIP_B", "thumbv7m-none-eabi", 262144, 0x1a0);
+        let settings = Settings::default();
 
         assert_ne!(first.memory_x(), second.memory_x());
         assert_ne!(
-            first.cargo_config("info", true),
-            second.cargo_config("info", true),
+            first.cargo_config(&settings),
+            second.cargo_config(&settings),
             "the target triple and probe chip both come from the backend"
         );
         assert_ne!(first.embed_toml(), second.embed_toml());
         assert_ne!(
-            first.manifest_platform_block(),
-            second.manifest_platform_block(),
+            first.manifest_platform_block(&settings),
+            second.manifest_platform_block(&settings),
             "the block names its chip, so selecting another rewrites it"
         );
     }
@@ -648,7 +776,7 @@ mod derivation {
         let backend = variant("CHIP_A", "thumbv7em-none-eabihf", 524288, 0x198);
         assert!(
             backend
-                .cargo_config("trace", true)
+                .cargo_config(&declared("defmt-log = \"trace\""))
                 .contains("DEFMT_LOG = \"trace\"")
         );
     }
@@ -657,11 +785,131 @@ mod derivation {
     #[test]
     fn location_is_suppressed_only_when_the_firmware_asks() {
         let backend = variant("CHIP_A", "thumbv7em-none-eabihf", 524288, 0x198);
-        assert!(!backend.cargo_config("info", true).contains("--no-location"));
-        let quiet = backend.cargo_config("info", false);
         assert!(
-            quiet.contains("probe-rs run --chip CHIP_A --no-location"),
-            "{quiet}"
+            !backend
+                .cargo_config(&Settings::default())
+                .contains("--no-location")
         );
+        let quiet = backend.cargo_config(&declared("defmt-location = false"));
+        assert!(quiet.contains("\"--no-location\","), "{quiet}");
+    }
+
+    /// The runner is a list, and the chip is in it, because a firmware adds its
+    /// own arguments to the same line.
+    #[test]
+    fn the_runner_carries_the_probe_command_and_chip() {
+        let backend = variant("CHIP_A", "thumbv7em-none-eabihf", 524288, 0x198);
+        let default = backend.cargo_config(&Settings::default());
+        assert!(
+            default.contains("runner = [\n    \"probe-rs\",\n    \"run\",\n    \"--chip\",\n    \"CHIP_A\",\n]"),
+            "{default}"
+        );
+
+        let attached = backend.cargo_config(&declared("probe-command = \"attach\""));
+        assert!(attached.contains("\"attach\","), "{attached}");
+        assert!(!attached.contains("\"run\","), "{attached}");
+    }
+
+    /// A firmware's own probe arguments follow the chip and precede the flags
+    /// FerroForge adds from other settings, so the line reads in the order the
+    /// settings are declared.
+    #[test]
+    fn probe_arguments_follow_the_chip() {
+        let backend = variant("CHIP_A", "thumbv7em-none-eabihf", 524288, 0x198);
+        let config = backend.cargo_config(&declared(
+            "defmt-location = false\nprobe-args = [\"--protocol\", \"swd\"]",
+        ));
+        let runner = config
+            .split_once("runner = [")
+            .and_then(|(_, rest)| rest.split_once(']'))
+            .map(|(runner, _)| runner.to_owned())
+            .expect("the config must hold a runner list");
+        let order = ["CHIP_A", "--protocol", "swd", "--no-location"]
+            .iter()
+            .map(|argument| {
+                runner
+                    .find(argument)
+                    .unwrap_or_else(|| panic!("{argument} must be in {runner}"))
+            })
+            .collect::<Vec<_>>();
+        let mut sorted = order.clone();
+        sorted.sort_unstable();
+        assert_eq!(order, sorted, "{runner}");
+    }
+
+    /// Environment variables a firmware declares join the one FerroForge writes
+    /// rather than replacing the block.
+    #[test]
+    fn declared_environment_joins_the_log_filter() {
+        let backend = variant("CHIP_A", "thumbv7em-none-eabihf", 524288, 0x198);
+        let config = backend.cargo_config(&declared("env = { PROBE_SERIAL = \"0483\" }"));
+        assert!(config.contains("DEFMT_LOG = \"info\""), "{config}");
+        assert!(config.contains("PROBE_SERIAL = \"0483\""), "{config}");
+    }
+
+    /// A firmware may say where a platform crate comes from. What it may not do
+    /// is lose the chip feature that makes the block worth generating.
+    #[test]
+    fn a_source_replaces_the_version_and_keeps_the_chip_feature() {
+        let backend = Backend::for_chip("stm32f405rg").expect("a shipped backend");
+        let settings = declared(
+            "[platform.stm32f4xx-hal]\n\
+             git = \"https://github.com/stm32-rs/stm32f4xx-hal.git\"\n\
+             rev = \"78d79609137d5c380320f7bf1a9120967babc61d\"\n\
+             features = [\"uart4\"]\n",
+        );
+        let block = backend.manifest_platform_block(&settings);
+
+        let line = block
+            .lines()
+            .find(|line| line.starts_with("stm32f4xx-hal"))
+            .expect("the HAL must be in the block");
+        assert!(line.contains("git = \"https://github.com/stm32-rs/stm32f4xx-hal.git\""), "{line}");
+        assert!(line.contains("rev = \"78d79609137d5c380320f7bf1a9120967babc61d\""), "{line}");
+        assert!(!line.contains("version ="), "{line}");
+        assert!(line.contains("\"stm32f405\""), "the chip feature stays: {line}");
+        assert!(line.contains("\"uart4\""), "{line}");
+
+        assert!(
+            block.contains("# source for stm32f4xx-hal from [package.metadata.ferroforge.platform]"),
+            "the block must say where the source was written: {block}"
+        );
+
+        // Every other crate keeps the backend's own version.
+        let rtic = block
+            .lines()
+            .find(|line| line.starts_with("rtic ="))
+            .expect("rtic must be in the block");
+        assert!(rtic.contains("version ="), "{rtic}");
+    }
+
+    /// A source for a crate the chip does not need is a typo, and a typo that
+    /// is silently dropped leaves the pin absent from the block it was written
+    /// for.
+    #[test]
+    fn a_source_for_an_unselected_crate_is_refused() {
+        let backend = Backend::for_chip("stm32f405rg").expect("a shipped backend");
+        let settings = declared("[platform.stm32f4x-hal]\nversion = \"0.23.0\"\n");
+        let error = backend
+            .check_sources("under test", &settings)
+            .expect_err("a crate the backend does not select must be refused");
+        let message = error.to_string();
+        assert!(message.contains("stm32f4x-hal"), "{message}");
+        assert!(message.contains("stm32f4xx-hal"), "{message}");
+    }
+
+    /// The chip is named once, by `chip`. A chip feature on a source would name
+    /// it twice, and the HAL refuses two at once.
+    #[test]
+    fn a_chip_feature_on_a_source_is_refused() {
+        let backend = Backend::for_chip("stm32f405rg").expect("a shipped backend");
+        let settings =
+            declared("[platform.stm32f4xx-hal]\nversion = \"0.23.0\"\nfeatures = [\"stm32f401\"]\n");
+        let message = backend
+            .check_sources("under test", &settings)
+            .expect_err("a chip feature must be refused")
+            .to_string();
+        assert!(message.contains("stm32f401"), "{message}");
+        assert!(message.contains("`chip`"), "{message}");
     }
 }

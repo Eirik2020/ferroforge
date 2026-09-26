@@ -6,6 +6,40 @@ what is left to build is in [remaining work](implementation-plan.md).
 
 ## Current Decisions
 
+**The firmware owns what goes into the files the CLI writes, 2026-09-26.** The
+two open CLI decisions are settled the same way, because they were the same
+question: a firmware records in `[package.metadata.ferroforge]` anything that
+ends up in a file `sync` generates, and the CLI writes it. That is already why
+`defmt-log` and `defmt-location` are declared rather than passed, so neither
+decision needed a new mechanism, a project-level file, or a parent
+`.cargo/config.toml`.
+
+- **Probe arguments and environment variables.** `probe-command`, `probe-args`
+  and `env`, specified in [the CLI](workflow.md#the-cli). The runner is emitted
+  as Cargo's argument list instead of one string, so a firmware's arguments need
+  no quoting rules.
+- **A platform crate's source.** `[package.metadata.ferroforge.platform.<crate>]`
+  takes any source Cargo accepts, specified in [where a platform crate comes
+  from](workflow.md#where-a-platform-crate-comes-from).
+
+[G2a](governing-requirements.md) is unchanged and was the reason for drawing the
+line where it is drawn: a backend still decides *which* platform crates a chip
+needs and which chip features they carry, and a firmware says only *where* one is
+fetched from. Which crates and which chip features are chip-family data; a git
+revision is a project's supply chain. So the chip feature survives an override,
+and selecting a different chip still rewrites the block correctly - the property
+the generated block exists for.
+
+Settings the CLI itself writes are refused rather than merged, naming the setting
+that owns each, and an unknown key under `[package.metadata.ferroforge]` is an
+error: a misspelled setting that is silently ignored looks applied and is not.
+
+Checked against the case that raised both questions rather than against a
+fixture: the Foxeer app's hand-written runner and its pinned HAL revision are
+reproduced argument for argument and feature for feature. Two deliberate
+differences remain - the generated config adds `-L.`, which makes ferro-wasp's
+`memory.x` copy redundant, and `CHIPSERIE` is dropped, because nothing reads it.
+
 **FCU3 retired, 2026-09-22.** ferro-wasp's second flight board is obsolete.
 Its test gates are retired and its procedure archived; its firmware stays in
 tree and keeps compiling so a second board can be revived cheaply. The FCU3

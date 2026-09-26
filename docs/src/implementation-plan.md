@@ -83,9 +83,10 @@ requirement is met by each project owning one.
 
 ## ferro-wasp Adoption
 
-What ferro-wasp needs before it can adopt FerroForge - two CLI gaps awaiting
-decisions, and the migration order - is planned in [adopting FerroForge in
-ferro-wasp](ferro-wasp-adoption.md). The macro gaps are closed.
+What ferro-wasp needs before it can adopt FerroForge, and the migration order,
+is planned in [adopting FerroForge in ferro-wasp](ferro-wasp-adoption.md). Both
+the macro and the CLI gaps are closed, so what is left there is migration rather
+than design.
 
 ## Evidence Rules
 

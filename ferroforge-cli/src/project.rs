@@ -6,7 +6,7 @@
 //! way, and G7 asks only that operations fail when a required input can no
 //! longer be recognized - not that the layout be policed.
 
-use std::{fmt, fs, io, path::Path, path::PathBuf};
+use std::{collections::BTreeMap, fmt, fs, io, path::Path, path::PathBuf};
 
 use serde::Deserialize;
 
@@ -17,6 +17,7 @@ pub enum Error {
     UnknownFirmware { name: String, known: String },
     Ambiguous { known: String },
     NoChip { firmware: String },
+    BadSetting { path: String, message: String },
     Read { path: String, source: io::Error },
     Parse { path: String, message: String },
 }
@@ -51,6 +52,10 @@ impl fmt::Display for Error {
                  Cargo.toml:\n\n    [package.metadata.ferroforge]\n    \
                  chip = \"stm32f401re\""
             ),
+            Self::BadSetting { path, message } => write!(
+                formatter,
+                "{path}: under [package.metadata.ferroforge], {message}"
+            ),
             Self::Read { path, source } => write!(formatter, "cannot read {path}: {source}"),
             Self::Parse { path, message } => write!(formatter, "{path}: {message}"),
         }
@@ -74,16 +79,108 @@ struct Package {
 #[derive(Debug, Default, Deserialize)]
 struct Metadata {
     #[serde(default)]
-    ferroforge: FerroForge,
+    ferroforge: Settings,
 }
 
+/// What a firmware declares about itself.
+///
+/// Everything here ends up in a file the CLI writes, which is why none of it is
+/// a command-line flag: a flag would leave the emitted file disagreeing with
+/// everything that records why it says what it says.
+///
+/// Unknown keys are rejected. A misspelled key that is silently ignored is a
+/// setting that appears to be applied and is not, and the emitted file gives no
+/// hint which of the two happened.
 #[derive(Debug, Default, Deserialize)]
-struct FerroForge {
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct Settings {
     chip: Option<String>,
-    #[serde(rename = "defmt-log")]
     defmt_log: Option<String>,
-    #[serde(rename = "defmt-location")]
     defmt_location: Option<bool>,
+    probe_command: Option<String>,
+    #[serde(default)]
+    probe_args: Vec<String>,
+    #[serde(default)]
+    env: BTreeMap<String, String>,
+    #[serde(default)]
+    platform: BTreeMap<String, Source>,
+    /// Declared in this same table by task crates, and documented with the
+    /// dependencies rather than here. Accepted so that one table name means one
+    /// thing: a firmware's `ferroforge` dependency is as check-only as a task
+    /// crate's, and a firmware saying so must not be refused for it.
+    #[serde(default, rename = "check-only-dependencies")]
+    _check_only_dependencies: Vec<String>,
+}
+
+/// Where a platform crate comes from, when the backend's own selection will not
+/// do.
+///
+/// The backend still chooses which crates a chip needs and which chip features
+/// they carry; this says only where one of them is fetched from, which is a
+/// property of a project's supply chain rather than of a chip family.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Source {
+    pub version: Option<String>,
+    pub git: Option<String>,
+    pub rev: Option<String>,
+    pub branch: Option<String>,
+    pub tag: Option<String>,
+    pub path: Option<String>,
+    /// Features to add to the backend's own list for this crate. The backend's
+    /// chip feature is always kept, so a source override cannot quietly build
+    /// for the wrong chip.
+    #[serde(default)]
+    pub features: Vec<String>,
+}
+
+impl Source {
+    /// The Cargo key-value pairs naming this source, in the order Cargo's own
+    /// documentation writes them.
+    pub fn keys(&self) -> Vec<(&'static str, String)> {
+        let candidates = [
+            ("version", self.version.as_ref()),
+            ("path", self.path.as_ref()),
+            ("git", self.git.as_ref()),
+            ("branch", self.branch.as_ref()),
+            ("tag", self.tag.as_ref()),
+            ("rev", self.rev.as_ref()),
+        ];
+        candidates
+            .into_iter()
+            .filter_map(|(key, value)| value.map(|value| (key, value.clone())))
+            .collect()
+    }
+
+    /// Why this source cannot be used, in Cargo's terms. Checked here so a
+    /// firmware is refused before any file is written, rather than by a Cargo
+    /// error about a manifest FerroForge generated.
+    fn fault(&self) -> Option<String> {
+        if self.version.is_none() && self.git.is_none() && self.path.is_none() {
+            return Some(
+                "names no source; give it a `version`, a `git` URL or a `path`".to_owned(),
+            );
+        }
+        let pointers = [("rev", &self.rev), ("branch", &self.branch), ("tag", &self.tag)];
+        let named = pointers
+            .iter()
+            .filter(|(_, value)| value.is_some())
+            .map(|(key, _)| *key)
+            .collect::<Vec<_>>();
+        if self.git.is_none() && !named.is_empty() {
+            return Some(format!(
+                "sets `{}` without a `git` URL; Cargo accepts those only on a git source",
+                named.join("` and `"),
+            ));
+        }
+        if named.len() > 1 {
+            return Some(format!(
+                "sets `{}` at once; a git source is pinned by exactly one of them",
+                named.join("` and `"),
+            ));
+        }
+        None
+    }
 }
 
 /// One application under `firmware/`.
@@ -92,40 +189,112 @@ pub struct Firmware {
     pub path: PathBuf,
 }
 
-impl Firmware {
+/// Arguments the CLI puts on the probe command line itself, and the setting
+/// that owns each. A firmware repeating one of these would have the generated
+/// file name the same thing twice, with nothing deciding which wins.
+const OWNED_PROBE_ARGUMENTS: &[(&str, &str)] = &[
+    ("--chip", "chip"),
+    ("--no-location", "defmt-location"),
+];
+
+/// Environment variables the CLI writes, and the setting that owns each.
+const OWNED_ENVIRONMENT: &[(&str, &str)] = &[("DEFMT_LOG", "defmt-log")];
+
+/// The probe subcommands that make sense as a Cargo runner. `run` flashes and
+/// runs; `attach` connects to what is already there.
+const PROBE_COMMANDS: &[&str] = &["run", "attach"];
+
+impl Settings {
     /// What this firmware wants in `DEFMT_LOG`: a level, or a filter such as
     /// `info,noisy_crate=off`.
-    ///
-    /// Declared rather than passed on the command line, because it is written
-    /// into an emitted file. A flag would leave the file disagreeing with
-    /// everything that records why, which is the drift the derived files exist
-    /// to prevent.
-    pub fn defmt_log(&self) -> Result<String, Error> {
-        Ok(self
-            .metadata()?
-            .defmt_log
-            .unwrap_or_else(|| "info".to_owned()))
+    pub fn defmt_log(&self) -> &str {
+        self.defmt_log.as_deref().unwrap_or("info")
     }
 
     /// Whether the probe prints the file and line each log came from.
-    /// Declared rather than passed, for the same reason `defmt-log` is: it is
-    /// written into an emitted file.
     ///
     /// On by default, as probe-rs has it. A firmware whose logs are read as a
     /// running commentary rather than debugged turns it off.
-    pub fn defmt_location(&self) -> Result<bool, Error> {
-        Ok(self.metadata()?.defmt_location.unwrap_or(true))
+    pub fn defmt_location(&self) -> bool {
+        self.defmt_location.unwrap_or(true)
     }
 
+    /// The probe subcommand the runner invokes. `run` by default, which is what
+    /// `cargo run` means everywhere else.
+    pub fn probe_command(&self) -> &str {
+        self.probe_command.as_deref().unwrap_or("run")
+    }
+
+    /// Extra arguments for the probe, such as `--protocol swd`. Placed after the
+    /// chip, so they read in the order a person would type them.
+    pub fn probe_args(&self) -> &[String] {
+        &self.probe_args
+    }
+
+    /// Extra environment variables for every build of this firmware.
+    pub fn env(&self) -> &BTreeMap<String, String> {
+        &self.env
+    }
+
+    /// Where a platform crate comes from, for the crates a firmware overrides.
+    pub fn platform(&self) -> &BTreeMap<String, Source> {
+        &self.platform
+    }
+
+    /// Why these settings cannot be used. Checked before anything is written,
+    /// because a firmware that is refused must keep the files it had.
+    fn fault(&self) -> Option<String> {
+        if !PROBE_COMMANDS.contains(&self.probe_command()) {
+            return Some(format!(
+                "`probe-command` is `{}`; it must be one of: {}",
+                self.probe_command(),
+                PROBE_COMMANDS.join(", "),
+            ));
+        }
+        for argument in &self.probe_args {
+            if argument.trim().is_empty() {
+                return Some("`probe-args` holds an empty argument".to_owned());
+            }
+            if let Some((_, owner)) = OWNED_PROBE_ARGUMENTS
+                .iter()
+                .find(|(owned, _)| argument == owned)
+            {
+                return Some(format!(
+                    "`probe-args` names `{argument}`, which the generated runner \
+                     already carries; set `{owner}` instead",
+                ));
+            }
+        }
+        for name in self.env.keys() {
+            if let Some((_, owner)) = OWNED_ENVIRONMENT.iter().find(|(owned, _)| name == owned) {
+                return Some(format!(
+                    "`env` sets `{name}`, which the generated file already \
+                     carries; set `{owner}` instead",
+                ));
+            }
+        }
+        for (crate_name, source) in &self.platform {
+            if let Some(fault) = source.fault() {
+                return Some(format!("`platform.{crate_name}` {fault}"));
+            }
+        }
+        None
+    }
+}
+
+impl Firmware {
     /// The chip this firmware declares. Not defaulted: guessing which chip a
     /// binary is for would produce a firmware that links and cannot run.
     pub fn chip(&self) -> Result<String, Error> {
-        self.metadata()?.chip.ok_or_else(|| Error::NoChip {
+        self.settings()?.chip.ok_or_else(|| Error::NoChip {
             firmware: self.path.display().to_string(),
         })
     }
 
-    fn metadata(&self) -> Result<FerroForge, Error> {
+    /// Everything this firmware declares, checked. Read from the manifest on
+    /// every call rather than cached: the manifest is authored, and a stale copy
+    /// would emit files for a firmware as it used to be.
+    pub fn settings(&self) -> Result<Settings, Error> {
         let manifest = self.path.join("Cargo.toml");
         let display = manifest.display().to_string();
         let text = fs::read_to_string(&manifest).map_err(|source| Error::Read {
@@ -133,10 +302,17 @@ impl Firmware {
             source,
         })?;
         let parsed: Manifest = toml::from_str(&text).map_err(|error| Error::Parse {
-            path: display,
+            path: display.clone(),
             message: error.to_string(),
         })?;
-        Ok(parsed.package.metadata.ferroforge)
+        let settings = parsed.package.metadata.ferroforge;
+        match settings.fault() {
+            Some(message) => Err(Error::BadSetting {
+                path: display,
+                message,
+            }),
+            None => Ok(settings),
+        }
     }
 }
 
