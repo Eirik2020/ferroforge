@@ -201,7 +201,14 @@ an instance shares the definition's name.
 `app!` emits a config impl and an adapter that constructs the definition's
 own context and calls it. Every path it emits is a real Rust path, so a wrong
 definition, binding, type or interrupt is an ordinary compile error on the
-authored line.
+authored line. A monotonic the definition cannot use is reported there too, by
+a check the definition supplies, saying what to change - a monotonic counting
+in `u32` is otherwise only a mismatch between two `fugit` types.
+
+As in RTIC, an instance keeps its other attributes - documentation, `#[cfg]`,
+lints - and a gated instance takes its configuration with it. Its options are
+separated by commas and given once each. Any item RTIC accepts inside its
+application passes through `app!` unchanged.
 
 The macro reads nothing but its own input. That is a deliberate constraint:
 configuration is an associated-const trait and every context carries a monotonic

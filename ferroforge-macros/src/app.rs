@@ -150,8 +150,18 @@ fn bracketed_list<T: Parse>(input: ParseStream<'_>) -> syn::Result<Vec<T>> {
 impl Parse for TaskAttribute {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let mut parsed = Self::default();
+        let mut seen: Vec<String> = Vec::new();
         while !input.is_empty() {
             let key: Ident = input.parse()?;
+            // A second `local = [..]` would silently replace the first, so a
+            // repeat is refused as a definition's arguments refuse one.
+            if seen.contains(&key.to_string()) {
+                return Err(syn::Error::new(
+                    key.span(),
+                    format!("`{key}` appears more than once"),
+                ));
+            }
+            seen.push(key.to_string());
             input.parse::<Token![=]>()?;
             match key.to_string().as_str() {
                 "from" => parsed.from = Some(input.parse()?),
@@ -168,7 +178,7 @@ impl Parse for TaskAttribute {
                     ));
                 }
             }
-            if input.peek(Token![,]) {
+            if !input.is_empty() {
                 input.parse::<Token![,]>()?;
             }
         }
@@ -178,6 +188,10 @@ impl Parse for TaskAttribute {
 
 struct Instance {
     attribute: TaskAttribute,
+    /// Every attribute on the declaration but its `#[task(..)]` - documentation,
+    /// `#[cfg]` and lints - carried to the task RTIC receives, as RTIC keeps
+    /// them on a task of its own.
+    attributes: Vec<Attribute>,
     signature: Signature,
 }
 
@@ -188,11 +202,20 @@ enum Element {
 }
 
 /// A bodyless `#[task(from = ..)] fn name(..);` declaration.
-fn parse_instance(input: ParseStream<'_>, attribute: TaskAttribute) -> syn::Result<Instance> {
+fn parse_instance(
+    input: ParseStream<'_>,
+    attribute: TaskAttribute,
+    attributes: Vec<Attribute>,
+) -> syn::Result<Instance> {
     let signature: Signature = input.parse()?;
     input.parse::<Token![;]>()?;
+    let attributes = attributes
+        .into_iter()
+        .filter(|attribute| !attribute.path().is_ident("task"))
+        .collect();
     Ok(Instance {
         attribute,
+        attributes,
         signature,
     })
 }
@@ -314,7 +337,9 @@ impl Parse for App {
         while !input.is_empty() {
             let attributes = input.call(Attribute::parse_outer)?;
             if let Some(attribute) = instance_attribute(&attributes)? {
-                elements.push(Element::Instance(parse_instance(input, attribute)?));
+                elements.push(Element::Instance(parse_instance(
+                    input, attribute, attributes,
+                )?));
             } else {
                 let mut item: Item = input.parse()?;
                 prepend_attributes(&mut item, attributes)?;
@@ -380,20 +405,33 @@ fn application_monotonic(elements: &[Element]) -> syn::Result<Option<Ident>> {
     Ok(found)
 }
 
+/// Put back the attributes read ahead of an item that turned out not to be an
+/// instance. Every item RTIC accepts inside its module is passed through, as
+/// RTIC passes anything it does not recognise through as the author's code.
 fn prepend_attributes(item: &mut Item, mut attributes: Vec<Attribute>) -> syn::Result<()> {
     let existing = match item {
         Item::Use(item) => &mut item.attrs,
         Item::Struct(item) => &mut item.attrs,
+        Item::Enum(item) => &mut item.attrs,
+        Item::Union(item) => &mut item.attrs,
         Item::Fn(item) => &mut item.attrs,
         Item::Impl(item) => &mut item.attrs,
+        Item::Trait(item) => &mut item.attrs,
+        Item::TraitAlias(item) => &mut item.attrs,
         Item::Const(item) => &mut item.attrs,
+        Item::Static(item) => &mut item.attrs,
         Item::Type(item) => &mut item.attrs,
         Item::Mod(item) => &mut item.attrs,
         Item::Macro(item) => &mut item.attrs,
+        Item::ExternCrate(item) => &mut item.attrs,
+        Item::ForeignMod(item) => &mut item.attrs,
+        // Tokens syn could not classify carry no attribute list of their own,
+        // so any read ahead of them would be lost rather than passed on.
+        _ if attributes.is_empty() => return Ok(()),
         other => {
             return Err(syn::Error::new(
                 other.span(),
-                "unsupported item in a composition",
+                "attributes on an item `app!` cannot pass through",
             ));
         }
     };
@@ -405,8 +443,15 @@ fn prepend_attributes(item: &mut Item, mut attributes: Vec<Attribute>) -> syn::R
 fn render_instance(instance: &Instance) -> syn::Result<TokenStream> {
     let Instance {
         attribute,
+        attributes,
         signature,
     } = instance;
+    // A gated instance takes its configuration with it, or the configuration
+    // would outlive the task it was for and be reported as unused.
+    let cfgs = attributes
+        .iter()
+        .filter(|attribute| attribute.path().is_ident("cfg"))
+        .collect::<Vec<_>>();
     let name = &signature.ident;
     let from = attribute
         .from
@@ -515,6 +560,13 @@ fn render_instance(instance: &Instance) -> syn::Result<TokenStream> {
     let awaiting = signature.asyncness.map(|_| quote!(.await));
     let output = &signature.output;
 
+    // Checked once per instance, where the definition is named, so a monotonic
+    // the definition cannot use is reported with the definition's own reason.
+    let slot_at_from = format_ident!("{MONOTONIC_SLOT}", span = from.span());
+    let check = quote_spanned! {from.span()=>
+        const _: fn() = #from::__ff_check_monotonic::<#slot_at_from>;
+    };
+
     let call = quote_spanned! {from.span()=>
         #from(
             #from::Context {
@@ -532,11 +584,16 @@ fn render_instance(instance: &Instance) -> syn::Result<TokenStream> {
     };
 
     Ok(quote! {
+        #(#cfgs)*
         struct #config_type;
+        #(#cfgs)*
         impl #from::Config for #config_type {
             #(#config_consts)*
         }
+        #(#cfgs)*
+        #check
 
+        #(#attributes)*
         #[task(#binds priority = #priority #local_attribute #shared_attribute)]
         #asyncness fn #name(#context #(, #inputs)*) #output {
             #call
@@ -659,6 +716,73 @@ mod tests {
             Err(error) => error.to_string(),
         };
         assert!(error.contains("documentation and no other"), "{error}");
+    }
+
+    /// An instance's other attributes reach the task RTIC receives, and a
+    /// `#[cfg]` also gates the configuration made for it, so an instance gated
+    /// off leaves nothing behind.
+    #[test]
+    fn an_instances_attributes_reach_its_task() {
+        let output = expand_source(
+            "/// The status light.\n#[cfg(feature = \"led\")]\n\
+             #[task(from = blink)] async fn led(cx: led::Context);",
+        )
+        .unwrap()
+        .to_string();
+        assert!(output.contains("doc = \" The status light.\""), "{output}");
+        let gate = "# [cfg (feature = \"led\")]";
+        // The configuration's struct and impl, the monotonic check, and the task.
+        assert_eq!(output.matches(gate).count(), 4, "{output}");
+    }
+
+    /// A repeated option would silently replace the first, and options run
+    /// together are a typo; both are refused as a definition refuses them.
+    #[test]
+    fn an_instances_options_are_separated_and_given_once() {
+        for (source, message) in [
+            (
+                "#[task(from = blink, local = [a], local = [b])] async fn led(cx: led::Context);",
+                "`local` appears more than once",
+            ),
+            (
+                "#[task(from = blink priority = 1)] async fn led(cx: led::Context);",
+                "expected `,`",
+            ),
+        ] {
+            let error = match syn::parse_str::<App>(&format!("device = chip::pac, {source}")) {
+                Ok(_) => panic!("{source} must be refused"),
+                Err(error) => error.to_string(),
+            };
+            assert!(error.contains(message), "{source}: {error}");
+        }
+    }
+
+    /// RTIC passes any item it does not recognise through as the author's
+    /// code, so `app!` does too.
+    #[test]
+    fn any_item_rtic_accepts_passes_through() {
+        let output = expand_source(
+            "#[derive(Clone, Copy)] enum Mode { A } static LIMIT: u32 = 3; trait Named {}",
+        )
+        .unwrap()
+        .to_string();
+        assert!(output.contains("enum Mode"), "{output}");
+        assert!(output.contains("static LIMIT"), "{output}");
+        assert!(output.contains("trait Named"), "{output}");
+        assert!(output.contains("derive (Clone , Copy)"), "{output}");
+    }
+
+    /// Each instance is checked against its definition's own monotonic check,
+    /// which is what explains a monotonic counting in the wrong width.
+    #[test]
+    fn each_instance_is_checked_against_its_definitions_monotonic() {
+        let output = expand_source("#[task(from = blink)] async fn led(cx: led::Context);")
+            .unwrap()
+            .to_string();
+        assert!(
+            output.contains("blink :: __ff_check_monotonic :: < __FfMonotonic >"),
+            "{output}"
+        );
     }
 
     /// RTIC's own task options are not this grammar's, and a task without

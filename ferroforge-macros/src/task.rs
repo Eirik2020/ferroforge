@@ -402,6 +402,34 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
     let monotonic_rate = monotonic_param
         .as_ref()
         .map(|_| quote!(, const __FF_TICK_HZ: u32));
+    // What `app!` checks each instance against: the monotonic this definition
+    // needs, stated as a bound whose failure says what to change. A monotonic
+    // counting in `u32` otherwise fails only as a mismatch between two fugit
+    // types, which does not say that SysTick counts in `u64` behind a feature.
+    let monotonic_check = match monotonic_param {
+        Some(_) => quote! {
+            #[doc(hidden)]
+            #[diagnostic::on_unimplemented(
+                message = "a FerroForge task needs a monotonic counting in `u64`, and this one's instant is `{Self}`",
+                label = "counts in the wrong width",
+                note = "SysTick counts in `u64` with rtic-monotonics' `systick-64bit` feature, which `ferroforge sync` enables; STM32 hardware-timer monotonics always do"
+            )]
+            pub trait __FfCountsInU64 {}
+            impl<const NOM: u32, const DENOM: u32> __FfCountsInU64
+                for ::fugit::Instant<u64, NOM, DENOM> {}
+
+            #[doc(hidden)]
+            pub fn __ff_check_monotonic<M: ::rtic_monotonics::Monotonic>()
+            where
+                M::Instant: __FfCountsInU64,
+            {
+            }
+        },
+        None => quote! {
+            #[doc(hidden)]
+            pub fn __ff_check_monotonic<M>() {}
+        },
+    };
     let monotonic_bound = monotonic_param.as_ref().map(|_| {
         quote!(#monotonic_name: ::rtic_monotonics::Monotonic<
             Instant = ::fugit::Instant<u64, 1, __FF_TICK_HZ>,
@@ -486,6 +514,8 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
             pub trait Config {
                 #(#config_consts)*
             }
+
+            #monotonic_check
 
             pub struct Context<#context_generics>
             where #(#spawn_bounds),* {

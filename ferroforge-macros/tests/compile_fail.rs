@@ -15,17 +15,19 @@ use std::{
     process::Command,
 };
 
-/// A defect, the firmware it is planted in, the authored text it replaces, and
-/// the reason it must fail for.
+/// A defect, the firmware it is planted in, the file and authored text it
+/// replaces, and the reason it must fail for.
 struct Case {
     name: &'static str,
     firmware: &'static str,
+    file: &'static str,
     from: &'static str,
     to: &'static str,
     expected: &'static str,
 }
 
 const BASE: &str = "nucleo-f401re";
+const MAIN: &str = "src/main.rs";
 const BEACON: &str = "nucleo-f401re-beacon";
 
 const CASES: &[Case] = &[
@@ -33,6 +35,7 @@ const CASES: &[Case] = &[
     Case {
         name: "hardware-task-given-inputs",
         firmware: BASE,
+        file: MAIN,
         from: "fn tick(cx: tick::Context);",
         to: "fn tick(cx: tick::Context, value: u32);",
         expected: "this task handler must have type signature `fn(tick::Context)`",
@@ -42,6 +45,7 @@ const CASES: &[Case] = &[
     Case {
         name: "software-task-given-an-interrupt",
         firmware: BASE,
+        file: MAIN,
         from: "from = blink,",
         to: "from = blink, binds = TIM3,",
         expected: "an `async` task cannot bind an interrupt",
@@ -51,6 +55,7 @@ const CASES: &[Case] = &[
     Case {
         name: "configuration-type-disagrees-with-definition",
         firmware: BASE,
+        file: MAIN,
         // Only the type, so changing the configured value does not stop this
         // case from testing what it is about.
         from: "period_ms: u32 =",
@@ -60,6 +65,7 @@ const CASES: &[Case] = &[
     Case {
         name: "binding-names-a-resource-that-does-not-exist",
         firmware: BASE,
+        file: MAIN,
         from: "local = [led = status_led, count = blink_count],",
         to: "local = [led = status_led, count = no_such_resource],",
         expected: "this local resource has NOT been declared",
@@ -70,6 +76,7 @@ const CASES: &[Case] = &[
     Case {
         name: "resource-type-disagrees-with-the-hal-definition",
         firmware: BEACON,
+        file: MAIN,
         from: "pulse_timer: CounterUs<TIM3>,",
         to: "pulse_timer: u32,",
         expected: "expected `u32`, found `Counter",
@@ -81,10 +88,23 @@ const CASES: &[Case] = &[
     Case {
         name: "task-needs-a-monotonic-the-application-lacks",
         firmware: BASE,
+        file: MAIN,
         from: "systick_monotonic!(Mono, 1000);",
         to: "macro_rules! clock { () => { systick_monotonic!(Mono, 1000); } }
     clock!();",
         expected: "NoMonotonicDeclared",
+    },
+    // A monotonic counting in `u32`, as SysTick does without the feature every
+    // backend enables - the first thing a 0.3 firmware meets under 0.4. The
+    // fugit mismatch alone does not say what to change, so the definition's
+    // own check must, on the instance that selects it.
+    Case {
+        name: "monotonic-counts-in-u32",
+        firmware: BASE,
+        file: "Cargo.toml",
+        from: "\"cortex-m-systick\", \"systick-64bit\"",
+        to: "\"cortex-m-systick\"",
+        expected: "a FerroForge task needs a monotonic counting in `u64`",
     },
     // A spawn alias bound to an instance whose inputs differ. The adapter is
     // generated, so the error must still be reported on the binding that
@@ -92,6 +112,7 @@ const CASES: &[Case] = &[
     Case {
         name: "spawn-alias-bound-to-a-task-with-other-inputs",
         firmware: BASE,
+        file: MAIN,
         from: "spawn = [report = telemetry],",
         to: "spawn = [report = status_blink],",
         expected: "spawn = [report = status_blink],",
@@ -101,6 +122,7 @@ const CASES: &[Case] = &[
     Case {
         name: "dispatcher-is-also-a-bound-interrupt",
         firmware: BASE,
+        file: MAIN,
         from: "dispatchers = [USART1]",
         to: "dispatchers = [TIM2]",
         expected: "dispatcher interrupts can't be used as hardware tasks",
@@ -108,6 +130,7 @@ const CASES: &[Case] = &[
     Case {
         name: "too-few-dispatchers-for-the-priorities-used",
         firmware: BEACON,
+        file: MAIN,
         from: "dispatchers = [USART2, SPI1]",
         to: "dispatchers = [USART2]",
         expected: "not enough interrupts to dispatch all software tasks",
@@ -152,18 +175,20 @@ fn prepare(firmware: &str, name: &str, mutation: Option<&Case>) -> PathBuf {
         .replace("path = \"../../../", &format!("path = \"{absolute}/"))
         .replace("path = \"../../", &format!("path = \"{absolute}/examples/"));
     fs::write(directory.join("Cargo.toml"), manifest).unwrap();
+    fs::copy(source.join("src/main.rs"), directory.join("src/main.rs")).unwrap();
 
-    let mut main = fs::read_to_string(source.join("src/main.rs")).unwrap();
     if let Some(case) = mutation {
+        let path = directory.join(case.file);
+        let text = fs::read_to_string(&path).unwrap();
         assert!(
-            main.contains(case.from),
-            "`{}` no longer appears in the firmware, so case `{}` would test nothing",
+            text.contains(case.from),
+            "`{}` no longer appears in {}, so case `{}` would test nothing",
             case.from,
+            case.file,
             case.name
         );
-        main = main.replacen(case.from, case.to, 1);
+        fs::write(&path, text.replacen(case.from, case.to, 1)).unwrap();
     }
-    fs::write(directory.join("src/main.rs"), main).unwrap();
 
     directory
 }
