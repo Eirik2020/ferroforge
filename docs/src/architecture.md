@@ -77,6 +77,13 @@ each was settled.
   be supplied on the instance in the same form, `local = [detector: Detector =
   Detector::new(..)]`, rather than through `#[local]` and `init` - for a value
   that depends on the board, which a definition's own constant cannot.
+- Any entry may be documented where it is declared, and the documentation
+  reaches the field or constant the entry becomes; a firmware's configuration
+  values may be documented too. A `#[cfg]` is accepted where RTIC accepts one on
+  a task's list: a local with an initial value, `local = [#[cfg(feature =
+  "log")] pages: u32 = 0]`. An entry the firmware supplies is gated where RTIC
+  gates it, at the firmware's `#[shared]` or `#[local]` field. No other
+  attribute is accepted, because none would reach anything.
 - Configuration is read as `CONFIG::FIELD`, declared `config = [period_ms: u32]`.
   `CONFIG` is the task's type parameter for the firmware's configuration, so a
   read is an associated constant the compiler resolves wherever it is written,

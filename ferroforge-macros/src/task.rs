@@ -94,8 +94,21 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
     let local_fields = arguments.local.iter().map(|resource| {
         let name = &resource.name;
         let ty = resource_type(resource, &bound_generics);
-        quote!(pub #name: &'__ff mut #ty,)
+        let attributes = resource.docs.iter().chain(&resource.cfgs);
+        quote!(#(#attributes)* pub #name: &'__ff mut #ty,)
     });
+    // A `#[cfg]` can remove every local, which would leave `Local`'s lifetime
+    // unused, so a gated definition keeps it alive with a marker.
+    let local_marker = arguments
+        .local
+        .iter()
+        .any(|resource| !resource.cfgs.is_empty())
+        .then(|| {
+            quote!(#[doc(hidden)] pub __ff_lifetime: ::core::marker::PhantomData<&'__ff mut ()>,)
+        });
+    let local_marker_value = local_marker
+        .as_ref()
+        .map(|_| quote!(__ff_lifetime: ::core::marker::PhantomData,));
 
     // A `#[lock_free]` shared resource is handed over as `&mut T`, exactly as
     // RTIC hands it, so a bounded one is a generic appearing in its field -
@@ -145,14 +158,15 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
         .iter()
         .map(|resource| {
             let name = &resource.name;
+            let docs = &resource.docs;
             match shared_generics
                 .iter()
                 .find(|(locked, _)| locked.name == resource.name)
             {
-                Some((_, generic)) => quote!(pub #name: #generic,),
+                Some((_, generic)) => quote!(#(#docs)* pub #name: #generic,),
                 None => {
                     let ty = resource_type(resource, &lock_free_generics);
-                    quote!(pub #name: &'__ffs mut #ty,)
+                    quote!(#(#docs)* pub #name: &'__ffs mut #ty,)
                 }
             }
         })
@@ -233,7 +247,8 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
                 .ty
                 .as_ref()
                 .ok_or_else(|| Error::new(config.name.span(), "configuration needs a type"))?;
-            Ok(quote!(const #name: #ty;))
+            let docs = &config.docs;
+            Ok(quote!(#(#docs)* const #name: #ty;))
         })
         .collect::<Result<Vec<_>>>()?;
 
@@ -341,6 +356,15 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
         .iter()
         .map(|resource| &resource.init)
         .collect::<Vec<_>>();
+    // Everywhere an owned local appears is generated here, so its `#[cfg]`
+    // reaches each place; the firmware never names it.
+    let owned_cfgs = owned
+        .iter()
+        .map(|resource| {
+            let cfgs = &resource.cfgs;
+            quote!(#(#cfgs)*)
+        })
+        .collect::<Vec<_>>();
     let supplied_names = supplied
         .iter()
         .map(|resource| &resource.name)
@@ -398,18 +422,19 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
 
             pub struct Local<#local_list> {
                 #(#local_fields)*
+                #local_marker
             }
 
             #[doc(hidden)]
             pub struct __FfTaskLocal {
-                #(pub #owned_names: #owned_types,)*
+                #(#owned_cfgs pub #owned_names: #owned_types,)*
             }
 
             impl __FfTaskLocal {
                 /// Every initial value, as RTIC evaluates a task-local's:
                 /// once, as a constant.
                 pub const INIT: Self = Self {
-                    #(#owned_names: #owned_inits,)*
+                    #(#owned_cfgs #owned_names: #owned_inits,)*
                 };
             }
 
@@ -422,10 +447,11 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
             impl<#bound_list> __FfBound<#bound_list> {
                 #[inline]
                 pub fn into_local(self) -> Local<#local_from_bound> {
-                    let __FfTaskLocal { #(#owned_names),* } = self.__ff_task;
+                    let __FfTaskLocal { #(#owned_cfgs #owned_names),* } = self.__ff_task;
                     Local {
-                        #(#owned_names,)*
+                        #(#owned_cfgs #owned_names,)*
                         #(#supplied_names: self.#supplied_names,)*
+                        #local_marker_value
                     }
                 }
             }
@@ -516,6 +542,39 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(error.contains("`CONFIG::PERIOD_MS`"), "{error}");
+    }
+
+    /// An entry's documentation reaches the field or constant it becomes, and
+    /// a gated task-local's `#[cfg]` reaches every place it appears - its
+    /// field, its initial value, and both sides of `into_local` - with a
+    /// marker keeping `Local`'s lifetime used if the gate removes the last one.
+    #[test]
+    fn an_entrys_documentation_and_gate_are_kept() {
+        let output = expanded(
+            "local = [#[cfg(feature = \"retry\")] retries: u8 = 0],
+             shared = [/// Set by the receiver.\n rx: u32],
+             config = [/// Blink period.\n period_ms: u32]",
+            "async fn run(cx: run::Context) {}",
+        )
+        .unwrap();
+        assert!(
+            output.contains("doc = \" Set by the receiver.\""),
+            "{output}"
+        );
+        assert!(
+            output.contains("doc = \" Blink period.\"] const PERIOD_MS"),
+            "{output}"
+        );
+        let gate = "# [cfg (feature = \"retry\")]";
+        assert_eq!(output.matches(gate).count(), 5, "{output}");
+        assert!(output.contains("__ff_lifetime"), "{output}");
+
+        let ungated = expanded(
+            "local = [retries: u8 = 0]",
+            "async fn run(cx: run::Context) {}",
+        )
+        .unwrap();
+        assert!(!ungated.contains("__ff_lifetime"), "{ungated}");
     }
 
     /// Documentation and lint attributes on a definition reach the function.

@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use proc_macro2::Span;
 
 use syn::{
-    Error, Expr, FnArg, Ident, LitStr, Pat, Path, ReturnType, Signature, Token, Type,
+    Attribute, Error, Expr, FnArg, Ident, LitStr, Pat, Path, ReturnType, Signature, Token, Type,
     TypeParamBound, bracketed, parenthesized,
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
@@ -31,26 +31,37 @@ pub fn identifier_key(name: &Ident) -> String {
 /// A shared resource may be marked `#[lock_free]`, RTIC's own word for a
 /// resource every task sharing it runs at one priority. The task then receives
 /// it as `&mut T` rather than as a lock, exactly as RTIC hands it over.
+///
+/// Any entry may be documented. A `#[cfg]` is accepted where RTIC accepts one
+/// on a task's own list - a local with an initial value - which `validate`
+/// checks once it knows the entry's category.
 #[derive(Clone, Debug)]
 pub struct Resource {
     pub name: Ident,
     pub ty: Option<Type>,
     pub init: Option<Expr>,
     pub lock_free: Option<Span>,
+    pub docs: Vec<Attribute>,
+    pub cfgs: Vec<Attribute>,
 }
 
 impl Parse for Resource {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let mut lock_free = None;
-        for attribute in input.call(syn::Attribute::parse_outer)? {
+        let mut docs = Vec::new();
+        let mut cfgs = Vec::new();
+        for attribute in input.call(Attribute::parse_outer)? {
             match &attribute.meta {
                 syn::Meta::Path(path) if path.is_ident("lock_free") => {
                     lock_free = Some(path.span());
                 }
+                syn::Meta::NameValue(meta) if meta.path.is_ident("doc") => docs.push(attribute),
+                syn::Meta::List(meta) if meta.path.is_ident("cfg") => cfgs.push(attribute),
                 other => {
                     return Err(Error::new(
                         other.span(),
-                        "the only attribute on a resource is `#[lock_free]`",
+                        "an entry takes documentation, `#[cfg]` or `#[lock_free]`, \
+                         and no other attribute",
                     ));
                 }
             }
@@ -73,6 +84,8 @@ impl Parse for Resource {
             ty,
             init,
             lock_free,
+            docs,
+            cfgs,
         })
     }
 }
@@ -278,6 +291,21 @@ impl TaskArguments {
                     span,
                     "only a shared resource can be `#[lock_free]`; a local one \
                      is never locked",
+                ));
+            }
+        }
+        // RTIC accepts a `#[cfg]` on a task-local it declares in place, and on
+        // nothing a task's list only names: an entry the firmware supplies is
+        // gated at the firmware's own `#[shared]` or `#[local]` field.
+        for resource in self.local.iter().chain(&self.shared).chain(&self.config) {
+            if let Some(cfg) = resource.cfgs.first()
+                && resource.init.is_none()
+            {
+                return Err(Error::new(
+                    cfg.span(),
+                    "only a local with an initial value can be `#[cfg]`-gated, \
+                     as in RTIC; gate what the firmware supplies at its own \
+                     `#[shared]` or `#[local]` field",
                 ));
             }
         }
@@ -605,12 +633,43 @@ mod tests {
                 "local = [#[lock_free] count: u32]",
                 "only a shared resource",
             ),
-            ("shared = [#[cfg(x)] count: u32]", "only attribute"),
+            ("shared = [#[inline] count: u32]", "no other attribute"),
+            (
+                "shared = [#[cfg(x)] count: u32]",
+                "initial value can be `#[cfg]`",
+            ),
+            (
+                "local = [#[cfg(x)] count: u32]",
+                "initial value can be `#[cfg]`",
+            ),
+            (
+                "config = [#[cfg(x)] period_ms: u32]",
+                "initial value can be `#[cfg]`",
+            ),
             ("bounds = [led: Pin], local = [led: u32 = 0]", "not both"),
         ] {
             let error = contract(args, "async fn run(cx: run::Context) {}").unwrap_err();
             assert!(error.to_string().contains(message), "{args}: {error}");
         }
+    }
+
+    /// Documentation is accepted on every entry, and `#[cfg]` where RTIC
+    /// accepts it on a task's list: a local declared with its initial value.
+    #[test]
+    fn accepts_documentation_and_a_gated_task_local() {
+        let task = contract(
+            "local = [/// Retries so far.\n #[cfg(feature = \"retry\")] retries: u8 = 0, led: u32],
+             shared = [/// Set by the receiver.\n #[lock_free] rx: u32],
+             config = [/// Blink period.\n period_ms: u32]",
+            "async fn run(cx: run::Context) {}",
+        )
+        .unwrap();
+        let retries = &task.arguments.local[0];
+        assert_eq!((retries.docs.len(), retries.cfgs.len()), (1, 1));
+        assert!(task.arguments.local[1].docs.is_empty());
+        assert_eq!(task.arguments.shared[0].docs.len(), 1);
+        assert!(task.arguments.shared[0].lock_free.is_some());
+        assert_eq!(task.arguments.config[0].docs.len(), 1);
     }
 
     #[test]

@@ -159,7 +159,10 @@ use panic_probe as _;
 
 #[ferroforge::task(
     spawn = [takes_none(), takes_one(value: u32), takes_two(a: u32, b: bool)],
-    config = [period_ms: u32],
+    config = [
+        /// Milliseconds between reports.
+        period_ms: u32,
+    ],
     monotonic = Mono,
 )]
 pub async fn source(cx: source::Context) {
@@ -203,10 +206,29 @@ impl Sink for Counter {
     }
 }
 
-#[ferroforge::task(bounds = [out: Sink], shared = [out])]
+#[ferroforge::task(bounds = [out: Sink], shared = [/// Where values go.
+ out])]
 pub async fn writer(mut cx: writer::Context) {
     cx.shared.out.lock(|out| out.put(1));
 }
+
+// `all()` is always true and `any()` always false, so one local is kept and
+// one removed, and in `all_gated` the gate removes the only one.
+#[ferroforge::task(
+    local = [
+        /// Kept on every build.
+        #[cfg(all())]
+        kept: u8 = 1,
+        #[cfg(any())]
+        removed: u8 = 2,
+    ],
+)]
+pub async fn gated(cx: gated::Context) {
+    *cx.local.kept += 1;
+}
+
+#[ferroforge::task(local = [#[cfg(any())] removed: u8 = 0])]
+pub async fn all_gated(_cx: all_gated::Context) {}
 
 #[ferroforge::task(shared = [#[lock_free] rx: Counter])]
 pub fn on_dma(cx: on_dma::Context) {
@@ -225,7 +247,10 @@ ferroforge::app! {
     use rtic_monotonics::systick::prelude::*;
     systick_monotonic!(Mono, 1000);
 
-    use super::{Counter, on_dma, on_idle, source, takes_none, takes_one, takes_two, writer};
+    use super::{
+        Counter, all_gated, gated, on_dma, on_idle, source, takes_none, takes_one, takes_two,
+        writer,
+    };
 
     #[shared]
     struct Shared {
@@ -256,9 +281,18 @@ ferroforge::app! {
         from = source,
         priority = 1,
         spawn = [takes_none = zero, takes_one = one, takes_two = two],
-        config = [period_ms: u32 = 5],
+        config = [
+            /// Five milliseconds, for the test.
+            period_ms: u32 = 5,
+        ],
     )]
     async fn first(cx: first::Context);
+
+    #[task(from = gated, priority = 1)]
+    async fn gate(cx: gate::Context);
+
+    #[task(from = all_gated, priority = 1)]
+    async fn all_gate(cx: all_gate::Context);
 
     // `page` and `retries` are the definition's; only `count` is bound here.
     #[task(from = takes_none, priority = 1, local = [count = zero_count])]
@@ -317,8 +351,8 @@ fn shapes_the_example_firmware_does_not_use_compile() {
     assert!(
         output.status.success(),
         "every spawn arity, `Mono::now()`, `CONFIG` in a macro, task-owned \
-         locals, a bounded shared resource and lock-free sharing must \
-         compile:\n{}",
+         locals, a bounded shared resource, lock-free sharing, documented \
+         entries and gated task-locals must compile:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
 }

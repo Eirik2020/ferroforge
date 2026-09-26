@@ -24,11 +24,6 @@ other way.
 
 Each of these has been observed. None is a design question.
 
-- **A resource or configuration entry accepts no attribute but `#[lock_free]`.**
-  Every other attribute is rejected where the entry is parsed, and a doc comment
-  is an attribute, so a configuration entry cannot be documented where it is
-  declared and a resource cannot be `#[cfg]`-gated. Both are ordinary Rust on an
-  ordinary field, which is what [G6](governing-requirements.md) asks for.
 - **One CLI test fails intermittently.** Seen once in
   `ferroforge-cli/tests/project.rs`, not reproduced, and the name was not
   captured. Fixture directories are uniquely named, the only cargo-invoking test

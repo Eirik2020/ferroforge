@@ -47,6 +47,7 @@ impl Parse for Rebind {
 /// definition's `Config` trait must name it, and the macro never reads the
 /// definition. A mismatch fails to compile against the trait.
 struct ConfigValue {
+    docs: Vec<Attribute>,
     name: Ident,
     ty: Type,
     value: Expr,
@@ -54,11 +55,22 @@ struct ConfigValue {
 
 impl Parse for ConfigValue {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let docs = input.call(Attribute::parse_outer)?;
+        if let Some(other) = docs
+            .iter()
+            .find(|attribute| !attribute.path().is_ident("doc"))
+        {
+            return Err(syn::Error::new(
+                other.span(),
+                "a configuration value takes documentation and no other attribute",
+            ));
+        }
         let name = input.parse()?;
         input.parse::<Token![:]>()?;
         let ty = input.parse()?;
         input.parse::<Token![=]>()?;
         Ok(Self {
+            docs,
             name,
             ty,
             value: input.parse()?,
@@ -455,9 +467,9 @@ fn render_instance(instance: &Instance) -> syn::Result<TokenStream> {
     let config_type = format_ident!("__FfConfig{}", name.to_string().to_uppercase());
     let monotonic_slot = format_ident!("{MONOTONIC_SLOT}");
     let config_consts = attribute.config.iter().map(|value| {
-        let (name, ty, value) = (&value.name, &value.ty, &value.value);
+        let (docs, name, ty, value) = (&value.docs, &value.name, &value.ty, &value.value);
         let name = format_ident!("{}", name.to_string().to_uppercase(), span = name.span());
-        quote_spanned!(name.span()=> const #name: #ty = #value;)
+        quote_spanned!(name.span()=> #(#docs)* const #name: #ty = #value;)
     });
 
     let priority = attribute
@@ -622,6 +634,31 @@ mod tests {
             Err(error) => error.to_string(),
         };
         assert!(error.contains("unknown task option `typo`"), "{error}");
+    }
+
+    /// A configuration value's documentation reaches the constant it becomes,
+    /// and any other attribute is refused rather than dropped.
+    #[test]
+    fn a_configuration_value_takes_documentation_only() {
+        let output = expand_source(
+            "#[task(from = blink, config = [/// Half a second.\n period_ms: u32 = 500])] \
+             async fn led(cx: led::Context);",
+        )
+        .unwrap()
+        .to_string();
+        assert!(
+            output.contains("doc = \" Half a second.\"] const PERIOD_MS"),
+            "{output}"
+        );
+
+        let error = match syn::parse_str::<App>(
+            "device = chip::pac, #[task(from = blink, config = [#[inline] period_ms: u32 = 500])] \
+             async fn led(cx: led::Context);",
+        ) {
+            Ok(_) => panic!("an attribute other than documentation must be refused"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains("documentation and no other"), "{error}");
     }
 
     /// RTIC's own task options are not this grammar's, and a task without
