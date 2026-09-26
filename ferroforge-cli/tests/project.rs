@@ -1125,7 +1125,7 @@ fn a_firmware_declares_its_probe_command_arguments_and_environment() {
             "chip = \"stm32f405rg\"\n\
              probe-command = \"attach\"\n\
              probe-args = [\"--protocol\", \"swd\"]\n\
-             env = { CHIPSERIE = \"stm32f405\" }",
+             env = { PROBE_SERIAL = \"0670FF574951\" }",
         ),
     )
     .unwrap();
@@ -1137,7 +1137,7 @@ fn a_firmware_declares_its_probe_command_arguments_and_environment() {
         "\"attach\",",
         "\"--protocol\",",
         "\"swd\",",
-        "CHIPSERIE = \"stm32f405\"",
+        "PROBE_SERIAL = \"0670FF574951\"",
         "DEFMT_LOG = \"info\"",
     ] {
         assert!(config.contains(expected), "{expected} missing from {config}");

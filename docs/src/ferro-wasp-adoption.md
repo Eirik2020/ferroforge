@@ -59,8 +59,7 @@ None of these block using the macros alone, and none of them is now undecided.
   the firmware declares what goes in it: `probe-command`, `probe-args` and `env`,
   specified with the other settings in [the CLI](workflow.md#the-cli). Against
   the Foxeer app this reproduces its hand-written runner argument for argument.
-  `CHIPSERIE` needs no route at all - nothing in ferro-wasp reads it, and it
-  should be deleted rather than carried over.
+  `CHIPSERIE` needs no route at all: nothing in ferro-wasp reads it.
 - **Linker search path.** The generated config adds `-L.`, and ferro-wasp's
   `build.rs` copies `memory.x` into `OUT_DIR`. Both work. The copy can go, but
   the build script stays for its git metadata.
