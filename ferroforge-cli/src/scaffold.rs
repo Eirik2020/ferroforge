@@ -407,7 +407,8 @@ fn main_rs(backend: &Backend, starter: &Starter, task_crate: &str) -> String {
          \x20   // otherwise use. Pick another if this one becomes a peripheral's.\n\
          \x20   dispatchers = [SPI1],\n\n\
          \x20   use rtic_monotonics::systick::prelude::*;\n\n\
-         \x20   // The clock tasks are handed. `heartbeat` needs 1 kHz.\n\
+         \x20   // The clock tasks are handed, at any rate. A hardware timer gives\n\
+         \x20   // finer timestamps; see `monotonic-timer` in the book.\n\
          \x20   systick_monotonic!(Mono, 1000);\n\n\
          \x20   use {crate_path}::heartbeat;\n\
          \x20   {imports}\n\n\

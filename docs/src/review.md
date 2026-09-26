@@ -11,7 +11,10 @@ whichever monotonic the firmware declares; the rate is inferred, and the width
 is fixed at `u64` so every task runs under every firmware. It replaces the 1 kHz
 `u32` profile, which ruled out every hardware-timer monotonic, since those count
 in `u64`, and gave a 2 kHz control loop 1 ms timestamps. Breaking for 0.3 task
-crates that read time. Specified in [task authoring](architecture.md#task-authoring).
+crates that read time. A firmware counts on SysTick, which every backend builds
+64-bit, or on a hardware timer with `monotonic-timer`, whose chip and timer
+features the backend supplies. Specified in [task
+authoring](architecture.md#task-authoring) and [the CLI](workflow.md#the-cli).
 
 **`ferroforge-stm32f4` deferred, 2026-09-26.** ferro-wasp uses its own STM32F4
 helper, `ferrowasp-stm32f4`, not a FerroForge one. [G2b](governing-requirements.md)

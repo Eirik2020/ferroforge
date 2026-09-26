@@ -39,7 +39,8 @@ is checked first, so a broken harness cannot pass as a rejection. It compiles
 spawn aliases of zero, one and two inputs and a task reading `Mono::now()`,
 shapes the example firmware does not use. It also runs `ferroforge new` and then
 `ferroforge build` for one chip per HAL family, then `ferroforge add` and
-`build` for each family into one project, and fails on any warning, because that
+`build` for each family into one project, and moves a new project per family to
+a TIM2 monotonic at 1 MHz and builds it; each fails on any warning, because that
 is the first thing a new user sees.
 
 Run them when changing an expansion. A case that starts failing with the wrong
@@ -177,6 +178,23 @@ space needs no quoting rules.
 
 An argument or variable the CLI already writes is refused there, naming the
 setting that owns it: the same flag twice has nothing deciding which wins.
+
+`monotonic-timer` counts the firmware's monotonic on a hardware timer instead of
+SysTick, for timestamps finer than SysTick's interrupt-per-tick allows:
+
+```toml
+monotonic-timer = "TIM2"
+```
+
+with `stm32_tim2_monotonic!(Mono, 1_000_000);` in `app!` and
+`Mono::start(<the timer's input clock in Hz>)` in `init`. The backend knows
+which timers the chip has and the two `rtic-monotonics` features one needs -
+the chip's and the timer's - and `sync` adds both, so the chip is still named
+only by `chip`. Enabling either by hand under `platform` is refused and points
+here. They are added only when asked, because the chip's feature pulls in
+`stm32-metapac`, which SysTick firmware does not need. Unset, the monotonic is
+SysTick, which every backend builds to count in `u64` as tasks require
+([task authoring](architecture.md#task-authoring)).
 
 ### Where a Platform Crate Comes From
 

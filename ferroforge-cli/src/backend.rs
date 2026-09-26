@@ -100,6 +100,9 @@ fn chip_features() -> Vec<String> {
             for dependency in backend.platform_dependencies.values() {
                 found.extend(dependency.features.iter().cloned());
             }
+            if let Some(timer) = backend.timer_monotonic {
+                found.push(timer.chip_feature);
+            }
         }
     }
     found.sort();
@@ -197,6 +200,22 @@ pub enum Error {
         name: String,
         feature: String,
     },
+    NoTimerMonotonic {
+        path: String,
+        chip: String,
+    },
+    UnknownTimer {
+        path: String,
+        timer: String,
+        chip: String,
+        known: String,
+    },
+    TimerFeatureInSource {
+        path: String,
+        name: String,
+        feature: String,
+        timer: String,
+    },
 }
 
 impl fmt::Display for Error {
@@ -244,6 +263,33 @@ impl fmt::Display for Error {
                  the chip comes from `chip`; the backend already enables the \
                  right one"
             ),
+            Self::NoTimerMonotonic { path, chip } => write!(
+                formatter,
+                "{path} sets `monotonic-timer`, but FerroForge knows no hardware \
+                 timer monotonic for {chip}; leave it unset for SysTick"
+            ),
+            Self::UnknownTimer {
+                path,
+                timer,
+                chip,
+                known,
+            } => write!(
+                formatter,
+                "{path} sets `monotonic-timer = \"{timer}\"`, which is not a timer \
+                 a monotonic can count on for {chip}: {known}"
+            ),
+            Self::TimerFeatureInSource {
+                path,
+                name,
+                feature,
+                timer,
+            } => write!(
+                formatter,
+                "{path} enables `{feature}` on `{name}` under \
+                 [package.metadata.ferroforge.platform]. A monotonic on a \
+                 hardware timer is chosen with `monotonic-timer = \"{timer}\"`, \
+                 which also names the chip the crate needs"
+            ),
             Self::NoManifestMarkers { path } => write!(
                 formatter,
                 "{path} has no `{MARKER_BEGIN}` / `{MARKER_END}` block; add one \
@@ -271,6 +317,32 @@ pub struct Backend {
     pub memory: Memory,
     #[serde(rename = "platform-dependencies", default)]
     pub platform_dependencies: BTreeMap<String, Dependency>,
+    #[serde(rename = "timer-monotonic")]
+    pub timer_monotonic: Option<TimerMonotonic>,
+}
+
+/// What a firmware needs to count its monotonic on a hardware timer rather
+/// than SysTick. Kept apart from the platform dependencies because none of it
+/// is added unless a firmware asks: the crate names the chip once for all its
+/// timers, and that pulls in a large register-description crate.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TimerMonotonic {
+    /// The platform crate the monotonic comes from.
+    #[serde(rename = "crate")]
+    pub krate: String,
+    /// That crate's feature naming this chip.
+    #[serde(rename = "chip-feature")]
+    pub chip_feature: String,
+    /// Each timer it can count on, by peripheral name, and the feature for it.
+    pub timers: BTreeMap<String, String>,
+}
+
+/// The hardware timer a firmware chose, resolved against its chip.
+struct SelectedTimer<'a> {
+    krate: &'a str,
+    timer: &'a str,
+    features: [&'a str; 2],
 }
 
 #[derive(Debug, Deserialize)]
@@ -440,8 +512,16 @@ impl Backend {
     /// and keeping them is what makes selecting a different chip rewrite this
     /// block correctly.
     pub fn platform_dependency_lines(&self, settings: &Settings) -> String {
+        // Checked before anything is written, so a timer this chip does not
+        // have never reaches here; the block is only ever built from a valid one.
+        let timer = self.timer_features("", settings).ok().flatten();
         let mut lines = String::new();
         for (name, dependency) in &self.platform_dependencies {
+            let timer_features = timer
+                .as_ref()
+                .filter(|selected| selected.krate == *name)
+                .map(|selected| selected.features.to_vec())
+                .unwrap_or_default();
             let overridden = settings.platform().get(name);
             let source = match overridden {
                 Some(source) => source
@@ -455,11 +535,14 @@ impl Backend {
             let features = dependency
                 .features
                 .iter()
+                .map(String::as_str)
                 .chain(
                     overridden
-                        .map(|source| source.features.iter())
-                        .unwrap_or_default(),
+                        .map(|source| source.features.iter().map(String::as_str))
+                        .into_iter()
+                        .flatten(),
                 )
+                .chain(timer_features)
                 .map(|feature| format!("\"{feature}\""))
                 .collect::<Vec<_>>()
                 .join(", ");
@@ -484,13 +567,19 @@ impl Backend {
             .filter(|name| settings.platform().contains_key(*name))
             .cloned()
             .collect::<Vec<_>>();
-        let note = match overridden.is_empty() {
+        let mut note = match overridden.is_empty() {
             true => String::new(),
             false => format!(
                 "# source for {} from [package.metadata.ferroforge.platform]\n",
                 overridden.join(", "),
             ),
         };
+        if let Some(selected) = self.timer_features("", settings).ok().flatten() {
+            note.push_str(&format!(
+                "# {} counts on {}, from monotonic-timer\n",
+                selected.krate, selected.timer,
+            ));
+        }
         format!(
             "{MARKER_BEGIN} for {} - generated, do not edit\n{note}{}{MARKER_END}\n",
             self.chip.name,
@@ -513,10 +602,16 @@ impl Backend {
         })?;
 
         // Checked before rewriting, so the manifest is left as it was.
+        let timer = self.timer_features(&display, settings)?;
         let wanted = self
             .platform_dependencies
             .values()
             .flat_map(|dependency| dependency.features.iter().cloned())
+            .chain(
+                timer
+                    .iter()
+                    .flat_map(|selected| selected.features.map(str::to_owned)),
+            )
             .collect::<Vec<_>>();
         if let Some((dependency, feature)) = conflicting_chip_feature(&text, &wanted) {
             return Err(Error::ConflictingChipFeature {
@@ -554,6 +649,40 @@ impl Backend {
         Ok(updated)
     }
 
+    /// The crate a firmware's `monotonic-timer` extends and the two features
+    /// it adds - the chip's and the timer's - or none for SysTick.
+    fn timer_features(
+        &self,
+        path: &str,
+        settings: &Settings,
+    ) -> Result<Option<SelectedTimer<'_>>, Error> {
+        let Some(wanted) = settings.monotonic_timer() else {
+            return Ok(None);
+        };
+        let data = self
+            .timer_monotonic
+            .as_ref()
+            .ok_or_else(|| Error::NoTimerMonotonic {
+                path: path.to_owned(),
+                chip: self.chip.name.clone(),
+            })?;
+        let (timer, feature) = data
+            .timers
+            .iter()
+            .find(|(timer, _)| timer.eq_ignore_ascii_case(wanted))
+            .ok_or_else(|| Error::UnknownTimer {
+                path: path.to_owned(),
+                timer: wanted.to_owned(),
+                chip: self.chip.name.clone(),
+                known: data.timers.keys().cloned().collect::<Vec<_>>().join(", "),
+            })?;
+        Ok(Some(SelectedTimer {
+            krate: &data.krate,
+            timer,
+            features: [&data.chip_feature, feature],
+        }))
+    }
+
     /// Whether a firmware's sources redirect crates this chip actually needs,
     /// and nothing else. A name that matches nothing is a typo that would
     /// otherwise be silently dropped, leaving the pin a person wrote absent
@@ -575,6 +704,26 @@ impl Backend {
                 });
             }
             for feature in &source.features {
+                if let Some(timer) = &self.timer_monotonic
+                    && timer.krate == *name
+                {
+                    let named = timer
+                        .timers
+                        .iter()
+                        .find(|(_, timer_feature)| *timer_feature == feature)
+                        .map(|(timer_name, _)| timer_name);
+                    let chip = (*feature == timer.chip_feature)
+                        .then(|| timer.timers.keys().next())
+                        .flatten();
+                    if let Some(timer_name) = named.or(chip) {
+                        return Err(Error::TimerFeatureInSource {
+                            path: path.to_owned(),
+                            name: name.clone(),
+                            feature: feature.clone(),
+                            timer: timer_name.clone(),
+                        });
+                    }
+                }
                 if owned.contains(feature) {
                     return Err(Error::ChipFeatureInSource {
                         path: path.to_owned(),
@@ -743,6 +892,14 @@ mod derivation {
 
     /// Settings as a firmware declares them, so these read like the manifest
     /// they come from rather than like a struct literal.
+    impl Backend {
+        /// The checks `sync` makes before writing, without a manifest.
+        fn synced_manifest_check(&self, settings: &Settings) -> Result<(), Error> {
+            self.check_sources("under test", settings)?;
+            self.timer_features("under test", settings).map(|_| ())
+        }
+    }
+
     fn declared(text: &str) -> Settings {
         toml::from_str(text).expect("the fixture must parse")
     }
@@ -924,5 +1081,92 @@ mod derivation {
             .to_string();
         assert!(message.contains("stm32f401"), "{message}");
         assert!(message.contains("`chip`"), "{message}");
+    }
+
+    /// A hardware timer adds the chip's feature and the timer's to the crate
+    /// the monotonic comes from, and nothing unless asked: SysTick firmware
+    /// must not pull in the chip's register descriptions.
+    #[test]
+    fn a_monotonic_timer_adds_the_chip_and_the_timer() {
+        let backend = Backend::for_chip("stm32f405rg").expect("a shipped backend");
+        let monotonics = |settings: &Settings| {
+            backend
+                .manifest_platform_block(settings)
+                .lines()
+                .find(|line| line.starts_with("rtic-monotonics"))
+                .expect("rtic-monotonics must be in the block")
+                .to_owned()
+        };
+
+        let systick = monotonics(&Settings::default());
+        assert!(systick.contains("\"systick-64bit\""), "{systick}");
+        assert!(!systick.contains("stm32f405rg"), "{systick}");
+
+        let settings = declared("monotonic-timer = \"tim2\"\n");
+        backend
+            .synced_manifest_check(&settings)
+            .expect("TIM2 is a timer the F405 has");
+        let line = monotonics(&settings);
+        assert!(line.contains("\"stm32f405rg\", \"stm32_tim2\""), "{line}");
+        assert!(
+            backend
+                .manifest_platform_block(&settings)
+                .contains("# rtic-monotonics counts on TIM2, from monotonic-timer"),
+            "the block must say where the timer was chosen"
+        );
+    }
+
+    #[test]
+    fn a_timer_the_chip_lacks_is_refused_with_the_ones_it_has() {
+        let backend = Backend::for_chip("stm32f401re").expect("a shipped backend");
+        let message = backend
+            .synced_manifest_check(&declared("monotonic-timer = \"TIM15\"\n"))
+            .expect_err("the F401 has no TIM15")
+            .to_string();
+        assert!(message.contains("TIM15"), "{message}");
+        assert!(message.contains("TIM2, TIM3, TIM4, TIM5"), "{message}");
+
+        let bare = variant("STM32X", "thumbv7em-none-eabihf", 65536, 0x188);
+        let message = bare
+            .synced_manifest_check(&declared("monotonic-timer = \"TIM2\"\n"))
+            .expect_err("a chip without timer data")
+            .to_string();
+        assert!(message.contains("SysTick"), "{message}");
+    }
+
+    /// Naming the timer or the chip by hand on the monotonic crate would skip
+    /// the other half, so both point at the setting that adds them together.
+    #[test]
+    fn timer_features_on_a_source_point_at_monotonic_timer() {
+        let backend = Backend::for_chip("stm32f405rg").expect("a shipped backend");
+        for feature in ["stm32_tim2", "stm32f405rg"] {
+            let settings = declared(&format!(
+                "[platform.rtic-monotonics]\nversion = \"2.2.1\"\nfeatures = [\"{feature}\"]\n"
+            ));
+            let message = backend
+                .check_sources("under test", &settings)
+                .expect_err("a timer feature must be refused")
+                .to_string();
+            assert!(message.contains("monotonic-timer"), "{feature}: {message}");
+        }
+    }
+
+    /// The timer data extends a crate the chip already selects, or its
+    /// features would have nowhere to go.
+    #[test]
+    fn every_timer_monotonic_extends_a_platform_crate() {
+        for chip in known_chips() {
+            let backend = Backend::for_chip(chip).expect("a built-in chip loads");
+            let timer = backend
+                .timer_monotonic
+                .as_ref()
+                .unwrap_or_else(|| panic!("{chip} has no timer data"));
+            assert!(
+                backend.platform_dependencies.contains_key(&timer.krate),
+                "{chip}: {}",
+                timer.krate
+            );
+            assert!(!timer.timers.is_empty(), "{chip}");
+        }
     }
 }

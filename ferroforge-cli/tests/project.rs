@@ -1311,6 +1311,82 @@ fn a_new_project_builds_on_every_hal_family() {
     }
 }
 
+/// A scaffolded firmware moved from SysTick to TIM2 at 1 MHz: `monotonic-timer`
+/// must supply both features the timer needs, and the task the scaffold wrote
+/// must accept a monotonic at that rate.
+#[test]
+#[ignore = "cross-compiles a hardware-timer firmware per HAL; run with --ignored"]
+fn a_firmware_on_a_hardware_timer_builds_on_every_hal_family() {
+    let facade = repository_root().join("ferroforge");
+    let facade = facade.to_str().unwrap().replace('\\', "/");
+    // The SysTick start each scaffold writes, and the TIM2 start replacing it.
+    let starts = [
+        (
+            "stm32f401re",
+            "Mono::start(cx.core.SYST, rcc.clocks.sysclk().raw());",
+            "Mono::start(rcc.clocks.timclk1().raw());",
+        ),
+        (
+            "stm32h753zi",
+            "Mono::start(cx.core.SYST, ccdr.clocks.sys_ck().raw());",
+            "Mono::start(ccdr.clocks.timx_ker_ck().raw());",
+        ),
+    ];
+    for (chip, systick_start, timer_start) in starts {
+        let name = format!("timer-{chip}");
+        let root = repository_root().join("target/project-tests").join(&name);
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.parent().unwrap()).unwrap();
+        let created = ferroforge_in(
+            repository_root(),
+            &[
+                "new",
+                root.to_str().unwrap(),
+                "--chip",
+                chip,
+                "--ferroforge",
+                &facade,
+            ],
+        );
+        assert!(created.status.success(), "{chip}: {}", stderr(&created));
+
+        let firmware = root.join("firmware").join(&name);
+        let manifest = fs::read_to_string(firmware.join("Cargo.toml")).unwrap();
+        let manifest = manifest.replacen(
+            &format!("chip = \"{chip}\"\n"),
+            &format!("chip = \"{chip}\"\nmonotonic-timer = \"TIM2\"\n"),
+            1,
+        );
+        fs::write(firmware.join("Cargo.toml"), manifest).unwrap();
+        let main = fs::read_to_string(firmware.join("src/main.rs")).unwrap();
+        for expected in [systick_start, "systick_monotonic!(Mono, 1000);"] {
+            assert!(
+                main.contains(expected),
+                "{chip}: the scaffold changed: {expected}"
+            );
+        }
+        let main = main
+            .replace(
+                "rtic_monotonics::systick::prelude",
+                "rtic_monotonics::stm32::prelude",
+            )
+            .replace(
+                "systick_monotonic!(Mono, 1000);",
+                "stm32_tim2_monotonic!(Mono, 1_000_000);",
+            )
+            .replace(systick_start, timer_start);
+        fs::write(firmware.join("src/main.rs"), main).unwrap();
+
+        let built = ferroforge_in(&root, &["build"]);
+        assert!(built.status.success(), "{chip}: {}", stderr(&built));
+        assert!(
+            !stderr(&built).contains("warning:"),
+            "{chip}: a firmware on a hardware timer must build without warnings:\n{}",
+            stderr(&built)
+        );
+    }
+}
+
 /// `add` on the other HAL family from the project's first firmware, then
 /// `build`: the added firmware must build against the task `new` wrote.
 #[test]

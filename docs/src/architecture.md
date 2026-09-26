@@ -173,7 +173,10 @@ that declaration, recognizing any `<timer>_monotonic!(Name, ..)` item, which is
 how every `rtic-monotonics` macro is named. Tasks are handed one clock, so a
 second declaration is refused. An application that declares none leaves the
 slot to a type called `NoMonotonicDeclared`, which a task needing a clock then
-fails against. A monotonic declared outside `app!` is not seen.
+fails against. A monotonic declared outside `app!` is not seen. Whether it is
+SysTick or a hardware timer is the firmware's choice alone, since tasks accept
+any rate; a hardware timer is chosen with
+[`monotonic-timer`](workflow.md#the-cli).
 
 Each instance declaration names the definition it comes from and maps the
 reusable names onto the firmware's own:

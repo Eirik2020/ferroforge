@@ -104,6 +104,7 @@ pub struct Settings {
     env: BTreeMap<String, String>,
     #[serde(default)]
     platform: BTreeMap<String, Source>,
+    monotonic_timer: Option<String>,
     /// Declared in this same table by task crates, and documented with the
     /// dependencies rather than here. Accepted so that one table name means one
     /// thing: a firmware's `ferroforge` dependency is as check-only as a task
@@ -241,6 +242,13 @@ impl Settings {
     /// Where a platform crate comes from, for the crates a firmware overrides.
     pub fn platform(&self) -> &BTreeMap<String, Source> {
         &self.platform
+    }
+
+    /// The hardware timer the firmware's monotonic counts on, such as `TIM2`,
+    /// or none for SysTick. Spelled however the firmware wrote it; the backend
+    /// matches it without regard to case.
+    pub fn monotonic_timer(&self) -> Option<&str> {
+        self.monotonic_timer.as_deref()
     }
 
     /// Why these settings cannot be used. Checked before anything is written,

@@ -40,3 +40,11 @@ cortex-m-rt = { version = "0.7.6" }
 rtic = { version = "2.3.1", default-features = false, features = ["thumbv7-backend"] }
 rtic-monotonics = { version = "2.2.1", default-features = false, features = ["cortex-m-systick", "systick-64bit"] }
 stm32f4xx-hal = { version = "0.23.0", default-features = false, features = ["stm32f405"] }
+
+# A monotonic on a hardware timer rather than SysTick, for a firmware that sets
+# `monotonic-timer`. rtic-monotonics names the chip once for all its timers, and
+# that pulls in stm32-metapac, so none of this is added unless a firmware asks.
+[timer-monotonic]
+crate = "rtic-monotonics"
+chip-feature = "stm32f405rg"
+timers = { TIM2 = "stm32_tim2", TIM3 = "stm32_tim3", TIM4 = "stm32_tim4", TIM5 = "stm32_tim5" }
