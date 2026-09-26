@@ -13,9 +13,15 @@ release and the CLI is no longer what holds the rest back.
 ## What Already Fits
 
 - ferro-wasp declares `systick_monotonic!(Mono, 1000)`, which FerroForge 0.3
-  requires. Under 0.4 any rate fits once the monotonic counts in `u64`, which
-  every backend's SysTick now does, and task bodies build durations with
-  `ExtU64` ([task authoring](architecture.md#task-authoring)).
+  requires. Moving to 0.4, where any rate fits once the monotonic counts in
+  `u64` ([task authoring](architecture.md#task-authoring)), is mechanical but
+  not small; a copy migrated end to end showed what it takes. Its firmware
+  manifests enable `systick-64bit`. Timestamps from `Mono::now()` become `u64`
+  where ferro-wasp's own APIs take `u32`, about 25 sites in
+  `ferrowasp-stm32f4-tasks`, which narrow with `as u32` - keeping the wrap they
+  have now - or widen. Durations built from `u32` values take `u64::from`, and
+  the Foxeer app's four bare literals take `u64`, since it imports both
+  preludes. Then every active firmware builds and ferro-wasp's host tests pass.
 - `app!` passes `init`, `#[shared]`, `#[local]`, `dispatchers` and
   `peripherals = true` through unchanged, so the Foxeer F405 V2 `init` - about
   580 lines, including `#[init(local = [..])]` DMA buffers - does not change.
@@ -44,10 +50,6 @@ None remain. Three were settled, all specified in
 
 None of these block using the macros alone, and none of them is now undecided.
 
-- **Layout.** [G5](governing-requirements.md) requires `firmware/`, and
-  ferro-wasp uses `apps/`. Its apps are already one Cargo workspace each, as G5
-  requires, so the change is to rename ferro-wasp's directory, not to make
-  FerroForge's layout configurable.
 - **HAL source.** ferro-wasp pins `stm32f4xx-hal` to a git revision that is
   version 0.22.1, and the F405 backend selects 0.23.0 from crates.io.
   `[patch.crates-io]` cannot bridge a semver-incompatible version, so a firmware
@@ -66,31 +68,20 @@ None of these block using the macros alone, and none of them is now undecided.
   `build.rs` copies `memory.x` into `OUT_DIR`. Both work. The copy can go, but
   the build script stays for its git metadata.
 
-## Migration Order
+## What Remains
 
-Each phase has an entry condition. Safety-relevant tasks come last, and every
-ferro-wasp phase re-runs the tests its own
+Each step re-runs the tests ferro-wasp's own
 [test catalog](https://github.com/Eirik2020/ferro-wasp/tree/main/project_meta/testing)
-selects for the tasks it touched.
+selects for what it touched, and a change to a safety-relevant task re-gates
+flight.
 
-1. **FerroForge release.** Release the macro changes. Entry: nothing.
-2. **Bring-up app.** Move ferro-wasp's NUCLEO-F401RE app under `firmware/` and
-   express it with `app!`, depending on `ferroforge` only, not the CLI. Entry:
-   phase 1 released.
-3. **Foxeer leaf tasks.** Convert tasks that can neither arm nor actuate:
-   `heartbeat`, then `osd_refresh` and `uart4_tx_worker`, then
-   `esc_manager_task`. Keep the rest as plain RTIC tasks inside the same
-   `app!`. Entry: phase 2 builds and runs on hardware.
-4. **I/O and DMA tasks.** The SPI, UART and ADC paths, which exercise the
-   hardware-task model hardest. Entry: phase 3 bench-tested.
-5. **Safety and control.** `safety_master`, `actuator_output`, `dshot_service`
-   and `control_loop`, one at a time, with the full bench plan and a controlled
-   flight after each. Entry: phase 4 bench-tested, with the release build's
-   timing and `.text` size compared to the plain-RTIC build.
-6. **CLI adoption and cleanup.** Adopt `ferroforge sync` and `run` once the
-   CLI decisions are made. Retire ferro-wasp's `tools/rtic-app-builder`,
-   which overlaps with FerroForge, so the two do not drift. Entry: phase 5
-   flown.
+1. **FerroForge 0.4**, once released, as measured above. The image changes, so
+   the next flight re-gates.
+2. **The last two tasks.** `usb_fs` and `flash_manager_task` become definitions,
+   as [kept in the app](#kept-in-the-app) describes.
+3. **CLI adoption.** Adopt `ferroforge sync` and `run`, and retire ferro-wasp's
+   `tools/rtic-app-builder`, which overlaps with FerroForge, so the two do not
+   drift.
 
 ## Kept in the App
 
@@ -114,4 +105,4 @@ ferro-wasp currently exercises one definition across two boards.
 
 ## Open Decisions
 
-None. What remains is migration, not design: the phases above, in order.
+None. What remains is migration, not design: the steps above.
