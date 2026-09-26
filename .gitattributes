@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Run as a program by the CLI tests, so a CR would break its #! line.
+ferroforge-cli/tests/fake-cargo text eol=lf

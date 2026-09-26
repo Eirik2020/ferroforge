@@ -477,24 +477,15 @@ fn a_project_named_like_the_task_crate_is_refused() {
 
 /// A stand-in for Cargo, so `--all` can be tested on outcomes rather than on
 /// cross-compiles: it fails in a firmware named `bad*`, warns in one named
-/// `noisy*`, and records the arguments it was given.
+/// `noisy*`, and records the arguments it was given in `root/cargo.log`.
+///
+/// The script is checked in rather than written by the test. Writing an
+/// executable and then running it races every other test that spawns a
+/// process: a fork taken while the file is open for writing holds it open, and
+/// running it meanwhile fails with "Text file busy".
 #[cfg(unix)]
-fn fake_cargo(root: &Path) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-    let script = root.join("fake-cargo");
-    fs::write(
-        &script,
-        "#!/bin/sh\n\
-         echo \"$(basename \"$PWD\") $*\" >> \"$(dirname \"$0\")/cargo.log\"\n\
-         case \"$(basename \"$PWD\")\" in\n\
-         bad*) echo 'error: it broke' >&2; exit 101 ;;\n\
-         noisy*) echo 'warning: unused variable' >&2 ;;\n\
-         esac\n\
-         echo '    Finished' >&2\n",
-    )
-    .unwrap();
-    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
-    script
+fn fake_cargo() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fake-cargo")
 }
 
 #[cfg(unix)]
@@ -502,7 +493,8 @@ fn ferroforge_with_cargo(root: &Path, arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_ferroforge"))
         .args(arguments)
         .current_dir(root)
-        .env("CARGO", fake_cargo(root))
+        .env("CARGO", fake_cargo())
+        .env("FAKE_CARGO_LOG", root.join("cargo.log"))
         .env_remove("NO_COLOR")
         .output()
         .expect("the CLI binary must run")

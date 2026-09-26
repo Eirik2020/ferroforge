@@ -1,0 +1,10 @@
+#!/bin/sh
+# A stand-in for Cargo, for the CLI tests: it fails in a firmware named `bad*`,
+# warns in one named `noisy*`, and records the arguments it was given in
+# `$FAKE_CARGO_LOG`.
+echo "$(basename "$PWD") $*" >> "$FAKE_CARGO_LOG"
+case "$(basename "$PWD")" in
+bad*) echo 'error: it broke' >&2; exit 101 ;;
+noisy*) echo 'warning: unused variable' >&2 ;;
+esac
+echo '    Finished' >&2
