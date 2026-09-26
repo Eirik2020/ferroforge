@@ -614,6 +614,51 @@ fn all_is_refused_where_it_does_not_apply() {
     assert!(stderr(&both).contains("not both"), "{}", stderr(&both));
 }
 
+/// Options may come before the name, a missing value is an error rather than
+/// a default, and an option a command does not take is refused rather than
+/// ignored - with the pointer to `--` for one meant for Cargo.
+#[test]
+fn arguments_are_read_wherever_they_sit() {
+    let parent = repository_root().join("target/project-tests/arguments");
+    let _ = fs::remove_dir_all(&parent);
+    fs::create_dir_all(&parent).unwrap();
+
+    let created = ferroforge_in(&parent, &["new", "--chip", "stm32f405rg", "flag-first"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+    let manifest =
+        fs::read_to_string(parent.join("flag-first/firmware/flag-first/Cargo.toml")).unwrap();
+    assert!(manifest.contains("chip = \"stm32f405rg\""), "{manifest}");
+
+    let missing = ferroforge_in(&parent, &["new", "no-chip", "--chip"]);
+    assert!(!missing.status.success());
+    assert!(
+        stderr(&missing).contains("`--chip` needs a value"),
+        "{}",
+        stderr(&missing)
+    );
+    assert!(
+        !parent.join("no-chip").exists(),
+        "a refused `new` must write nothing"
+    );
+
+    let root = scratch("arguments-unknown", &[("alpha", Some("stm32f401re"))]);
+    let typo = ferroforge_in(&root, &["build", "--realese"]);
+    assert!(!typo.status.success());
+    let message = stderr(&typo);
+    assert!(message.contains("no option `--realese`"), "{message}");
+    assert!(message.contains("after `--`"), "{message}");
+}
+
+/// A failing Cargo's own exit code comes through, so a script can tell a
+/// compile error (101) from anything else.
+#[cfg(unix)]
+#[test]
+fn cargos_exit_code_comes_through() {
+    let root = scratch("exit-code", &[("bad", Some("stm32f401re"))]);
+    let output = ferroforge_with_cargo(&root, &["check", "bad"]);
+    assert_eq!(output.status.code(), Some(101), "{}", stderr(&output));
+}
+
 /// The real thing, against this repository's firmware.
 #[test]
 #[ignore = "checks every firmware in this repository; run with --ignored"]

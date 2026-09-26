@@ -85,24 +85,95 @@ fn split_forwarded(arguments: &[String]) -> (&[String], &[String]) {
     }
 }
 
+/// The options each command takes, and whether each takes a value. Anything
+/// else before `--` is refused: an option that is silently ignored looks
+/// applied and is not, and Cargo's own belong after `--`.
+fn options(command: &str) -> &'static [(&'static str, bool)] {
+    match command {
+        "new" | "add" => &[("--chip", true), ("--ferroforge", true)],
+        "sync" | "check" | "build" => &[("--all", false)],
+        "chips" => &[("--names", false)],
+        _ => &[],
+    }
+}
+
+/// The command's arguments, checked against what it takes: the one name it may
+/// be given, wherever it sits among the options, and each option's value.
+struct Arguments<'a> {
+    name: Option<&'a str>,
+    values: Vec<(&'a str, &'a str)>,
+    switches: Vec<&'a str>,
+}
+
+impl<'a> Arguments<'a> {
+    fn parse(command: &str, arguments: &'a [String]) -> Result<Self, String> {
+        let known = options(command);
+        let mut parsed = Self {
+            name: None,
+            values: Vec::new(),
+            switches: Vec::new(),
+        };
+        let mut rest = arguments.iter().map(String::as_str);
+        while let Some(argument) = rest.next() {
+            if !argument.starts_with('-') {
+                if let Some(first) = parsed.name {
+                    return Err(format!(
+                        "`{command}` takes one name, and was given `{first}` and `{argument}`"
+                    ));
+                }
+                parsed.name = Some(argument);
+                continue;
+            }
+            match known.iter().find(|(option, _)| *option == argument) {
+                Some((option, true)) => match rest.next() {
+                    Some(value) if !value.starts_with('-') => parsed.values.push((option, value)),
+                    _ => return Err(format!("`{option}` needs a value")),
+                },
+                Some((option, false)) => parsed.switches.push(option),
+                // Named for where it does apply, since that is the mistake.
+                None if argument == "--all" => {
+                    return Err(format!(
+                        "`--all` applies to sync, check and build, not `{command}`"
+                    ));
+                }
+                None => {
+                    return Err(format!(
+                        "`{command}` has no option `{argument}`; arguments for Cargo \
+                         go after `--`\n\n{USAGE}"
+                    ));
+                }
+            }
+        }
+        Ok(parsed)
+    }
+
+    fn value(&self, option: &str) -> Option<&'a str> {
+        self.values
+            .iter()
+            .find(|(name, _)| *name == option)
+            .map(|(_, value)| *value)
+    }
+
+    fn switch(&self, option: &str) -> bool {
+        self.switches.contains(&option)
+    }
+}
+
 fn run(arguments: &[String]) -> Result<ExitCode, String> {
     let (arguments, forwarded) = split_forwarded(arguments);
     let Some(command) = arguments.first() else {
         print!("{USAGE}");
         return Ok(ExitCode::SUCCESS);
     };
-    let named = arguments.get(1).map(String::as_str);
-    let every = arguments.iter().any(|argument| argument == "--all");
+    if matches!(command.as_str(), "--help" | "-h" | "help") {
+        print!("{USAGE}");
+        return Ok(ExitCode::SUCCESS);
+    }
+    let parsed = Arguments::parse(command, &arguments[1..])?;
+    let named = parsed.name;
+    let every = parsed.switch("--all");
     if every {
-        if !matches!(command.as_str(), "sync" | "check" | "build") {
-            return Err(format!(
-                "`--all` applies to sync, check and build, not `{command}`"
-            ));
-        }
-        if let Some(name) = arguments[1..]
-            .iter()
-            .find(|argument| !argument.starts_with('-'))
-        {
+        if let Some(name) = named {
             return Err(format!(
                 "name a firmware or pass `--all`, not both (`{name}`)"
             ));
@@ -115,22 +186,20 @@ fn run(arguments: &[String]) -> Result<ExitCode, String> {
     match command.as_str() {
         "new" => {
             let path = named.ok_or_else(|| format!("expected a path\n\n{USAGE}"))?;
-            let chip = flag(arguments, "--chip").unwrap_or_else(|| "stm32f401re".to_owned());
+            let chip = parsed.value("--chip").unwrap_or("stm32f401re");
             // The published crate by default. `--ferroforge` names a checkout
             // instead, for working on FerroForge itself.
             let dependency =
-                ferroforge_dependency(arguments).unwrap_or_else(|| scaffold::PUBLISHED.to_owned());
-            scaffold::create(Path::new(path), &chip, &dependency)
+                ferroforge_dependency(&parsed).unwrap_or_else(|| scaffold::PUBLISHED.to_owned());
+            scaffold::create(Path::new(path), chip, &dependency)
                 .map_err(|error| error.to_string())?;
             Ok(ExitCode::SUCCESS)
         }
         "add" => {
-            let name = named
-                .filter(|name| !name.starts_with('-'))
-                .ok_or_else(|| format!("expected a firmware name\n\n{USAGE}"))?;
+            let name = named.ok_or_else(|| format!("expected a firmware name\n\n{USAGE}"))?;
             // Not defaulted, unlike `new`: a project already exists, so there
             // is no first-run convenience to buy with a guess.
-            let chip = flag(arguments, "--chip").ok_or_else(|| {
+            let chip = parsed.value("--chip").ok_or_else(|| {
                 format!(
                     "expected `--chip <name>`; `ferroforge chips` lists them: {}",
                     backend::known_chips().join(", ")
@@ -141,8 +210,8 @@ fn run(arguments: &[String]) -> Result<ExitCode, String> {
             scaffold::add(
                 &project.root,
                 name,
-                &chip,
-                ferroforge_dependency(arguments).as_deref(),
+                chip,
+                ferroforge_dependency(&parsed).as_deref(),
             )
             .map_err(|error| error.to_string())?;
             Ok(ExitCode::SUCCESS)
@@ -165,7 +234,7 @@ fn run(arguments: &[String]) -> Result<ExitCode, String> {
             drift::run(&project)
         }
         "chips" => {
-            if arguments.iter().any(|argument| argument == "--names") {
+            if parsed.switch("--names") {
                 for chip in backend::known_chips() {
                     println!("{chip}");
                 }
@@ -175,10 +244,6 @@ fn run(arguments: &[String]) -> Result<ExitCode, String> {
                     backend::chip_table().map_err(|error| error.to_string())?
                 );
             }
-            Ok(ExitCode::SUCCESS)
-        }
-        "--help" | "-h" | "help" => {
-            print!("{USAGE}");
             Ok(ExitCode::SUCCESS)
         }
         other => Err(format!("unknown command `{other}`\n\n{USAGE}")),
@@ -192,7 +257,7 @@ fn sync(named: Option<&str>) -> Result<(PathBuf, PathBuf, Vec<String>), String> 
     let here = env::current_dir().map_err(|error| error.to_string())?;
     let project = Project::containing(&here).map_err(|error| error.to_string())?;
     let firmware = project
-        .select(named.filter(|name| !name.starts_with('-')), &here)
+        .select(named, &here)
         .map_err(|error| error.to_string())?;
     let written = sync_firmware(&firmware)?;
     Ok((project.root, firmware.path, written))
@@ -233,7 +298,9 @@ fn relative(root: &Path, path: &str) -> String {
 }
 
 /// Hand over to Cargo, from inside the firmware directory so its
-/// `.cargo/config.toml` is discovered, and with its exit code preserved.
+/// `.cargo/config.toml` is discovered, and with its exit code preserved: a
+/// script telling a compile error (101) from a failure to start must still be
+/// able to. A Cargo ended by a signal has no code, and is a plain failure.
 fn delegate(firmware: &Path, arguments: &[&str]) -> Result<ExitCode, String> {
     let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let status = Command::new(cargo)
@@ -241,19 +308,16 @@ fn delegate(firmware: &Path, arguments: &[&str]) -> Result<ExitCode, String> {
         .current_dir(firmware)
         .status()
         .map_err(|error| format!("cannot run cargo: {error}"))?;
-    match status.success() {
-        true => Ok(ExitCode::SUCCESS),
-        false => Ok(ExitCode::FAILURE),
-    }
+    Ok(match status.code() {
+        Some(0) => ExitCode::SUCCESS,
+        Some(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
+        None => ExitCode::FAILURE,
+    })
 }
 
 /// `--ferroforge <path>` as a manifest value: a path dependency on a checkout.
-fn ferroforge_dependency(arguments: &[String]) -> Option<String> {
-    flag(arguments, "--ferroforge")
+fn ferroforge_dependency(arguments: &Arguments<'_>) -> Option<String> {
+    arguments
+        .value("--ferroforge")
         .map(|path| format!("{{ path = \"{}\" }}", path.replace('\\', "/")))
-}
-
-fn flag(arguments: &[String], name: &str) -> Option<String> {
-    let position = arguments.iter().position(|argument| argument == name)?;
-    arguments.get(position + 1).cloned()
 }

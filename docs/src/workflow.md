@@ -67,7 +67,10 @@ ferroforge drift                        compare code copied between firmwares
 ferroforge chips [--names]              the chips this build knows
 ```
 
-Anything after `--` is passed to Cargo untouched.
+Anything after `--` is passed to Cargo untouched. Before it, options may come
+in any order around the name, and an option the command does not take is
+refused rather than ignored, since one meant for Cargo belongs after `--`.
+`check`, `build` and `run` exit with Cargo's own code.
 
 `new` writes one firmware and one task crate, `tasks/heartbeat`, and the
 firmware runs as soon as it is flashed: it selects a `heartbeat` task that logs
