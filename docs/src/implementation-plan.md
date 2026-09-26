@@ -21,12 +21,6 @@ Each of these has been observed. None is a design question.
   removed, but a thousand local runs never failed, so that the cause is gone is
   unconfirmed. CI's logs name a failing test, so the next one is caught
   running. It guards the CLI's file-writing order, so it is worth pinning.
-- **A build is tied to the directory it was built in.** Cargo hashes the
-  absolute package path into `-C metadata`, so one commit built from two paths
-  produces two different images. `trim-paths` removes the path strings and not
-  the hashing, which was measured rather than assumed. An exact-image claim is
-  therefore only valid for one checkout location. Whether the CLI should offer
-  anything here is undecided.
 
 The tick rate a task may read is fixed at 1 kHz, which [current
 state](prototype.md) records among what is not implemented. It belongs in view

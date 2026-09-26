@@ -151,6 +151,15 @@ asserting nothing. See [workflow](workflow.md) for how to run them.
 - **A project-local backend.** Chip data ships with FerroForge, embedded in the
   binary. A project needing a chip FerroForge does not know cannot add one
   without upstreaming it.
+- **An image that rebuilds identically elsewhere.** Cargo hashes a path
+  dependency into `-C metadata` relative to the workspace root when it lies
+  inside the workspace, and by absolute path when it does not. A firmware is its
+  own workspace ([G5](governing-requirements.md)) and a project's task crates
+  lie outside it, so one commit built in two directories gives two images;
+  `trim-paths` removes the source paths in panic locations but not this. The
+  preserved binary is therefore an image's record, never a rebuild. Stable
+  hashes would need the task crates inside the firmware's workspace, which G5
+  rules out, or every build made at one fixed path.
 - **A choice of tick rate.** `#[task]` fixes the monotonic bound at
   `fugit::Duration<u32, 1, 1000>`, so a firmware selecting any task that reads
   time must declare a 1 kHz monotonic. It now declares that itself, where the
