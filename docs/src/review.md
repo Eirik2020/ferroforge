@@ -6,6 +6,13 @@ what is left to build is in [remaining work](implementation-plan.md).
 
 ## Current Decisions
 
+**Any tick rate, counting in `u64`, 2026-09-26.** A task reading time accepts
+whichever monotonic the firmware declares; the rate is inferred, and the width
+is fixed at `u64` so every task runs under every firmware. It replaces the 1 kHz
+`u32` profile, which ruled out every hardware-timer monotonic, since those count
+in `u64`, and gave a 2 kHz control loop 1 ms timestamps. Breaking for 0.3 task
+crates that read time. Specified in [task authoring](architecture.md#task-authoring).
+
 **`ferroforge-stm32f4` deferred, 2026-09-26.** ferro-wasp uses its own STM32F4
 helper, `ferrowasp-stm32f4`, not a FerroForge one. [G2b](governing-requirements.md)
 is unchanged and the crate it names is still owed, but no consumer is waiting
@@ -363,7 +370,7 @@ the rule.
 | RTIC-familiar `cx.local` and `cx.shared.<name>.lock(...)` access; both categories in scope | [architecture](architecture.md#task-authoring) |
 | Task-local `CONFIG::FIELD` reads, declared `config = [period_ms: u32]` | [architecture](architecture.md#task-authoring) |
 | Inputs as ordinary parameters; inline `spawn = [report(value: u32)]`; RTIC 2 result shapes | [architecture](architecture.md#task-authoring) |
-| SysTick 1 kHz / `u32` profile | [architecture](architecture.md#task-authoring) |
+| The firmware's monotonic, at any rate, counting in `u64` | [architecture](architecture.md#task-authoring) |
 | Related tasks share a source module with imports declared once at module scope | [architecture](architecture.md#task-authoring) |
 | Task kind follows the signature: `async fn` software, `fn` hardware with a composition-supplied interrupt | [architecture](architecture.md#task-authoring) |
 | Native HAL init, authored in the firmware and never moved | [architecture](architecture.md#firmware-composition) |

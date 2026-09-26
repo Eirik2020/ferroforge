@@ -170,7 +170,7 @@ pub async fn source(cx: source::Context) {
     let _: Result<(), ()> = cx.spawn.takes_none();
     let _: Result<(), u32> = cx.spawn.takes_one(1);
     let _: Result<(), (u32, bool)> = cx.spawn.takes_two(1, true);
-    let _: u32 = Mono::now().duration_since_epoch().to_micros();
+    let _: u64 = Mono::now().duration_since_epoch().to_micros();
 }
 
 #[ferroforge::task(
@@ -245,7 +245,9 @@ ferroforge::app! {
     dispatchers = [USART1],
 
     use rtic_monotonics::systick::prelude::*;
-    systick_monotonic!(Mono, 1000);
+    // Not the example firmware's 1 kHz, so a task reading time is shown to take
+    // the rate from whichever monotonic the firmware declares.
+    systick_monotonic!(Mono, 10_000);
 
     use super::{
         Counter, all_gated, gated, on_dma, on_idle, source, takes_none, takes_one, takes_two,
@@ -352,7 +354,7 @@ fn shapes_the_example_firmware_does_not_use_compile() {
         output.status.success(),
         "every spawn arity, `Mono::now()`, `CONFIG` in a macro, task-owned \
          locals, a bounded shared resource, lock-free sharing, documented \
-         entries and gated task-locals must compile:\n{}",
+         entries, gated task-locals and a 10 kHz monotonic must compile:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
 }

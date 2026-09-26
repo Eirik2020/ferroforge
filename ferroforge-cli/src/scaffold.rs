@@ -322,7 +322,7 @@ const TASK_LIB: &str = "\
 
 #![no_std]
 
-use fugit::ExtU32 as _;
+use fugit::ExtU64 as _;
 
 /// Logs a count at a fixed period, forever. It needs no pins, so it runs on
 /// any board, and `ferroforge run` shows what it prints.
@@ -335,7 +335,7 @@ pub async fn heartbeat(cx: heartbeat::Context) -> ! {
     loop {
         *cx.local.count = cx.local.count.wrapping_add(1);
         defmt::info!(\"heartbeat {=u32}\", *cx.local.count);
-        Mono::delay(CONFIG::PERIOD_MS.millis()).await;
+        Mono::delay(u64::from(CONFIG::PERIOD_MS).millis()).await;
     }
 }
 ";

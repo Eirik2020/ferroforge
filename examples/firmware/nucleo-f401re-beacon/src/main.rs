@@ -108,7 +108,7 @@ ferroforge::app! {
         // it can express is 65535 ticks - about 65 ms. Asking for more is
         // `Err(WrongAutoReload)` at runtime, which a build cannot catch.
         let mut pulse_timer = cx.device.TIM3.counter_us(&mut rcc);
-        pulse_timer.start(50.millis().into()).unwrap();
+        pulse_timer.start(50u32.millis().into()).unwrap();
         pulse_timer.listen(Event::Update);
 
         heartbeat::spawn().unwrap();
@@ -390,7 +390,7 @@ ferroforge::app! {
                 refused
             );
             *cx.local.last_deliveries = deliveries;
-            Mono::delay(1000.millis()).await;
+            Mono::delay(1000u64.millis()).await;
         }
     }
 

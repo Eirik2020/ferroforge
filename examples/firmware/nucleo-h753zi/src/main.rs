@@ -91,7 +91,7 @@ ferroforge::app! {
     async fn heartbeat(cx: heartbeat::Context) {
         loop {
             cx.local.status_led.toggle();
-            Mono::delay(250.millis()).await;
+            Mono::delay(250u64.millis()).await;
         }
     }
 

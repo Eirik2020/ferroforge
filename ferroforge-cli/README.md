@@ -53,8 +53,6 @@ A 0.4 release for testing. Supported chips are the STM32F401RE, F405RG, F411RE
 and H753ZI. The context a task receives is an interface between task crates and
 firmware and may change between 0.x versions.
 
-Known limit: a task that reads time needs a 1 kHz monotonic.
-
 How tasks are written and selected:
 [`ferroforge`](https://crates.io/crates/ferroforge). Design and decisions: the
 [FerroForge book](https://github.com/Eirik2020/ferroforge/blob/main/docs/src/SUMMARY.md).

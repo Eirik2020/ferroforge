@@ -10,7 +10,7 @@
 #![no_std]
 
 use embedded_hal::digital::StatefulOutputPin;
-use fugit::ExtU32 as _;
+use fugit::ExtU64 as _;
 
 fn increment(value: &mut u32) {
     *value = value.wrapping_add(1);
@@ -31,7 +31,7 @@ pub async fn blink(mut cx: blink::Context) -> ! {
             increment(cx.local.count);
             let _: Result<(), u32> = cx.spawn.report(*cx.local.count);
         }
-        Mono::delay(CONFIG::PERIOD_MS.millis()).await;
+        Mono::delay(u64::from(CONFIG::PERIOD_MS).millis()).await;
     }
 }
 

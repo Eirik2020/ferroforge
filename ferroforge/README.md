@@ -17,10 +17,14 @@ pub async fn heartbeat(cx: heartbeat::Context) -> ! {
     loop {
         *cx.local.count = cx.local.count.wrapping_add(1);
         defmt::info!("heartbeat {=u32}", *cx.local.count);
-        Mono::delay(CONFIG::PERIOD_MS.millis()).await;
+        Mono::delay(u64::from(CONFIG::PERIOD_MS).millis()).await;
     }
 }
 ```
+
+Time is whatever monotonic the firmware declares, at any rate, counting in
+`u64` - SysTick or a hardware timer - so the body builds durations with
+`fugit::ExtU64`.
 
 A firmware writes an ordinary RTIC application - resources, `init`, native HAL
 calls - and declares each task instance by naming its definition and binding

@@ -391,14 +391,21 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
     // context the same way - but a task that never reads time must not have to
     // depend on the crates that describe time.
     //
-    // The agreed initial profile: SysTick at 1 kHz with u32 time values. Both
-    // associated types are fixed, because a bound that fixed only `Duration`
-    // left `Mono::now()` opaque - a task could wait but not take a timestamp.
-    // Both are what `systick_monotonic!(Mono, 1000)` produces.
+    // Both associated types are named, because a bound that fixed only
+    // `Duration` left `Mono::now()` opaque - a task could wait but not take a
+    // timestamp. The rate is the firmware's: a const parameter of the function
+    // alone, inferred from whichever monotonic the firmware declares, so the
+    // caller still names nothing. The width is not: `fugit` builds durations
+    // separately for `u32` and `u64`, so a body needs a concrete one, and one
+    // width for every task is what lets any task run under any firmware. It is
+    // `u64` because hardware-timer monotonics count in it and SysTick can.
+    let monotonic_rate = monotonic_param
+        .as_ref()
+        .map(|_| quote!(, const __FF_TICK_HZ: u32));
     let monotonic_bound = monotonic_param.as_ref().map(|_| {
         quote!(#monotonic_name: ::rtic_monotonics::Monotonic<
-            Instant = ::fugit::Instant<u32, 1, 1000>,
-            Duration = ::fugit::Duration<u32, 1, 1000>,
+            Instant = ::fugit::Instant<u64, 1, __FF_TICK_HZ>,
+            Duration = ::fugit::Duration<u64, 1, __FF_TICK_HZ>,
         >,)
     });
     let monotonic_field = quote!(pub monotonic: ::core::marker::PhantomData<#monotonic_name>,);
@@ -492,7 +499,7 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
 
         #(#attributes)*
         #[allow(non_snake_case, non_camel_case_types)]
-        #visibility #asyncness fn #task_name<#context_generics>(
+        #visibility #asyncness fn #task_name<#context_generics #monotonic_rate>(
             mut #context_parameter: #task_name::Context<#context_generics>,
             #signature_inputs
         ) #output

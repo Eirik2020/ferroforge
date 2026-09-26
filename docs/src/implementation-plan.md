@@ -22,11 +22,6 @@ Each of these has been observed. None is a design question.
   unconfirmed. CI's logs name a failing test, so the next one is caught
   running. It guards the CLI's file-writing order, so it is worth pinning.
 
-The tick rate a task may read is fixed at 1 kHz, which [current
-state](prototype.md) records among what is not implemented. It belongs in view
-here too: a consumer now runs its control loop at 2 kHz against 1 ms timestamps,
-so the cost is being paid rather than anticipated.
-
 ## OSD Hardware Validation
 
 `examples/tasks/msp-displayport` and its host tests say the frames are well formed. On

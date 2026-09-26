@@ -12,8 +12,10 @@ release and the CLI is no longer what holds the rest back.
 
 ## What Already Fits
 
-- ferro-wasp declares `systick_monotonic!(Mono, 1000)`, which is the agreed
-  1 kHz `u32` profile in [task authoring](architecture.md#task-authoring).
+- ferro-wasp declares `systick_monotonic!(Mono, 1000)`, which FerroForge 0.3
+  requires. Under 0.4 any rate fits once the monotonic counts in `u64`, which
+  every backend's SysTick now does, and task bodies build durations with
+  `ExtU64` ([task authoring](architecture.md#task-authoring)).
 - `app!` passes `init`, `#[shared]`, `#[local]`, `dispatchers` and
   `peripherals = true` through unchanged, so the Foxeer F405 V2 `init` - about
   580 lines, including `#[init(local = [..])]` DMA buffers - does not change.

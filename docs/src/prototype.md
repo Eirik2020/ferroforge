@@ -160,8 +160,3 @@ asserting nothing. See [workflow](workflow.md) for how to run them.
   preserved binary is therefore an image's record, never a rebuild. Stable
   hashes would need the task crates inside the firmware's workspace, which G5
   rules out, or every build made at one fixed path.
-- **A choice of tick rate.** `#[task]` fixes the monotonic bound at
-  `fugit::Duration<u32, 1, 1000>`, so a firmware selecting any task that reads
-  time must declare a 1 kHz monotonic. It now declares that itself, where the
-  rate is at least visible, but a different rate still fails to unify rather
-  than being rejected on the authored line.

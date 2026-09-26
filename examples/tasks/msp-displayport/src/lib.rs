@@ -26,7 +26,7 @@
 /// protocol crate in its own manifest.
 pub use msp;
 
-use fugit::ExtU32 as _;
+use fugit::ExtU64 as _;
 use msp::{Parser, Screen, Telemetry, codec::MAX_FRAME, displayport, poll, queue::Frames};
 
 /// Room for the outgoing frames of one refresh, with margin.
@@ -176,6 +176,6 @@ pub async fn paint(mut cx: paint::Context) -> ! {
         if pending > 0 {
             let _: Result<(), usize> = cx.spawn.kick(pending);
         }
-        Mono::delay(CONFIG::REFRESH_MS.millis()).await;
+        Mono::delay(u64::from(CONFIG::REFRESH_MS).millis()).await;
     }
 }

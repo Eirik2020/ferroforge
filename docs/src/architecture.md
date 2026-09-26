@@ -94,10 +94,17 @@ each was settled.
 - Incoming inputs are ordinary parameters after the context. Outgoing calls use
   inline aliases, `spawn = [report(value: u32)]`, with RTIC 2 result shapes:
   `()` for no inputs, the value for one, a tuple for several.
-- The monotonic is named as imported, `monotonic = Mono`. The initial profile
-  is 1 kHz with `u32` time values, fixed for both `Duration` and `Instant` so a
-  task can wait and also take timestamps from `Mono::now()`. The firmware
-  satisfies it by declaring a matching monotonic of its own.
+- The monotonic is named as imported, `monotonic = Mono`, and is whichever one
+  the firmware declares, at any rate, counting in `u64`. Both `Duration` and
+  `Instant` are bound, so a task can wait and also take timestamps from
+  `Mono::now()`. The rate is inferred, so a definition never states it. The
+  width is fixed because `fugit` builds durations separately for each integer
+  type, and one width is what lets every task run under every firmware; it is
+  `u64` because hardware-timer monotonics count in it and SysTick can. A body
+  builds durations with `fugit::ExtU64`, as
+  `u64::from(CONFIG::PERIOD_MS).millis()`. A firmware glob-importing both its
+  HAL's prelude and the monotonic's has `ExtU32` and `ExtU64` in scope, so a
+  bare literal there needs its type, `250u64.millis()`.
 - Related tasks share a source module with imports declared once at module
   scope. A task crate may hold several modules.
 
