@@ -252,7 +252,13 @@ mod tests {
     #[test]
     fn a_frame_split_across_reads_still_parses() {
         let mut bytes = [0; MAX_FRAME];
-        let len = encode(Direction::ToFlightController, 101, &[1, 2, 3, 4], &mut bytes).unwrap();
+        let len = encode(
+            Direction::ToFlightController,
+            101,
+            &[1, 2, 3, 4],
+            &mut bytes,
+        )
+        .unwrap();
 
         let mut parser = Parser::new();
         let mut parsed = None;

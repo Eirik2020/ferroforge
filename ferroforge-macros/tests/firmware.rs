@@ -123,7 +123,10 @@ fn a_second_firmware_reuses_the_same_definitions() {
 #[test]
 #[ignore = "cross-compiles; run with --ignored"]
 fn a_task_crate_for_another_hal_checks_independently() {
-    checks_standalone("examples/tasks/stm32h7-timer", &["--features", "stm32h753v"]);
+    checks_standalone(
+        "examples/tasks/stm32h7-timer",
+        &["--features", "stm32h753v"],
+    );
 }
 
 /// The first firmware here that is not an STM32F4: a different HAL, a different

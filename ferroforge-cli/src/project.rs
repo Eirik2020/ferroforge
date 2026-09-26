@@ -161,7 +161,11 @@ impl Source {
                 "names no source; give it a `version`, a `git` URL or a `path`".to_owned(),
             );
         }
-        let pointers = [("rev", &self.rev), ("branch", &self.branch), ("tag", &self.tag)];
+        let pointers = [
+            ("rev", &self.rev),
+            ("branch", &self.branch),
+            ("tag", &self.tag),
+        ];
         let named = pointers
             .iter()
             .filter(|(_, value)| value.is_some())
@@ -192,10 +196,8 @@ pub struct Firmware {
 /// Arguments the CLI puts on the probe command line itself, and the setting
 /// that owns each. A firmware repeating one of these would have the generated
 /// file name the same thing twice, with nothing deciding which wins.
-const OWNED_PROBE_ARGUMENTS: &[(&str, &str)] = &[
-    ("--chip", "chip"),
-    ("--no-location", "defmt-location"),
-];
+const OWNED_PROBE_ARGUMENTS: &[(&str, &str)] =
+    &[("--chip", "chip"), ("--no-location", "defmt-location")];
 
 /// Environment variables the CLI writes, and the setting that owns each.
 const OWNED_ENVIRONMENT: &[(&str, &str)] = &[("DEFMT_LOG", "defmt-log")];

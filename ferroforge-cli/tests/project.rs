@@ -1140,7 +1140,10 @@ fn a_firmware_declares_its_probe_command_arguments_and_environment() {
         "PROBE_SERIAL = \"0670FF574951\"",
         "DEFMT_LOG = \"info\"",
     ] {
-        assert!(config.contains(expected), "{expected} missing from {config}");
+        assert!(
+            config.contains(expected),
+            "{expected} missing from {config}"
+        );
     }
 }
 
@@ -1191,7 +1194,11 @@ fn an_unknown_setting_is_refused_rather_than_ignored() {
 
     let output = ferroforge_in(&root, &["sync"]);
     assert!(!output.status.success());
-    assert!(stderr(&output).contains("probe-comand"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("probe-comand"),
+        "{}",
+        stderr(&output)
+    );
 }
 
 /// `[package.metadata.ferroforge]` is one table with two audiences: a task crate

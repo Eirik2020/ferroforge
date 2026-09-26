@@ -801,7 +801,9 @@ mod derivation {
         let backend = variant("CHIP_A", "thumbv7em-none-eabihf", 524288, 0x198);
         let default = backend.cargo_config(&Settings::default());
         assert!(
-            default.contains("runner = [\n    \"probe-rs\",\n    \"run\",\n    \"--chip\",\n    \"CHIP_A\",\n]"),
+            default.contains(
+                "runner = [\n    \"probe-rs\",\n    \"run\",\n    \"--chip\",\n    \"CHIP_A\",\n]"
+            ),
             "{default}"
         );
 
@@ -864,14 +866,24 @@ mod derivation {
             .lines()
             .find(|line| line.starts_with("stm32f4xx-hal"))
             .expect("the HAL must be in the block");
-        assert!(line.contains("git = \"https://github.com/stm32-rs/stm32f4xx-hal.git\""), "{line}");
-        assert!(line.contains("rev = \"78d79609137d5c380320f7bf1a9120967babc61d\""), "{line}");
+        assert!(
+            line.contains("git = \"https://github.com/stm32-rs/stm32f4xx-hal.git\""),
+            "{line}"
+        );
+        assert!(
+            line.contains("rev = \"78d79609137d5c380320f7bf1a9120967babc61d\""),
+            "{line}"
+        );
         assert!(!line.contains("version ="), "{line}");
-        assert!(line.contains("\"stm32f405\""), "the chip feature stays: {line}");
+        assert!(
+            line.contains("\"stm32f405\""),
+            "the chip feature stays: {line}"
+        );
         assert!(line.contains("\"uart4\""), "{line}");
 
         assert!(
-            block.contains("# source for stm32f4xx-hal from [package.metadata.ferroforge.platform]"),
+            block
+                .contains("# source for stm32f4xx-hal from [package.metadata.ferroforge.platform]"),
             "the block must say where the source was written: {block}"
         );
 
@@ -903,8 +915,9 @@ mod derivation {
     #[test]
     fn a_chip_feature_on_a_source_is_refused() {
         let backend = Backend::for_chip("stm32f405rg").expect("a shipped backend");
-        let settings =
-            declared("[platform.stm32f4xx-hal]\nversion = \"0.23.0\"\nfeatures = [\"stm32f401\"]\n");
+        let settings = declared(
+            "[platform.stm32f4xx-hal]\nversion = \"0.23.0\"\nfeatures = [\"stm32f401\"]\n",
+        );
         let message = backend
             .check_sources("under test", &settings)
             .expect_err("a chip feature must be refused")
