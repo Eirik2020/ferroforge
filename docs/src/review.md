@@ -341,9 +341,10 @@ instead. A project made by `new` depends on `ferroforge = "0.2"`, because the
 firmware it writes uses that form. The CLI gains `add`, `--all`, `drift` and the
 chip table, and names the scaffolded task crate `tasks/heartbeat`.
 
-**Next open point:** none in FerroForge itself. What is left in
-[remaining work](implementation-plan.md) concerns the example task crates and
-firmware, not the tool.
+**Next open point:** none blocking. [Remaining work](implementation-plan.md)
+holds two undecided designs - drift settings, and the STM32F4 helper
+[G2b](governing-requirements.md) names - and neither blocks the known defects or
+the ferro-wasp migration.
 
 ## Binding Decisions Carried Forward
 
