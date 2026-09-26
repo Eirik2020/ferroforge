@@ -212,6 +212,10 @@ crate, which is the coupling this design exists to remove.
 Configuration values state their type, `period_ms: u32 = 500`, because an `impl`
 must name it. A mismatch fails against the definition's trait.
 
+Tasks that only work as a set are declared one by one like any others; there is
+no group of tasks selected together. Priorities are the firmware's choice,
+unchecked beyond what RTIC checks, as in RTIC.
+
 ## What Checking Guarantees
 
 Rust and RTIC do the checking; FerroForge adds no validation layer of its own.

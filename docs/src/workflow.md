@@ -302,6 +302,17 @@ application with no generated interfaces to refresh. Check the editor's active
 target when examining ARM-only source: a host check that omits hardware code is
 not evidence that the hardware source type-checks.
 
+## Release
+
+Four crates are published to crates.io, in dependency order:
+`ferroforge-contracts`, `ferroforge-macros`, `ferroforge` and `ferroforge-cli`.
+A published version cannot be changed, only superseded, so a change to the
+context a task receives, to `app!`'s grammar or to the CLI's verbs reaches
+users only as a new version; under 0.x, anything that breaks them is a minor
+bump. The versions are bumped ahead of the release, and `new` writes the new
+requirement, so a firmware can depend on it and be patched to a checkout before
+it is published.
+
 ## Build and Read the Book
 
 ```text
