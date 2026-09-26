@@ -6,6 +6,11 @@ what is left to build is in [remaining work](implementation-plan.md).
 
 ## Current Decisions
 
+**`ferroforge-stm32f4` deferred, 2026-09-26.** ferro-wasp uses its own STM32F4
+helper, `ferrowasp-stm32f4`, not a FerroForge one. [G2b](governing-requirements.md)
+is unchanged and the crate it names is still owed, but no consumer is waiting
+for it ([the STM32F4 helper](implementation-plan.md#the-stm32f4-helper)).
+
 **The firmware owns what goes into the files the CLI writes, 2026-09-26.** The
 two open CLI decisions are settled the same way, because they were the same
 question: a firmware records in `[package.metadata.ferroforge]` anything that
@@ -342,9 +347,9 @@ firmware it writes uses that form. The CLI gains `add`, `--all`, `drift` and the
 chip table, and names the scaffolded task crate `tasks/heartbeat`.
 
 **Next open point:** none blocking. [Remaining work](implementation-plan.md)
-holds two undecided designs - drift settings, and the STM32F4 helper
-[G2b](governing-requirements.md) names - and neither blocks the known defects or
-the ferro-wasp migration.
+holds one undecided design, drift settings, and the deferred STM32F4 helper
+[G2b](governing-requirements.md) names; neither blocks the known defects or the
+ferro-wasp migration.
 
 ## Binding Decisions Carried Forward
 

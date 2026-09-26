@@ -77,9 +77,9 @@ project has been only a directory holding `firmware/`.
 
 [G2b](governing-requirements.md) names `ferroforge-stm32f4` as the
 FerroForge-oriented STM32F4 helper sharing helpers and types between init and
-hardware tasks. No such crate exists. The consumer carries its own equivalent,
-so what is undecided is whether the helper is extracted from it or the
-requirement is met by each project owning one.
+hardware tasks. No such crate exists, and building it is deferred. G2b stands
+as the goal, but nothing waits on it: ferro-wasp uses its own equivalent,
+`ferrowasp-stm32f4`, and is not moving to a FerroForge helper.
 
 ## ferro-wasp Adoption
 
