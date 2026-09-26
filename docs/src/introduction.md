@@ -47,9 +47,9 @@ were built and measured before being set aside.
 
 | Design | Task bodies | Init | Recoverable from |
 | --- | --- | --- | --- |
-| Full transplantation | copied, rewritten | copied | `main` |
-| Transplanted init | called | copied into a generated project | `test/new_task_method` |
-| Call-through (current) | called | authored in place | this branch |
+| Full transplantation | copied, rewritten | copied | `fbe54a4` |
+| Transplanted init | called | copied into a generated project | `fb92511` |
+| Call-through (current) | called | authored in place | `main` |
 
 Their chapters are preserved under `archive/2026-09-16/`. Archived content is
 excluded from this book and requires explicit permission to read; see

@@ -61,23 +61,25 @@ links there instead of restating it.
 | ferro-wasp adoption: its gaps and migration order | `ferro-wasp-adoption.md` |
 | What was decided, and where it is specified | `review.md` (index only) |
 
-The whole book is 1455 lines, so read a chapter when a section is not enough:
+The whole book is 1587 lines, so read a chapter when a section is not enough:
 
-- `governing-requirements.md` (64) - G1-G7. Loaded at launch for Claude.
+- `governing-requirements.md` (63) - G1-G7. Loaded at launch for Claude.
 - `architecture.md` (227) - the agreed call-through model. Owns the canonical
   authoring design; other chapters link here rather than restate it.
-- `review.md` (357) - current decisions, the next open point, an index of
+- `review.md` (399) - current decisions, the next open point, an index of
   older decisions still in force, and what the call-through model superseded.
-- `implementation-plan.md` (57) - what is left, in unblocking order.
-- `ferro-wasp-adoption.md` (122) - what ferro-wasp needs, and the migration
+- `implementation-plan.md` (105) - known defects, and what is left, in unblocking
   order.
-- `workflow.md` (239) - every command, including the opt-in cross-compiles.
+- `ferro-wasp-adoption.md` (115) - what ferro-wasp needs, and the migration
+  order.
+- `workflow.md` (289) - every command, including the opt-in cross-compiles.
 - `prototype.md` (162) - what exists today and what does not.
 - `dependencies.md` (112) - where requirements live, and how a HAL-specific
   crate names a chip without choosing one.
 
 Superseded transplant-era chapters are under `archive/2026-09-16/`, and the code
-they describe is on branch `main` and `test/new_task_method`.
+they describe is in `main`'s history: full transplantation at `fbe54a4`,
+transplanted init at `fb92511`.
 
 ## Always-Loaded Context Budget
 

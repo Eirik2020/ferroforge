@@ -10,8 +10,7 @@ maximum.
 how conflicts are resolved. These requirements override conflicting earlier
 proposals and every document below this one. If this document's structure proves
 impossible or impractical, call a review with the user rather than editing around
-it. Implementation status does not change the requirements; the current tree
-(`systems/`, `tasks/`) predates G5 and is being migrated by the repair plan.
+it. Implementation status does not change the requirements.
 
 1. **G1 - Reusable task libraries.** Software task crates must be reusable
    across all hardware and projects. Hardware task crates contain HAL-specific
