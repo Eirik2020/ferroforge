@@ -357,8 +357,7 @@ const STARTERS: &[Starter] = &[
     Starter {
         hal: "stm32f4xx-hal",
         imports: "use stm32f4xx_hal::{prelude::*, rcc::Config};",
-        clocks: "\
-        // The internal oscillator, because it is on every board. Switch to the
+        clocks: "        // The internal oscillator, because it is on every board. Switch to the
         // crystal and raise `sysclk` once you know the board.
         let rcc = cx.device.RCC.freeze(Config::hsi());
         Mono::start(cx.core.SYST, rcc.clocks.sysclk().raw());",
@@ -366,8 +365,7 @@ const STARTERS: &[Starter] = &[
     Starter {
         hal: "stm32h7xx-hal",
         imports: "use stm32h7xx_hal::prelude::*;",
-        clocks: "\
-        // An H7 sets its core voltage before its clocks. The defaults run from
+        clocks: "        // An H7 sets its core voltage before its clocks. The defaults run from
         // the internal oscillator, which is on every board.
         let pwr = cx.device.PWR.constrain();
         let pwrcfg = pwr.freeze();
