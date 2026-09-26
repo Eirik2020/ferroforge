@@ -8,6 +8,45 @@ around it.
 [Current state](prototype.md) records what exists; this chapter records what
 does not, in the order that unblocks the rest.
 
+## Checks That Run Themselves
+
+There is no CI configuration in this repository; nothing runs the checks but a
+person. Every defect found since the call-through model was adopted was found by
+converting a real consumer rather than by the test suite, and one of them - the
+CLI writing a firmware's derived files before reading its manifest - reached
+flashed hardware and changed an image that had already flown. A suite that only
+runs when someone remembers is not what protects the CLI.
+
+This comes first because the intermittent failure below cannot be found any
+other way.
+
+## Known Defects
+
+Each of these has been observed. None is a design question.
+
+- **A resource or configuration entry accepts no attribute but `#[lock_free]`.**
+  Every other attribute is rejected where the entry is parsed, and a doc comment
+  is an attribute, so a configuration entry cannot be documented where it is
+  declared and a resource cannot be `#[cfg]`-gated. Both are ordinary Rust on an
+  ordinary field, which is what [G6](governing-requirements.md) asks for.
+- **One CLI test fails intermittently.** Seen once in
+  `ferroforge-cli/tests/project.rs`, not reproduced, and the name was not
+  captured. Fixture directories are uniquely named, the only cargo-invoking test
+  is `#[ignore]`d, and the derived files the idempotency test reads are
+  committed, so the three obvious causes are ruled out and it has to be caught
+  running. It guards the file-writing order above, so it is worth pinning.
+- **A build is tied to the directory it was built in.** Cargo hashes the
+  absolute package path into `-C metadata`, so one commit built from two paths
+  produces two different images. `trim-paths` removes the path strings and not
+  the hashing, which was measured rather than assumed. An exact-image claim is
+  therefore only valid for one checkout location. Whether the CLI should offer
+  anything here is undecided.
+
+The tick rate a task may read is fixed at 1 kHz, which [current
+state](prototype.md) records among what is not implemented. It belongs in view
+here too: a consumer now runs its control loop at 2 kHz against 1 ms timestamps,
+so the cost is being paid rather than anticipated.
+
 ## OSD Hardware Validation
 
 `examples/tasks/msp-displayport` and its host tests say the frames are well formed. On
@@ -34,11 +73,19 @@ can express. "Ignore interrupt bindings" and "only look for a keyword" are the
 first two wanted. This would be the first project-level file, where so far a
 project has been only a directory holding `firmware/`.
 
+## The STM32F4 Helper
+
+[G2b](governing-requirements.md) names `ferroforge-stm32f4` as the
+FerroForge-oriented STM32F4 helper sharing helpers and types between init and
+hardware tasks. No such crate exists. The consumer carries its own equivalent,
+so what is undecided is whether the helper is extracted from it or the
+requirement is met by each project owning one.
+
 ## ferro-wasp Adoption
 
-What ferro-wasp needs before it can adopt FerroForge - two macro gaps and two
-CLI gaps awaiting decisions, and the migration order - is planned in
-[adopting FerroForge in ferro-wasp](ferro-wasp-adoption.md).
+What ferro-wasp needs before it can adopt FerroForge - two CLI gaps awaiting
+decisions, and the migration order - is planned in [adopting FerroForge in
+ferro-wasp](ferro-wasp-adoption.md). The macro gaps are closed.
 
 ## Evidence Rules
 
