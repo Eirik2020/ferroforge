@@ -8,18 +8,6 @@ around it.
 [Current state](prototype.md) records what exists; this chapter records what
 does not, in the order that unblocks the rest.
 
-## Checks That Run Themselves
-
-There is no CI configuration in this repository; nothing runs the checks but a
-person. Every defect found since the call-through model was adopted was found by
-converting a real consumer rather than by the test suite, and one of them - the
-CLI writing a firmware's derived files before reading its manifest - reached
-flashed hardware and changed an image that had already flown. A suite that only
-runs when someone remembers is not what protects the CLI.
-
-This comes first because the intermittent failure below cannot be found any
-other way.
-
 ## Known Defects
 
 Each of these has been observed. None is a design question.

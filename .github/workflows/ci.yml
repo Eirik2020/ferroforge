@@ -1,0 +1,62 @@
+# The checks in the book's workflow chapter, run on every push to `main` and
+# every pull request, so they no longer depend on someone remembering.
+#
+# The weekly run is there for failures that only show up now and then: a suite
+# run once per change will not catch those.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  host:
+    name: Host crates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # With no arguments, rustup installs what rust-toolchain.toml selects.
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+
+  firmware:
+    name: Firmware and task crates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install
+      # Each example firmware and task crate is its own workspace, per G5, so
+      # each has its own target directory to keep.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: |
+            . -> target
+            examples/firmware/nucleo-f401re -> target
+            examples/firmware/nucleo-f401re-beacon -> target
+            examples/firmware/nucleo-h753zi -> target
+            examples/tasks/blinky -> target
+            examples/tasks/msp-displayport -> target
+            examples/tasks/stm32f4-timer -> target
+            examples/tasks/stm32f4-uart-dma -> target
+            examples/tasks/stm32h7-timer -> target
+      # Cross-compiles every firmware and task crate, plants the defects the
+      # compile-fail harness expects, and scaffolds a project per HAL family.
+      - run: cargo test --workspace --locked -- --ignored

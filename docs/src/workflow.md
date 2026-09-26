@@ -46,6 +46,11 @@ Run them when changing an expansion. A case that starts failing with the wrong
 message is the point: it means a defect stopped being diagnosable at the
 authored line.
 
+CI runs both suites, `cargo fmt --check` and `cargo clippy` with warnings denied,
+on every push to `main` and every pull request, and weekly, because a failure
+that shows up only now and then needs repeated runs to be caught. Formatting and
+clippy are therefore part of passing, not advice.
+
 ## The CLI
 
 The verbs are Cargo's, because a firmware crate is an ordinary Cargo package:
