@@ -6,6 +6,15 @@ what is left to build is in [remaining work](implementation-plan.md).
 
 ## Current Decisions
 
+**Drift rules live in `ferroforge.toml`, 2026-09-27.** Differences expected
+between firmwares are forgiven by blanket rules in one project-wide file:
+`ignore-interrupt-bindings`, and `ignore-words` with `*` and `?` patterns for
+peripheral names and pins. Per-firmware aliases in each manifest were
+considered and rejected in favour of rules stated once for the project. The
+file is FerroForge's first project-level file, but it does not mark a project.
+"Only look for a keyword", wanted since 2026-09-18, was dropped for want of a
+case. Specified in [the CLI](workflow.md#the-cli).
+
 **Any tick rate, counting in `u64`, 2026-09-26.** A task reading time accepts
 whichever monotonic the firmware declares; the rate is inferred, and the width
 is fixed at `u64` so every task runs under every firmware. It replaces the 1 kHz
@@ -131,11 +140,9 @@ cannot be a reusable task and has to be copied between firmwares. Copies marked
 `// ferroforge:begin <name>` / `// ferroforge:end <name>` are compared by
 `ferroforge drift`, one to one after ignoring layout and `//` notes. It is not
 a way to share code: anything that can be a task should be one. Nested regions
-are compared individually, outer first; unmatched markers are errors. Settings
-such as ignoring interrupt bindings will come from one project-wide file, and
-without it the comparison stays one to one - see
-[remaining work](implementation-plan.md). Specified in
-[workflow](workflow.md#the-cli).
+are compared individually, outer first; unmatched markers are errors.
+Expected differences are forgiven by project-wide rules, decided 2026-09-27
+above. Specified in [workflow](workflow.md#the-cli).
 
 **An instance may supply a local as an RTIC task-local, 2026-09-18.** For a
 local the definition leaves to the firmware, the instance may write RTIC's
@@ -206,10 +213,9 @@ receive task on `DMA2_STREAM3`, the `TIM3` timer task on `TIM2` - and that is
 not a gap, because plain RTIC accepts it too. Specified in
 [architecture](architecture.md#what-checking-guarantees).
 
-**Next open point:** none blocking. [Remaining work](implementation-plan.md)
-holds one undecided design, drift settings, and the deferred STM32F4 helper
-[G2b](governing-requirements.md) names; neither blocks the known defects or the
-ferro-wasp migration.
+**Next open point:** none. [Remaining work](implementation-plan.md) holds no
+undecided design; the STM32F4 helper [G2b](governing-requirements.md) names is
+deferred, and nothing waits on it.
 
 ## Binding Decisions Carried Forward
 

@@ -56,7 +56,8 @@ USAGE:
         with `// ferroforge:begin <name>` and `// ferroforge:end <name>`, and
         report any that differ. For code that must be duplicated because it
         cannot be a reusable task. Indentation, blank lines and `//` comments
-        are ignored; nested regions are compared on their own too.
+        are ignored; nested regions are compared on their own too. Rules in
+        the project's `ferroforge.toml` forgive expected differences.
 
     ferroforge chips [--names]
         The chips this build of FerroForge knows, with their HAL, target and

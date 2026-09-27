@@ -24,10 +24,170 @@ use std::{
     process::ExitCode,
 };
 
+use serde::Deserialize;
+
 use crate::{all::Style, project::Project};
 
 const BEGIN: &str = "ferroforge:begin";
 const END: &str = "ferroforge:end";
+
+/// The project-wide file drift reads its rules from, beside `firmware/`.
+pub const SETTINGS_FILE: &str = "ferroforge.toml";
+
+/// The project file. Unknown keys are refused, as in a firmware's manifest: a
+/// misspelt rule that is silently ignored reports drift it was meant to forgive.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectFile {
+    #[serde(default)]
+    drift: Rules,
+}
+
+/// Differences expected between firmwares, forgiven in every region. Without
+/// any, copies are compared one to one.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct Rules {
+    /// `binds = TIM2` and `binds = TIM3` are the same line.
+    #[serde(default)]
+    ignore_interrupt_bindings: bool,
+    /// Any word matching one of these is the same word: `TIM*`, `p??`.
+    #[serde(default)]
+    ignore_words: Vec<String>,
+}
+
+impl Rules {
+    fn read(root: &Path) -> Result<Self, String> {
+        let path = root.join(SETTINGS_FILE);
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self::default());
+            }
+            Err(error) => return Err(format!("{SETTINGS_FILE}: cannot be read: {error}")),
+        };
+        let file: ProjectFile =
+            toml::from_str(&text).map_err(|error| format!("{SETTINGS_FILE}: {error}"))?;
+        for pattern in &file.drift.ignore_words {
+            if pattern.chars().all(|c| c == '*' || c == '?') {
+                return Err(format!(
+                    "{SETTINGS_FILE}: `ignore-words` pattern `{pattern}` matches every \
+                     word, which would compare nothing but punctuation; name at least \
+                     one character"
+                ));
+            }
+            if let Some(c) = pattern
+                .chars()
+                .find(|c| !(c.is_alphanumeric() || matches!(c, '_' | '*' | '?')))
+            {
+                return Err(format!(
+                    "{SETTINGS_FILE}: `ignore-words` pattern `{pattern}` holds `{c}`; a \
+                     pattern is one word, with `*` for any run of characters and `?` \
+                     for one"
+                ));
+            }
+        }
+        Ok(file.drift)
+    }
+
+    fn is_empty(&self) -> bool {
+        !self.ignore_interrupt_bindings && self.ignore_words.is_empty()
+    }
+
+    /// What is forgiven, for the line that says so above the results.
+    fn describe(&self) -> String {
+        let mut parts = Vec::new();
+        if self.ignore_interrupt_bindings {
+            parts.push("interrupt bindings".to_owned());
+        }
+        if !self.ignore_words.is_empty() {
+            parts.push(format!("words matching {}", self.ignore_words.join(", ")));
+        }
+        parts.join(" and ")
+    }
+
+    /// The line as the comparison sees it: every forgiven difference replaced
+    /// by the same `_`, so copies that differ only there compare equal.
+    fn key(&self, line: &str) -> String {
+        let mut words = String::with_capacity(line.len());
+        let mut chars = line.char_indices().peekable();
+        while let Some((start, c)) = chars.next() {
+            if !(c.is_alphanumeric() || c == '_') {
+                words.push(c);
+                continue;
+            }
+            let mut end = start + c.len_utf8();
+            while let Some(&(index, next)) = chars.peek() {
+                if !(next.is_alphanumeric() || next == '_') {
+                    break;
+                }
+                end = index + next.len_utf8();
+                chars.next();
+            }
+            let word = &line[start..end];
+            let forgiven = self
+                .ignore_words
+                .iter()
+                .any(|pattern| matches_pattern(pattern, word));
+            words.push_str(if forgiven { "_" } else { word });
+        }
+        match self.ignore_interrupt_bindings {
+            true => without_bindings(&words),
+            false => words,
+        }
+    }
+}
+
+/// `*` is any run of characters, `?` exactly one; anything else is itself.
+fn matches_pattern(pattern: &str, word: &str) -> bool {
+    fn from(pattern: &[char], word: &[char]) -> bool {
+        match pattern.split_first() {
+            None => word.is_empty(),
+            Some(('*', rest)) => (0..=word.len()).any(|skip| from(rest, &word[skip..])),
+            Some(('?', rest)) => !word.is_empty() && from(rest, &word[1..]),
+            Some((c, rest)) => word.first() == Some(c) && from(rest, &word[1..]),
+        }
+    }
+    let pattern = pattern.chars().collect::<Vec<_>>();
+    let word = word.chars().collect::<Vec<_>>();
+    from(&pattern, &word)
+}
+
+/// Every `binds = <path>` with its path replaced by `_`.
+fn without_bindings(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(found) = rest.find("binds") {
+        let before_ok = rest[..found]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !(c.is_alphanumeric() || c == '_'));
+        let after = &rest[found + "binds".len()..];
+        let assigned = after.trim_start().strip_prefix('=').filter(|_| before_ok);
+        let Some(value) = assigned else {
+            out.push_str(&rest[..found + "binds".len()]);
+            rest = after;
+            continue;
+        };
+        let value = value.trim_start();
+        let length = value
+            .char_indices()
+            .find(|(_, c)| !(c.is_alphanumeric() || matches!(c, '_' | ':')))
+            .map_or(value.len(), |(index, _)| index);
+        out.push_str(&rest[..found]);
+        out.push_str("binds = _");
+        rest = &value[length..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// A line of a region: where it is, what it says, and what is compared.
+struct Line {
+    number: usize,
+    text: String,
+    key: String,
+}
 
 /// One marked region in one firmware.
 struct Region {
@@ -36,7 +196,7 @@ struct Region {
     begin: usize,
     depth: usize,
     /// Normalized lines with the line number each came from.
-    lines: Vec<(usize, String)>,
+    lines: Vec<Line>,
 }
 
 enum Marker<'a> {
@@ -85,7 +245,7 @@ fn normalized(line: &str) -> Option<String> {
 
 /// Every region in one firmware, keyed by name, plus the problems that stop
 /// its markers being read.
-fn scan(root: &Path, firmware: &Path) -> (BTreeMap<String, Region>, Vec<String>) {
+fn scan(root: &Path, firmware: &Path, rules: &Rules) -> (BTreeMap<String, Region>, Vec<String>) {
     let mut regions: BTreeMap<String, Region> = BTreeMap::new();
     let mut errors = Vec::new();
 
@@ -128,11 +288,11 @@ fn scan(root: &Path, firmware: &Path) -> (BTreeMap<String, Region>, Vec<String>)
                     // Opened even when refused, so its end still matches and
                     // one mistake is reported once.
                     open.push(name.to_owned());
-                    push(&mut regions, &open, number, &content);
+                    push(&mut regions, &open, number, &content, rules);
                 }
                 Some(Ok(Marker::End(name))) => match open.last() {
                     Some(innermost) if innermost == name => {
-                        push(&mut regions, &open, number, &content);
+                        push(&mut regions, &open, number, &content, rules);
                         open.pop();
                     }
                     Some(innermost) => {
@@ -149,7 +309,7 @@ fn scan(root: &Path, firmware: &Path) -> (BTreeMap<String, Region>, Vec<String>)
                         "{shown}:{number}: `{END} {name}` has no `{BEGIN} {name}` before it"
                     )),
                 },
-                None => push(&mut regions, &open, number, &content),
+                None => push(&mut regions, &open, number, &content, rules),
             }
         }
         for name in open {
@@ -168,11 +328,17 @@ fn push(
     open: &[String],
     number: usize,
     content: &Option<String>,
+    rules: &Rules,
 ) {
     let Some(content) = content else { return };
+    let key = rules.key(content);
     for name in open {
         if let Some(region) = regions.get_mut(name) {
-            region.lines.push((number, content.clone()));
+            region.lines.push(Line {
+                number,
+                text: content.clone(),
+                key: key.clone(),
+            });
         }
     }
 }
@@ -200,18 +366,18 @@ fn rust_files(directory: &Path) -> Vec<PathBuf> {
 
 enum Change<'a> {
     Same,
-    Removed(&'a (usize, String)),
-    Added(&'a (usize, String)),
+    Removed(&'a Line),
+    Added(&'a Line),
 }
 
 /// A line diff by longest common subsequence. Regions are short, so the
 /// quadratic table costs nothing worth a dependency.
-fn diff<'a>(before: &'a [(usize, String)], after: &'a [(usize, String)]) -> Vec<Change<'a>> {
+fn diff<'a>(before: &'a [Line], after: &'a [Line]) -> Vec<Change<'a>> {
     let (n, m) = (before.len(), after.len());
     let mut common = vec![vec![0usize; m + 1]; n + 1];
     for i in (0..n).rev() {
         for j in (0..m).rev() {
-            common[i][j] = if before[i].1 == after[j].1 {
+            common[i][j] = if before[i].key == after[j].key {
                 common[i + 1][j + 1] + 1
             } else {
                 common[i + 1][j].max(common[i][j + 1])
@@ -220,7 +386,7 @@ fn diff<'a>(before: &'a [(usize, String)], after: &'a [(usize, String)]) -> Vec<
     }
     let (mut i, mut j, mut changes) = (0, 0, Vec::new());
     while i < n || j < m {
-        if i < n && j < m && before[i].1 == after[j].1 {
+        if i < n && j < m && before[i].key == after[j].key {
             changes.push(Change::Same);
             i += 1;
             j += 1;
@@ -242,17 +408,18 @@ fn same(first: &Region, second: &Region) -> bool {
             .lines
             .iter()
             .zip(&second.lines)
-            .all(|(a, b)| a.1 == b.1)
+            .all(|(a, b)| a.key == b.key)
 }
 
 pub fn run(project: &Project) -> Result<ExitCode, String> {
     let firmwares = project.firmwares().map_err(|error| error.to_string())?;
     let style = Style::detect();
+    let rules = Rules::read(&project.root)?;
 
     let mut scanned = Vec::new();
     let mut errors = Vec::new();
     for firmware in &firmwares {
-        let (regions, mut found) = scan(&project.root, &firmware.path);
+        let (regions, mut found) = scan(&project.root, &firmware.path, &rules);
         errors.append(&mut found);
         scanned.push((firmware.name.as_str(), regions));
     }
@@ -280,6 +447,12 @@ pub fn run(project: &Project) -> Result<ExitCode, String> {
     if names.is_empty() {
         println!("no marked regions; mark copies with `// {BEGIN} <name>` and `// {END} <name>`");
         return Ok(ExitCode::SUCCESS);
+    }
+
+    // Said before the results, so a region reported `same` is known to be the
+    // same only up to what the project forgives.
+    if !rules.is_empty() {
+        println!("ignoring {}, per {SETTINGS_FILE}\n", rules.describe());
     }
 
     let width = names
@@ -329,13 +502,13 @@ pub fn run(project: &Project) -> Result<ExitCode, String> {
             for change in diff(&reference.lines, &region.lines) {
                 match change {
                     Change::Same => {}
-                    Change::Removed((number, line)) => println!(
+                    Change::Removed(Line { number, text, .. }) => println!(
                         "    {}",
-                        style.paint("31", &format!("- {number:>4}  {line}"))
+                        style.paint("31", &format!("- {number:>4}  {text}"))
                     ),
-                    Change::Added((number, line)) => println!(
+                    Change::Added(Line { number, text, .. }) => println!(
                         "    {}",
-                        style.paint("32", &format!("+ {number:>4}  {line}"))
+                        style.paint("32", &format!("+ {number:>4}  {text}"))
                     ),
                 }
             }
@@ -355,10 +528,14 @@ pub fn run(project: &Project) -> Result<ExitCode, String> {
 mod tests {
     use super::*;
 
-    fn lines(text: &[&str]) -> Vec<(usize, String)> {
+    fn lines(text: &[&str]) -> Vec<Line> {
         text.iter()
             .enumerate()
-            .map(|(index, line)| (index + 1, (*line).to_owned()))
+            .map(|(index, line)| Line {
+                number: index + 1,
+                text: (*line).to_owned(),
+                key: (*line).to_owned(),
+            })
             .collect()
     }
 
@@ -393,18 +570,52 @@ mod tests {
         let removed = changes
             .iter()
             .filter_map(|change| match change {
-                Change::Removed((_, line)) => Some(line.as_str()),
+                Change::Removed(line) => Some(line.text.as_str()),
                 _ => None,
             })
             .collect::<Vec<_>>();
         let added = changes
             .iter()
             .filter_map(|change| match change {
-                Change::Added((_, line)) => Some(line.as_str()),
+                Change::Added(line) => Some(line.text.as_str()),
                 _ => None,
             })
             .collect::<Vec<_>>();
         assert_eq!(removed, ["b"]);
         assert_eq!(added, ["x", "d"]);
+    }
+
+    #[test]
+    fn a_pattern_matches_whole_words() {
+        assert!(matches_pattern("TIM*", "TIM2"));
+        assert!(matches_pattern("TIM*", "TIM"));
+        assert!(matches_pattern("p??", "pa5"));
+        assert!(!matches_pattern("p??", "pa15"));
+        assert!(!matches_pattern("TIM*", "ATIM2"));
+        assert!(matches_pattern("*_IRQ", "TIM2_IRQ"));
+    }
+
+    #[test]
+    fn rules_forgive_only_what_they_name() {
+        let rules = Rules {
+            ignore_interrupt_bindings: true,
+            ignore_words: vec!["USART*".to_owned(), "p??".to_owned()],
+        };
+        assert_eq!(
+            rules.key("#[task(binds = TIM2, priority = 2)]"),
+            rules.key("#[task(binds=pac::Interrupt::TIM3, priority = 2)]"),
+        );
+        assert_ne!(
+            rules.key("#[task(binds = TIM2, priority = 2)]"),
+            rules.key("#[task(binds = TIM2, priority = 3)]"),
+            "only the binding is forgiven"
+        );
+        assert_eq!(
+            rules.key("let led = gpioa.pa5.into_push_pull_output();"),
+            rules.key("let led = gpioa.pb3.into_push_pull_output();"),
+        );
+        assert_eq!(rules.key("cx.device.USART1"), rules.key("cx.device.USART6"));
+        assert_ne!(rules.key("rebinds = 1;"), rules.key("rebinds = 2;"));
+        assert_eq!(Rules::default().key("binds = TIM2"), "binds = TIM2");
     }
 }

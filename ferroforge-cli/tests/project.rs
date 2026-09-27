@@ -694,6 +694,94 @@ fn status_of<'a>(text: &'a str, region: &str) -> &'a str {
         .unwrap()
 }
 
+/// A difference the project forgives in `ferroforge.toml` is not drift, the
+/// report says what is being forgiven, and anything else still is drift.
+#[test]
+fn project_rules_forgive_expected_differences() {
+    let sources = [
+        (
+            "alpha",
+            "// ferroforge:begin tick\n#[task(binds = TIM2, priority = 2)]\nlet led = gpioa.pa5;\n// ferroforge:end tick\n",
+        ),
+        (
+            "beta",
+            "// ferroforge:begin tick\n#[task(binds = TIM3, priority = 2)]\nlet led = gpiob.pb3;\n// ferroforge:end tick\n",
+        ),
+    ];
+    let root = with_sources("drift-rules", &sources);
+
+    let strict = ferroforge_in(&root, &["drift"]);
+    assert_eq!(
+        status_of(&stdout(&strict), "tick"),
+        "DRIFT",
+        "{}",
+        stdout(&strict)
+    );
+
+    fs::write(
+        root.join("ferroforge.toml"),
+        "[drift]\nignore-interrupt-bindings = true\nignore-words = [\"gpio?\", \"p??\"]\n",
+    )
+    .unwrap();
+    let forgiving = ferroforge_in(&root, &["drift"]);
+    let text = stdout(&forgiving);
+    assert!(forgiving.status.success(), "{text}");
+    assert_eq!(status_of(&text, "tick"), "same", "{text}");
+    assert!(
+        text.contains(
+            "ignoring interrupt bindings and words matching gpio?, p??, per ferroforge.toml"
+        ),
+        "{text}"
+    );
+
+    // A difference no rule names is still drift, shown as written.
+    fs::write(
+        root.join("firmware/beta/src/main.rs"),
+        "// ferroforge:begin tick\n#[task(binds = TIM3, priority = 3)]\nlet led = gpiob.pb3;\n// ferroforge:end tick\n",
+    )
+    .unwrap();
+    let text = stdout(&ferroforge_in(&root, &["drift"]));
+    assert_eq!(status_of(&text, "tick"), "DRIFT", "{text}");
+    assert!(
+        text.contains("+    2  #[task(binds = TIM3, priority = 3)]"),
+        "{text}"
+    );
+}
+
+/// A rule that cannot be what was meant is refused before anything is
+/// compared, rather than silently forgiving the wrong thing or nothing.
+#[test]
+fn a_bad_project_rule_is_refused() {
+    let root = with_sources(
+        "drift-bad-rules",
+        &[(
+            "alpha",
+            "// ferroforge:begin a\nx();\n// ferroforge:end a\n",
+        )],
+    );
+    for (file, message) in [
+        (
+            "[drift]\nignore-bindings = true\n",
+            "unknown field `ignore-bindings`",
+        ),
+        ("[drift]\nignore-words = [\"*\"]\n", "matches every word"),
+        (
+            "[drift]\nignore-words = [\"TIM 2\"]\n",
+            "a pattern is one word",
+        ),
+        ("[drfit]\n", "unknown field `drfit`"),
+    ] {
+        fs::write(root.join("ferroforge.toml"), file).unwrap();
+        let output = ferroforge_in(&root, &["drift"]);
+        assert!(!output.status.success(), "{file}");
+        assert!(
+            stderr(&output).contains(message),
+            "{file}: {}",
+            stderr(&output)
+        );
+    }
+}
+
 /// Copies that differ only in layout and notes are the same code.
 #[test]
 fn copies_that_differ_only_in_layout_are_the_same() {

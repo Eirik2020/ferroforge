@@ -116,6 +116,25 @@ name marks one region per firmware. A begin without an end, an end without a
 begin, or markers that cross are errors at their line, and nothing is compared
 until they are fixed. The command fails on drift or an error, not on `alone`.
 
+Differences expected between firmwares are forgiven by rules in a
+`ferroforge.toml` at the project root, beside `firmware/`, which apply to every
+region:
+
+```toml
+[drift]
+ignore-interrupt-bindings = true
+ignore-words = ["TIM*", "USART*", "p??"]
+```
+
+`ignore-interrupt-bindings` treats every `binds = <interrupt>` as the same.
+`ignore-words` treats any word matching a pattern as the same word - `*` is any
+run of characters and `?` one - which covers peripheral names and pins. A
+pattern that is only wildcards is refused, since it would forgive every word,
+and so is an unknown key. `drift` says which rules it applied before its
+results, and reports differing lines as written. Without the file, copies are
+compared one to one. The file does not mark a project: a project is still the
+nearest parent holding `firmware/`.
+
 `chips` prints each chip with its HAL, target and memory, read from the same
 data a build uses. `--names` prints the names alone, for scripts.
 

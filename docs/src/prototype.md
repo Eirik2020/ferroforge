@@ -132,7 +132,8 @@ asserting nothing. See [workflow](workflow.md) for how to run them.
   `ferroforge new` writes that layout, `ferroforge add` adds a firmware to it,
   and the CLI's verbs are Cargo's.
 - `ferroforge drift` compares code marked as copied between firmwares, one to
-  one, with no settings yet.
+  one unless the project's `ferroforge.toml` forgives interrupt bindings or
+  words matching a pattern.
 - `app!`'s header is RTIC's: parsed as a loop so order does not matter, with
   `dispatchers` and `peripherals` optional and defaulting to RTIC's own
   behaviour. The firmware declares its monotonic inside `app!`, as in ordinary

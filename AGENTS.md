@@ -61,19 +61,19 @@ links there instead of restating it.
 | ferro-wasp adoption: its gaps and migration order | `ferro-wasp-adoption.md` |
 | What was decided, and where it is specified | `review.md` (index only) |
 
-The whole book is 1498 lines, so read a chapter when a section is not enough:
+The whole book is 1514 lines, so read a chapter when a section is not enough:
 
 - `governing-requirements.md` (63) - G1-G7. Loaded at launch for Claude.
 - `architecture.md` (255) - the agreed call-through model. Owns the canonical
   authoring design; other chapters link here rather than restate it.
-- `review.md` (261) - current decisions, the next open point, an index of
+- `review.md` (267) - current decisions, the next open point, an index of
   older decisions still in force, and what the call-through model superseded.
-- `implementation-plan.md` (80) - known defects, and what is left, in unblocking
+- `implementation-plan.md` (70) - known defects, and what is left, in unblocking
   order.
 - `ferro-wasp-adoption.md` (110) - what ferro-wasp needs, and the migration
   order.
-- `workflow.md` (340) - every command, including the opt-in cross-compiles.
-- `prototype.md` (162) - what exists today and what does not.
+- `workflow.md` (359) - every command, including the opt-in cross-compiles.
+- `prototype.md` (163) - what exists today and what does not.
 - `dependencies.md` (112) - where requirements live, and how a HAL-specific
   crate names a chip without choosing one.
 
