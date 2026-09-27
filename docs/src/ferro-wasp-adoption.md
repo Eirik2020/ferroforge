@@ -61,8 +61,10 @@ None of these block using the macros alone, and none of them is now undecided.
   a source may add features of its own besides.
 - **Probe and environment settings.** `sync` rewrites `.cargo/config.toml`, so
   the firmware declares what goes in it: `probe-command`, `probe-args` and `env`,
-  specified with the other settings in [the CLI](workflow.md#the-cli). Against
-  the Foxeer app this reproduces its hand-written runner argument for argument.
+  specified with the other settings in [the CLI](workflow.md#the-cli), with an
+  `embed` table for what `cargo embed` reads beyond the probe. Against the
+  Foxeer app this reproduces its hand-written runner argument for argument and
+  every setting of its `Embed.toml`.
   `CHIPSERIE` needs no route at all: nothing in ferro-wasp reads it.
 - **Linker search path.** The generated config adds `-L.`, and ferro-wasp's
   `build.rs` copies `memory.x` into `OUT_DIR`. Both work. The copy can go, but

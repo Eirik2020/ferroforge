@@ -179,6 +179,20 @@ space needs no quoting rules.
 
 `env` adds environment variables beside `DEFMT_LOG`.
 
+`Embed.toml`, for `cargo embed`, takes its probe from the same `probe-args`:
+`--protocol` and `--speed` become `[default.probe]`'s `protocol` and `speed`, so
+both tools talk to the board alike. Everything else `cargo embed` reads comes
+from an `embed` table, spelled as that tool spells it and merged over what the
+CLI writes:
+
+```toml
+[package.metadata.ferroforge.embed.default.rtt]
+timeout = 7000
+```
+
+The keys the CLI writes - `general.chip`, `probe.protocol` and `probe.speed`, in
+any profile - are refused there, naming the setting that owns each.
+
 An argument or variable the CLI already writes is refused there, naming the
 setting that owns it: the same flag twice has nothing deciding which wins.
 

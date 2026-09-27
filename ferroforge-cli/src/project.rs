@@ -105,6 +105,8 @@ pub struct Settings {
     #[serde(default)]
     platform: BTreeMap<String, Source>,
     monotonic_timer: Option<String>,
+    #[serde(default)]
+    embed: toml::Table,
     /// Declared in this same table by task crates, and documented with the
     /// dependencies rather than here. Accepted so that one table name means one
     /// thing: a firmware's `ferroforge` dependency is as check-only as a task
@@ -203,6 +205,14 @@ const OWNED_PROBE_ARGUMENTS: &[(&str, &str)] =
 /// Environment variables the CLI writes, and the setting that owns each.
 const OWNED_ENVIRONMENT: &[(&str, &str)] = &[("DEFMT_LOG", "defmt-log")];
 
+/// Keys of `Embed.toml` the CLI writes, in whichever profile they appear, and
+/// the setting that owns each.
+const OWNED_EMBED_KEYS: &[(&str, &str, &str)] = &[
+    ("general", "chip", "`chip`"),
+    ("probe", "protocol", "`--protocol` in `probe-args`"),
+    ("probe", "speed", "`--speed` in `probe-args`"),
+];
+
 /// The probe subcommands that make sense as a Cargo runner. `run` flashes and
 /// runs; `attach` connects to what is already there.
 const PROBE_COMMANDS: &[&str] = &["run", "attach"];
@@ -244,6 +254,49 @@ impl Settings {
         &self.platform
     }
 
+    /// `cargo embed`'s own settings, merged over what the CLI writes, as that
+    /// tool spells them: `[default.rtt] timeout = 7000` is
+    /// `[package.metadata.ferroforge.embed.default.rtt] timeout = 7000`.
+    pub fn embed(&self) -> &toml::Table {
+        &self.embed
+    }
+
+    /// The value after a probe argument, as `--protocol swd` or
+    /// `--protocol=swd`, so `cargo embed` is given what `probe-rs run` is.
+    pub fn probe_value(&self, name: &str) -> Option<&str> {
+        let mut arguments = self.probe_args.iter();
+        while let Some(argument) = arguments.next() {
+            if argument == name {
+                return arguments.next().map(String::as_str);
+            }
+            if let Some(value) = argument
+                .strip_prefix(name)
+                .and_then(|rest| rest.strip_prefix('='))
+            {
+                return Some(value);
+            }
+        }
+        None
+    }
+
+    /// The probe protocol as `cargo embed` spells it.
+    pub fn embed_protocol(&self) -> Option<&'static str> {
+        match self
+            .probe_value("--protocol")?
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "swd" => Some("Swd"),
+            "jtag" => Some("Jtag"),
+            _ => None,
+        }
+    }
+
+    /// The probe speed in kHz, for `cargo embed`.
+    pub fn embed_speed(&self) -> Option<u32> {
+        self.probe_value("--speed")?.parse().ok()
+    }
+
     /// The hardware timer the firmware's monotonic counts on, such as `TIM2`,
     /// or none for SysTick. Spelled however the firmware wrote it; the backend
     /// matches it without regard to case.
@@ -275,6 +328,41 @@ impl Settings {
                 ));
             }
         }
+        if let Some(protocol) = self.probe_value("--protocol")
+            && self.embed_protocol().is_none()
+        {
+            return Some(format!(
+                "`probe-args` sets `--protocol {protocol}`, which `Embed.toml` \
+                 cannot carry; it takes `swd` or `jtag`",
+            ));
+        }
+        if let Some(speed) = self.probe_value("--speed")
+            && self.embed_speed().is_none()
+        {
+            return Some(format!(
+                "`probe-args` sets `--speed {speed}`, which is not a speed in kHz",
+            ));
+        }
+        for (profile, value) in &self.embed {
+            let Some(profile_table) = value.as_table() else {
+                return Some(format!(
+                    "`embed.{profile}` is not a table; it holds `cargo embed` \
+                     settings as that tool's own profiles do",
+                ));
+            };
+            for (section, key, owner) in OWNED_EMBED_KEYS {
+                let set = profile_table
+                    .get(*section)
+                    .and_then(toml::Value::as_table)
+                    .is_some_and(|table| table.contains_key(*key));
+                if set {
+                    return Some(format!(
+                        "`embed.{profile}.{section}.{key}` is written from {owner}; \
+                         set it there instead",
+                    ));
+                }
+            }
+        }
         for name in self.env.keys() {
             if let Some((_, owner)) = OWNED_ENVIRONMENT.iter().find(|(owned, _)| name == owned) {
                 return Some(format!(
@@ -289,6 +377,16 @@ impl Settings {
             }
         }
         None
+    }
+}
+
+/// Settings parsed and checked as a manifest's would be, for tests elsewhere.
+#[cfg(test)]
+pub fn check_settings(text: &str) -> Result<Settings, String> {
+    let settings: Settings = toml::from_str(text).map_err(|error| error.to_string())?;
+    match settings.fault() {
+        Some(message) => Err(message),
+        None => Ok(settings),
     }
 }
 

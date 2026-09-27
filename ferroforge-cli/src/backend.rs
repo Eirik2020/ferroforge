@@ -495,11 +495,38 @@ impl Backend {
         )
     }
 
-    pub fn embed_toml(&self) -> String {
-        format!(
-            "[default.general]\nchip = \"{}\"\n\n[default.rtt]\nenabled = true\n\n[default.gdb]\nenabled = false\n",
-            self.chip.probe_rs_chip,
-        )
+    /// `cargo embed`'s configuration.
+    ///
+    /// The probe's protocol and speed come from `probe-args`, so `cargo embed`
+    /// talks to the board as `probe-rs run` does; the firmware's `embed` table
+    /// is merged over the rest, as `cargo embed` itself spells it.
+    pub fn embed_toml(&self, settings: &Settings) -> String {
+        let mut general = toml::Table::new();
+        general.insert("chip".into(), self.chip.probe_rs_chip.clone().into());
+        let mut rtt = toml::Table::new();
+        rtt.insert("enabled".into(), true.into());
+        let mut gdb = toml::Table::new();
+        gdb.insert("enabled".into(), false.into());
+        let mut default = toml::Table::new();
+        default.insert("general".into(), general.into());
+        default.insert("rtt".into(), rtt.into());
+        default.insert("gdb".into(), gdb.into());
+
+        let mut probe = toml::Table::new();
+        if let Some(protocol) = settings.embed_protocol() {
+            probe.insert("protocol".into(), protocol.into());
+        }
+        if let Some(speed) = settings.embed_speed() {
+            probe.insert("speed".into(), i64::from(speed).into());
+        }
+        if !probe.is_empty() {
+            default.insert("probe".into(), probe.into());
+        }
+
+        let mut file = toml::Table::new();
+        file.insert("default".into(), default.into());
+        merge(&mut file, settings.embed());
+        toml::to_string(&file).expect("a table of plain values serializes")
     }
 
     /// The platform crates a firmware for this chip cannot build without, as
@@ -752,7 +779,7 @@ impl Backend {
         let files = [
             (firmware.join("memory.x"), self.memory_x()),
             (cargo_dir.join("config.toml"), self.cargo_config(settings)),
-            (firmware.join("Embed.toml"), self.embed_toml()),
+            (firmware.join("Embed.toml"), self.embed_toml(settings)),
         ];
         let mut written = Vec::new();
         for (path, contents) in files {
@@ -770,6 +797,18 @@ impl Backend {
         written.push(format!("{} (platform dependencies)", manifest.display()));
 
         Ok(written)
+    }
+}
+
+/// Merge `over` into `base`, table by table, `over` winning on a plain value.
+fn merge(base: &mut toml::Table, over: &toml::Table) {
+    for (key, value) in over {
+        match (base.get_mut(key), value) {
+            (Some(toml::Value::Table(base)), toml::Value::Table(over)) => merge(base, over),
+            _ => {
+                base.insert(key.clone(), value.clone());
+            }
+        }
     }
 }
 
@@ -919,7 +958,10 @@ mod derivation {
             second.cargo_config(&settings),
             "the target triple and probe chip both come from the backend"
         );
-        assert_ne!(first.embed_toml(), second.embed_toml());
+        assert_ne!(
+            first.embed_toml(&Settings::default()),
+            second.embed_toml(&Settings::default())
+        );
         assert_ne!(
             first.manifest_platform_block(&settings),
             second.manifest_platform_block(&settings),
@@ -1149,6 +1191,51 @@ mod derivation {
                 .to_string();
             assert!(message.contains("monotonic-timer"), "{feature}: {message}");
         }
+    }
+
+    /// `cargo embed` talks to the probe as `probe-rs run` does, from the same
+    /// `probe-args`, and the firmware's `embed` table fills in the rest.
+    #[test]
+    fn embed_takes_the_probe_from_probe_args_and_the_rest_from_embed() {
+        let backend = Backend::for_chip("stm32f405rg").expect("a shipped backend");
+        let settings = declared(
+            "probe-args = [\"--protocol\", \"swd\", \"--speed=4000\"]\n\
+             [embed.default.rtt]\ntimeout = 7000\nlog_enabled = false\n",
+        );
+        let file: toml::Table = toml::from_str(&backend.embed_toml(&settings)).expect("valid TOML");
+        let default = file["default"].as_table().unwrap();
+        assert_eq!(default["general"]["chip"].as_str(), Some("STM32F405RG"));
+        assert_eq!(default["probe"]["protocol"].as_str(), Some("Swd"));
+        assert_eq!(default["probe"]["speed"].as_integer(), Some(4000));
+        // Merged over the generated values rather than replacing the table.
+        assert_eq!(default["rtt"]["enabled"].as_bool(), Some(true));
+        assert_eq!(default["rtt"]["timeout"].as_integer(), Some(7000));
+        assert_eq!(default["rtt"]["log_enabled"].as_bool(), Some(false));
+
+        let plain: toml::Table =
+            toml::from_str(&backend.embed_toml(&Settings::default())).expect("valid TOML");
+        assert!(
+            plain["default"].get("probe").is_none(),
+            "no probe section unless probe-args names one"
+        );
+    }
+
+    /// What the CLI writes into `Embed.toml` is owned by the setting it comes
+    /// from, in any profile, and a protocol `cargo embed` cannot carry is
+    /// refused before anything is written.
+    #[test]
+    fn embed_refuses_what_other_settings_own() {
+        for (text, owner) in [
+            ("[embed.default.general]\nchip = \"X\"\n", "`chip`"),
+            ("[embed.flash.probe]\nprotocol = \"Swd\"\n", "`--protocol`"),
+            ("[embed.default.probe]\nspeed = 1000\n", "`--speed`"),
+        ] {
+            let message = crate::project::check_settings(text).expect_err(text);
+            assert!(message.contains(owner), "{text}: {message}");
+        }
+        let message = crate::project::check_settings("probe-args = [\"--protocol\", \"spi\"]\n")
+            .expect_err("an unknown protocol");
+        assert!(message.contains("swd` or `jtag"), "{message}");
     }
 
     /// The timer data extends a crate the chip already selects, or its
