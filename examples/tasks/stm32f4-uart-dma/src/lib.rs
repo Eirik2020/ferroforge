@@ -108,116 +108,115 @@ impl Port {
     }
 }
 
-/// The USART's own interrupt. An idle line is the end of a frame on a protocol
-/// with no length field, which is most of them.
-#[ferroforge::task(
-    shared = [port: Port],
-    local = [uart: USART1],
-    spawn = [frame(bytes: usize)],
-)]
-pub fn on_uart(mut cx: on_uart::Context) {
-    let status = cx.local.uart.sr().read();
-
-    // An overrun is not informational: while ORE is set the USART stops setting
-    // RXNE, so it stops requesting DMA, and reception is wedged until this runs.
-    // Clearing it costs the byte that was lost anyway.
-    let failed = status.ore().bit_is_set()
-        || status.nf().bit_is_set()
-        || status.fe().bit_is_set()
-        || status.pe().bit_is_set();
-
-    let idle = status.idle().bit_is_set();
-    if !failed && !idle {
-        return;
-    }
-
-    // On an F4 there is no flag-clear register: reading SR then DR is what
-    // clears IDLE and every error flag, and both reads are required. At IDLE the
-    // line is quiet by definition, so this does not race a byte being received.
-    let _ = cx.local.uart.dr().read();
-
-    let taken = cx.shared.port.lock(|port| {
-        if failed {
-            port.errors = port.errors.wrapping_add(1);
-        }
-        // Whatever arrived before the error is still worth delivering.
-        let head = port.head();
-        port.take(head)
-    });
-    if taken > 0 {
-        let _: Result<(), usize> = cx.spawn.frame(taken);
-    }
-}
-
-/// The receive stream wrapped.
+/// Receiving: the idle-line and wrap handlers, and the parser they feed.
 ///
-/// This deliberately delivers nothing. In circular mode a transfer-complete is
-/// not a frame boundary - it is simply the buffer filling - so delivering here
-/// cuts whatever frame happened to be in flight into two short pieces. On a
-/// protocol with no length field the idle line is the only boundary there is.
-///
-/// What it is good for is noticing that the reader is about to be lapped, which
-/// is the one thing a circular transfer will not tell you by stopping.
-#[ferroforge::task(shared = [port: Port])]
-pub fn on_rx(mut cx: on_rx::Context) {
-    cx.shared.port.lock(|port| {
-        if !port.stream.is_transfer_complete() {
-            // Something else sharing this interrupt raised it.
+/// A group, because these only work as a set. `frame = parse` wires the
+/// idle-line handler to the parser inside the group, so a firmware selecting
+/// it never sees that call.
+#[ferroforge::group(spawn = [frame = parse])]
+pub mod uart_dma_rx {
+    use super::*;
+
+    /// The USART's own interrupt. An idle line is the end of a frame on a protocol
+    /// with no length field, which is most of them.
+    #[ferroforge::task(
+        shared = [port: Port],
+        local = [uart: USART1],
+        spawn = [frame(bytes: usize)],
+    )]
+    pub fn on_uart(mut cx: on_uart::Context) {
+        let status = cx.local.uart.sr().read();
+
+        // An overrun is not informational: while ORE is set the USART stops setting
+        // RXNE, so it stops requesting DMA, and reception is wedged until this runs.
+        // Clearing it costs the byte that was lost anyway.
+        let failed = status.ore().bit_is_set()
+            || status.nf().bit_is_set()
+            || status.fe().bit_is_set()
+            || status.pe().bit_is_set();
+
+        let idle = status.idle().bit_is_set();
+        if !failed && !idle {
             return;
         }
-        // Not optional: an uncleared flag re-enters the handler on return.
-        port.stream.clear_transfer_complete();
 
-        // Unread bytes this close to a full lap are about to be overwritten.
-        let head = port.head();
-        if head.wrapping_sub(port.tail) % RING > RING - MAX_FRAME {
-            port.overruns = port.overruns.wrapping_add(1);
+        // On an F4 there is no flag-clear register: reading SR then DR is what
+        // clears IDLE and every error flag, and both reads are required. At IDLE the
+        // line is quiet by definition, so this does not race a byte being received.
+        let _ = cx.local.uart.dr().read();
+
+        let taken = cx.shared.port.lock(|port| {
+            if failed {
+                port.errors = port.errors.wrapping_add(1);
+            }
+            // Whatever arrived before the error is still worth delivering.
+            let head = port.head();
+            port.take(head)
+        });
+        if taken > 0 {
+            let _: Result<(), usize> = cx.spawn.frame(taken);
         }
-    });
-}
-
-/// The transmit stream drained. Nothing here touches `Port`, so its priority
-/// has no bearing on the others'.
-#[ferroforge::task(local = [stream: Stream7<DMA2>, sent: u32])]
-pub fn on_tx(cx: on_tx::Context) {
-    if !cx.local.stream.is_transfer_complete() {
-        return;
     }
-    cx.local.stream.clear_transfer_complete();
-    *cx.local.sent = cx.local.sent.wrapping_add(1);
+
+    /// The receive stream wrapped.
+    ///
+    /// This deliberately delivers nothing. In circular mode a transfer-complete is
+    /// not a frame boundary - it is simply the buffer filling - so delivering here
+    /// cuts whatever frame happened to be in flight into two short pieces. On a
+    /// protocol with no length field the idle line is the only boundary there is.
+    ///
+    /// What it is good for is noticing that the reader is about to be lapped, which
+    /// is the one thing a circular transfer will not tell you by stopping.
+    #[ferroforge::task(shared = [port: Port])]
+    pub fn on_rx(mut cx: on_rx::Context) {
+        cx.shared.port.lock(|port| {
+            if !port.stream.is_transfer_complete() {
+                // Something else sharing this interrupt raised it.
+                return;
+            }
+            // Not optional: an uncleared flag re-enters the handler on return.
+            port.stream.clear_transfer_complete();
+
+            // Unread bytes this close to a full lap are about to be overwritten.
+            let head = port.head();
+            if head.wrapping_sub(port.tail) % RING > RING - MAX_FRAME {
+                port.overruns = port.overruns.wrapping_add(1);
+            }
+        });
+    }
+
+    /// Off the interrupt, and the only task allowed to be slow. It hands the frame
+    /// on rather than interpreting it: what the bytes mean is the application's.
+    #[ferroforge::task(spawn = [decoded(bytes: usize)])]
+    pub async fn parse(cx: parse::Context, bytes: usize) {
+        let _: Result<(), usize> = cx.spawn.decoded(bytes);
+    }
 }
 
-/// Off the interrupt, and the only task allowed to be slow. It hands the frame
-/// on rather than interpreting it: what the bytes mean is the application's.
-#[ferroforge::task(spawn = [decoded(bytes: usize)])]
-pub async fn parse(cx: parse::Context, bytes: usize) {
-    let _: Result<(), usize> = cx.spawn.decoded(bytes);
+/// Transmitting: the stream-drained handler alone.
+#[ferroforge::group]
+pub mod uart_dma_tx {
+    use super::*;
+
+    /// The transmit stream drained. Nothing here touches `Port`, so its priority
+    /// has no bearing on the others'.
+    #[ferroforge::task(local = [stream: Stream7<DMA2>, sent: u32 = 0])]
+    pub fn on_tx(cx: on_tx::Context) {
+        if !cx.local.stream.is_transfer_complete() {
+            return;
+        }
+        cx.local.stream.clear_transfer_complete();
+        *cx.local.sent = cx.local.sent.wrapping_add(1);
+    }
 }
 
-// The tasks above only work as a set, so they are offered as one. Each member
-// binds its requirements to the group's own names; a firmware binds those once,
-// and gives each member its priority and, for a handler, its interrupt.
-// `frame = parse` names another member, so it is wired inside the group and a
-// firmware selecting both never sees it.
-ferroforge::group! {
-    #[task(shared = [port], local = [uart], spawn = [frame = parse])]
-    fn on_uart();
-
-    #[task(shared = [port])]
-    fn on_rx();
-
-    #[task(local = [stream = tx_stream, sent = tx_sent])]
-    fn on_tx();
-
-    #[task(spawn = [decoded])]
-    async fn parse(bytes: usize);
-
-    /// Receiving: the idle-line and wrap handlers, and the parser they feed.
-    pub group uart_dma_rx = [on_uart, on_rx, parse];
-
-    /// Transmitting: the stream-drained handler alone.
-    pub group uart_dma_tx = [on_tx];
-
-    /// Both directions.
-    pub group uart_dma = [uart_dma_rx, uart_dma_tx];
+/// Both directions: the union of the two groups above.
+#[ferroforge::group]
+pub mod uart_dma {
+    pub use super::uart_dma_rx::*;
+    pub use super::uart_dma_tx::*;
 }
+
+// Each task is still selectable on its own, from where it always was.
+pub use uart_dma_rx::{on_rx, on_uart, parse};
+pub use uart_dma_tx::on_tx;

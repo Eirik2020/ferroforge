@@ -672,11 +672,8 @@ pub fn expand(application: App) -> syn::Result<TokenStream> {
             ));
         }
         groups.push(&group.name);
-        if !definitions
-            .iter()
-            .any(|definition| definition.instance == group.name)
-        {
-            return Ok(crate::group::callback(group, &uses, &original));
+        if let Some(callback) = crate::group::next_callback(group, &definitions, &uses, &original) {
+            return Ok(callback);
         }
     }
 
@@ -686,14 +683,13 @@ pub fn expand(application: App) -> syn::Result<TokenStream> {
             Element::Verbatim(item) => quote!(#item),
             Element::Instance(instance) => render_instance(instance)?,
             Element::Group(group) => {
-                let definition = definitions
-                    .iter()
-                    .find(|definition| definition.instance == group.name)
-                    .expect("every group was defined above");
+                let mine = crate::group::definitions_for(group, &definitions);
+                let (instances, module) = crate::group::instances(group, &mine)?;
                 let mut rendered = TokenStream::new();
-                for instance in crate::group::instances(group, definition)? {
+                for instance in instances {
                     rendered.extend(render_instance(&instance)?);
                 }
+                rendered.extend(module);
                 rendered
             }
             Element::Definition(_) => TokenStream::new(),

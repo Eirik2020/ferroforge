@@ -30,13 +30,15 @@ pub fn app(input: TokenStream) -> TokenStream {
     }
 }
 
-/// Named sets of tasks that only work together, selected by a firmware in one
-/// `#[group(from = ..)] mod name;` declaration inside `app!`. Each set becomes
-/// an exported `macro_rules!` that hands its members to `app!`.
-#[proc_macro]
-pub fn group(input: TokenStream) -> TokenStream {
-    let library = parse_macro_input!(input as group::Library);
-    match group::define(library) {
+/// A module of task definitions that only work together, selected by a
+/// firmware in one `#[group(from = ..)] mod name { .. }` inside `app!`. The
+/// module is left as written; alongside it goes an exported `macro_rules!`
+/// that hands its members to `app!`.
+#[proc_macro_attribute]
+pub fn group(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let arguments = parse_macro_input!(attr as group::GroupArguments);
+    let module = parse_macro_input!(item as syn::ItemMod);
+    match group::define(arguments, module) {
         Ok(output) => output.into(),
         Err(error) => error.to_compile_error().into(),
     }

@@ -1,30 +1,35 @@
 //! Task groups: tasks that only work as a set, selected by one declaration.
 //!
-//! A library states the set once with `ferroforge::group!`: each member's
-//! definition, its signature past the context, and which of the group's names
-//! each of its requirements binds to. A firmware then selects the whole set with
-//! one `#[group(from = ..)] mod name;` inside `app!`, binding the union of the
-//! group's resources once and giving each member its priority and interrupt.
+//! A library marks a module of task definitions `#[ferroforge::group]`, as RTIC
+//! marks its application `#[rtic::app] mod app`. The group reads each task's
+//! signature and requirements from the definitions themselves. A module that
+//! `pub use`s other groups' contents is the union of those groups.
+//!
+//! A firmware selects the whole set with one `#[group(from = ..)] mod name { .. }`
+//! inside `app!`, binding the union of the group's resources once, and declares
+//! each member as RTIC declares a task: `#[task(binds = USART1, priority = 12)]
+//! fn on_uart;`.
 //!
 //! `app!` still reads nothing but its own input. `#[rtic::app]` must see every
 //! task, so the members have to reach `app!` as tokens, and they come through a
-//! callback: `group!` turns each group into a `macro_rules!` holding its
-//! members, and `app!`, finding a group it has no members for, hands the whole
-//! application to that macro, which appends the members and calls `app!` again.
+//! callback: each group is also a `macro_rules!` holding its members, and
+//! `app!`, finding a group it has no members for, hands the whole application
+//! to that macro, which appends the members and calls `app!` again.
 //!
 //! ```text
-//! app! { .. #[group(from = lib::g)] mod x; .. }
-//!   -> lib::g! { x ; .. #[group(from = lib::g)] mod x; .. }
-//!   -> app! { .. #[group(from = lib::g)] mod x; .. @group x { members } }
-//!   -> #[rtic::app] mod app { .. x_member_a .. x_member_b .. }
+//! app! { .. #[group(from = lib::g)] mod x { .. } .. }
+//!   -> lib::g! { x ; .. }
+//!   -> app! { .. @group x from $crate::g { use $crate::rx; members } }
+//!   -> lib::rx! { x ; .. }          (once per group g includes)
+//!   -> #[rtic::app] mod app { .. x_member_a .. x_member_b .. mod x { .. } }
 //! ```
 
+use ferroforge_contracts::TaskArguments;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
 use syn::{
-    Attribute, Ident, ItemUse, LitInt, Path, Signature, Token, UseTree,
+    Attribute, Ident, Item, ItemMod, ItemUse, LitInt, Path, Signature, Token, UseTree,
     parse::{Parse, ParseStream},
-    punctuated::Punctuated,
     spanned::Spanned,
 };
 
@@ -165,130 +170,193 @@ impl Member {
     }
 }
 
-/// `pub group name = [member, other_group, ..];`
-struct GroupDeclaration {
-    docs: Vec<Attribute>,
-    name: Ident,
-    entries: Vec<Ident>,
+/// `#[ferroforge::group(spawn = [frame = parse])]`: which of the members'
+/// outgoing calls the group wires to another member. Every other call is left
+/// for the firmware to bind.
+pub struct GroupArguments {
+    spawn: Vec<Rebind>,
 }
 
-/// Everything one `group!` holds: members stated once, then any number of
-/// named sets of them. A set may name an earlier set, so `uart_dma` can be
-/// `[uart_dma_rx, uart_dma_tx]` without restating either.
-pub struct Library {
-    members: Vec<Member>,
-    groups: Vec<GroupDeclaration>,
-}
-
-impl Parse for Library {
+impl Parse for GroupArguments {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let mut members = Vec::new();
-        let mut groups = Vec::new();
+        let mut spawn = Vec::new();
         while !input.is_empty() {
-            let fork = input.fork();
-            fork.call(Attribute::parse_outer)?;
-            fork.parse::<syn::Visibility>()?;
-            let is_group = fork.peek(Ident) && fork.parse::<Ident>()? == "group";
-            if !is_group {
-                members.push(input.parse()?);
-                continue;
-            }
-            let docs = input.call(Attribute::parse_outer)?;
-            input.parse::<syn::Visibility>()?;
-            input.parse::<Ident>()?;
-            let name = input.parse()?;
+            let key: Ident = input.parse()?;
             input.parse::<Token![=]>()?;
-            let content;
-            syn::bracketed!(content in input);
-            let entries = Punctuated::<Ident, Token![,]>::parse_terminated(&content)?
-                .into_iter()
-                .collect();
-            input.parse::<Token![;]>()?;
-            groups.push(GroupDeclaration {
-                docs,
-                name,
-                entries,
-            });
-        }
-        Ok(Self { members, groups })
-    }
-}
-
-/// `group!`: one exported `macro_rules!` per group, holding its members.
-pub fn define(library: Library) -> syn::Result<TokenStream> {
-    let Library { members, groups } = library;
-    let mut resolved: Vec<(&Ident, Vec<&Member>)> = Vec::new();
-    let mut output = TokenStream::new();
-
-    for group in &groups {
-        let mut chosen: Vec<&Member> = Vec::new();
-        for entry in &group.entries {
-            let found = if let Some(member) = members.iter().find(|m| m.name() == entry) {
-                vec![member]
-            } else if let Some((_, set)) = resolved.iter().find(|(name, _)| *name == entry) {
-                set.clone()
-            } else {
-                return Err(syn::Error::new(
-                    entry.span(),
-                    format!("`{entry}` is neither a member nor an earlier group here"),
-                ));
-            };
-            for member in found {
-                if chosen.iter().any(|m| m.name() == member.name()) {
+            match key.to_string().as_str() {
+                "spawn" => spawn = bracketed_list(input)?,
+                other => {
                     return Err(syn::Error::new(
-                        entry.span(),
-                        format!("`{}` is in this group twice", member.name()),
-                    ));
-                }
-                chosen.push(member);
-            }
-        }
-
-        // An RTIC local belongs to one task. Two members binding one group
-        // local would compile here and fail inside RTIC; say so where the
-        // group is written instead.
-        for (index, member) in chosen.iter().enumerate() {
-            for local in &member.local {
-                if let Some(other) = chosen[index + 1..]
-                    .iter()
-                    .find(|other| other.local.iter().any(|l| l.target == local.target))
-                {
-                    return Err(syn::Error::new(
-                        group.name.span(),
+                        key.span(),
                         format!(
-                            "`{}` and `{}` both bind local `{}`; a local belongs to one \
-                             task, so share it instead",
-                            member.name(),
-                            other.name(),
-                            local.target
+                            "unknown group argument `{other}`; a group wires `spawn` \
+                             between its members, and the firmware sets the rest"
                         ),
                     ));
                 }
             }
-        }
-
-        let (docs, name) = (&group.docs, &group.name);
-        let emitted = chosen.iter().map(|member| member.emit());
-        output.extend(quote! {
-            #(#docs)*
-            #[macro_export]
-            macro_rules! #name {
-                ($instance:ident ; $($application:tt)*) => {
-                    ::ferroforge::app! {
-                        $($application)*
-                        @group $instance { #(#emitted)* }
-                    }
-                };
+            if !input.is_empty() {
+                input.parse::<Token![,]>()?;
             }
-        });
-        resolved.push((name, chosen));
+        }
+        Ok(Self { spawn })
     }
-    Ok(output)
+}
+
+/// `#[ferroforge::group]`: the module unchanged, plus an exported
+/// `macro_rules!` of the same name holding its members.
+///
+/// The members are read from the definitions, so nothing is restated. A
+/// definition's own locals, `sent: u32 = 0`, stay the definition's; only the
+/// ones without a value are left for the firmware to bind. A `pub use` glob of
+/// another group module, `pub use super::uart_dma_rx::*;`, includes that group.
+pub fn define(arguments: GroupArguments, module: ItemMod) -> syn::Result<TokenStream> {
+    let Some((_, items)) = &module.content else {
+        return Err(syn::Error::new(
+            module.span(),
+            "a group is an inline module holding its task definitions",
+        ));
+    };
+    let name = &module.ident;
+
+    let mut members: Vec<Member> = Vec::new();
+    let mut includes: Vec<Ident> = Vec::new();
+    for item in items {
+        match item {
+            Item::Fn(function) => {
+                let Some(attribute) = function.attrs.iter().find(|attribute| {
+                    attribute
+                        .path()
+                        .segments
+                        .last()
+                        .is_some_and(|segment| segment.ident == "task")
+                }) else {
+                    continue;
+                };
+                let task: TaskArguments = attribute.parse_args()?;
+                let mut signature = function.sig.clone();
+                // The context is the adapter's to supply.
+                signature.inputs = signature.inputs.into_iter().skip(1).collect();
+                let bare = |names: Vec<&Ident>| {
+                    names
+                        .into_iter()
+                        .map(|name| Rebind {
+                            requirement: name.clone(),
+                            target: name.clone(),
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let fn_name = &function.sig.ident;
+                members.push(Member {
+                    docs: Vec::new(),
+                    from: Some(syn::parse_quote!(#name::#fn_name)),
+                    shared: bare(task.shared.iter().map(|r| &r.name).collect()),
+                    local: bare(
+                        task.local
+                            .iter()
+                            .filter(|r| r.init.is_none())
+                            .map(|r| &r.name)
+                            .collect(),
+                    ),
+                    spawn: task
+                        .spawn
+                        .iter()
+                        .map(|call| Rebind {
+                            requirement: call.name.clone(),
+                            target: arguments
+                                .spawn
+                                .iter()
+                                .find(|wire| wire.requirement == call.name)
+                                .map_or_else(|| call.name.clone(), |wire| wire.target.clone()),
+                        })
+                        .collect(),
+                    config: bare(task.config.iter().map(|r| &r.name).collect()),
+                    signature,
+                });
+            }
+            // Only a `pub use` re-exports another group's tasks as this
+            // group's; a private `use super::*;` is an ordinary import.
+            Item::Use(item) if matches!(item.vis, syn::Visibility::Public(_)) => {
+                if let Some(group) = glob_source(&item.tree) {
+                    includes.push(group);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    for wire in &arguments.spawn {
+        if !members.iter().any(|m| m.name() == &wire.target) {
+            return Err(syn::Error::new(
+                wire.target.span(),
+                format!("`{}` is not a task in this group", wire.target),
+            ));
+        }
+    }
+
+    // A local belongs to one task. Two members of one group needing a local
+    // of the same name would be bound to one firmware resource, which RTIC
+    // refuses; say so where the group is written instead.
+    for (index, member) in members.iter().enumerate() {
+        for local in &member.local {
+            if let Some(other) = members[index + 1..]
+                .iter()
+                .find(|other| other.local.iter().any(|l| l.target == local.target))
+            {
+                return Err(syn::Error::new(
+                    name.span(),
+                    format!(
+                        "`{}` and `{}` both need a local called `{}`; rename one, \
+                         because a local belongs to one task",
+                        member.name(),
+                        other.name(),
+                        local.target
+                    ),
+                ));
+            }
+        }
+    }
+
+    let emitted = members.iter().map(Member::emit);
+    Ok(quote! {
+        #module
+
+        #[doc(hidden)]
+        #[macro_export]
+        macro_rules! #name {
+            ($instance:ident ; $($application:tt)*) => {
+                ::ferroforge::app! {
+                    $($application)*
+                    @group $instance from $crate::#name {
+                        #(use $crate::#includes;)*
+                        #(#emitted)*
+                    }
+                }
+            };
+        }
+    })
+}
+
+/// `use super::uart_dma_rx::*;` names the group `uart_dma_rx`.
+fn glob_source(tree: &UseTree) -> Option<Ident> {
+    match tree {
+        UseTree::Path(path) => match path.tree.as_ref() {
+            UseTree::Glob(_) if !["self", "super", "crate"].contains(&&*path.ident.to_string()) => {
+                Some(path.ident.clone())
+            }
+            inner => glob_source(inner),
+        },
+        _ => None,
+    }
 }
 
 /// What a group's macro appended: `@group <selection> { members }`.
 pub(crate) struct GroupDefinition {
     pub(crate) instance: Ident,
+    /// The group this came from, so a selection knows which it has.
+    from: Path,
+    /// Further groups this one is the union with, still to be asked.
+    includes: Vec<Path>,
     members: Vec<Member>,
 }
 
@@ -300,18 +368,39 @@ impl Parse for GroupDefinition {
             return Err(syn::Error::new(keyword.span(), "expected `@group`"));
         }
         let instance = input.parse()?;
+        let keyword: Ident = input.parse()?;
+        if keyword != "from" {
+            return Err(syn::Error::new(keyword.span(), "expected `from`"));
+        }
+        let from = input.parse()?;
         let content;
         syn::braced!(content in input);
+        let mut includes = Vec::new();
+        while content.peek(Token![use]) {
+            content.parse::<Token![use]>()?;
+            includes.push(content.parse()?);
+            content.parse::<Token![;]>()?;
+        }
         let mut members = Vec::new();
         while !content.is_empty() {
             members.push(content.parse()?);
         }
-        Ok(Self { instance, members })
+        Ok(Self {
+            instance,
+            from,
+            includes,
+            members,
+        })
     }
 }
 
-/// One member's firmware-side settings: `on_uart(binds = USART1, priority = 12)`.
+/// One member as the firmware declares it, the way RTIC declares a task:
+/// `#[task(binds = USART1, priority = 12)] fn on_uart;`. The signature is the
+/// definition's, so it is not restated; `async` is, so the line reads as the
+/// kind of task it is, and it is checked against the definition.
 struct TaskSettings {
+    attributes: Vec<Attribute>,
+    asyncness: Option<Token![async]>,
     member: Ident,
     priority: Option<LitInt>,
     binds: Option<Path>,
@@ -319,33 +408,47 @@ struct TaskSettings {
 
 impl Parse for TaskSettings {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let all = input.call(Attribute::parse_outer)?;
+        let asyncness = input.parse()?;
+        input.parse::<Token![fn]>()?;
         let member = input.parse()?;
+        input.parse::<Token![;]>()?;
         let mut settings = Self {
+            attributes: Vec::new(),
+            asyncness,
             member,
             priority: None,
             binds: None,
         };
-        if !input.peek(syn::token::Paren) {
-            return Ok(settings);
-        }
-        let content;
-        syn::parenthesized!(content in input);
-        while !content.is_empty() {
-            let key: Ident = content.parse()?;
-            content.parse::<Token![=]>()?;
-            match key.to_string().as_str() {
-                "priority" => settings.priority = Some(content.parse()?),
-                "binds" => settings.binds = Some(content.parse()?),
-                other => {
-                    return Err(syn::Error::new(
-                        key.span(),
-                        format!("unknown option `{other}`; a member takes `priority` and `binds`"),
-                    ));
+        for attribute in all {
+            if !attribute.path().is_ident("task") {
+                settings.attributes.push(attribute);
+                continue;
+            }
+            attribute.parse_args_with(|content: ParseStream<'_>| {
+                while !content.is_empty() {
+                    let key: Ident = content.parse()?;
+                    content.parse::<Token![=]>()?;
+                    match key.to_string().as_str() {
+                        "priority" => settings.priority = Some(content.parse()?),
+                        "binds" => settings.binds = Some(content.parse()?),
+                        other => {
+                            return Err(syn::Error::new(
+                                key.span(),
+                                format!(
+                                    "unknown option `{other}`; a group member takes \
+                                     `priority` and `binds`, and its resources are \
+                                     bound once on the group"
+                                ),
+                            ));
+                        }
+                    }
+                    if !content.is_empty() {
+                        content.parse::<Token![,]>()?;
+                    }
                 }
-            }
-            if !content.is_empty() {
-                content.parse::<Token![,]>()?;
-            }
+                Ok(())
+            })?;
         }
         Ok(settings)
     }
@@ -357,11 +460,15 @@ impl Parse for TaskSettings {
 /// #[group(
 ///     from = uart_dma::uart_dma,
 ///     shared = [port = uart],
-///     local = [uart = usart, tx_stream, tx_sent: u32 = 0],
+///     local = [uart = usart, stream = tx_stream],
 ///     spawn = [decoded = sbus],
-///     tasks = [on_uart(binds = USART1, priority = 12), parse(priority = 1)],
 /// )]
-/// mod sbus_link;
+/// mod sbus_link {
+///     #[task(binds = USART1, priority = 12)]
+///     fn on_uart;
+///     #[task(priority = 1)]
+///     async fn parse;
+/// }
 /// ```
 pub(crate) struct GroupInstance {
     pub(crate) name: Ident,
@@ -390,7 +497,6 @@ impl GroupInstance {
         let mut local = Vec::new();
         let mut spawn = Vec::new();
         let mut config = Vec::new();
-        let mut tasks = Vec::new();
         group.parse_args_with(|input: ParseStream<'_>| {
             let mut seen: Vec<String> = Vec::new();
             while !input.is_empty() {
@@ -409,7 +515,6 @@ impl GroupInstance {
                     "local" => local = bracketed_list(input)?,
                     "spawn" => spawn = bracketed_list(input)?,
                     "config" => config = bracketed_list(input)?,
-                    "tasks" => tasks = bracketed_list(input)?,
                     other => {
                         return Err(syn::Error::new(
                             key.span(),
@@ -428,7 +533,12 @@ impl GroupInstance {
 
         input.parse::<Token![mod]>()?;
         let name = input.parse()?;
-        input.parse::<Token![;]>()?;
+        let content;
+        syn::braced!(content in input);
+        let mut tasks = Vec::new();
+        while !content.is_empty() {
+            tasks.push(content.parse()?);
+        }
         Ok(Self {
             name,
             from,
@@ -488,15 +598,48 @@ fn resolve_alias(path: &Path, uses: &[&ItemUse]) -> Path {
     path.clone()
 }
 
-/// Hand the whole application to the group's own macro.
-pub(crate) fn callback(
+fn last(path: &Path) -> String {
+    path.segments
+        .last()
+        .map(|segment| segment.ident.to_string())
+        .unwrap_or_default()
+}
+
+/// This selection's definitions so far.
+pub(crate) fn definitions_for<'a>(
     group: &GroupInstance,
+    definitions: &[&'a GroupDefinition],
+) -> Vec<&'a GroupDefinition> {
+    definitions
+        .iter()
+        .filter(|definition| definition.instance == group.name)
+        .copied()
+        .collect()
+}
+
+/// The next group this selection still needs members from, handed the whole
+/// application; `None` once every group it names or includes has answered.
+///
+/// Groups are told apart by name: a `$crate` path cannot be compared with the
+/// firmware's own spelling of the same crate.
+pub(crate) fn next_callback(
+    group: &GroupInstance,
+    definitions: &[&GroupDefinition],
     uses: &[&ItemUse],
     original: &TokenStream,
-) -> TokenStream {
-    let from = resolve_alias(&group.from, uses);
+) -> Option<TokenStream> {
+    let mine = definitions_for(group, definitions);
+    let answered = |path: &Path| mine.iter().any(|d| last(&d.from) == last(path));
     let name = &group.name;
-    quote!(#from! { #name ; #original })
+    if !answered(&group.from) {
+        let from = resolve_alias(&group.from, uses);
+        return Some(quote!(#from! { #name ; #original }));
+    }
+    let include = mine
+        .iter()
+        .flat_map(|definition| &definition.includes)
+        .find(|include| !answered(include))?;
+    Some(quote!(#include! { #name ; #original }))
 }
 
 fn unique<'a>(names: impl Iterator<Item = &'a Ident>) -> Vec<&'a Ident> {
@@ -567,10 +710,17 @@ fn check_bindings(
 /// requirement bound through the group's namespace to the firmware's resource.
 pub(crate) fn instances(
     group: &GroupInstance,
-    definition: &GroupDefinition,
-) -> syn::Result<Vec<Instance>> {
-    let members = &definition.members;
-    let names = members.iter().map(Member::name).collect::<Vec<_>>();
+    definitions: &[&GroupDefinition],
+) -> syn::Result<(Vec<Instance>, TokenStream)> {
+    // A member reached through two includes is still one member.
+    let mut members: Vec<&Member> = Vec::new();
+    for member in definitions.iter().flat_map(|d| &d.members) {
+        if !members.iter().any(|m| m.name() == member.name()) {
+            members.push(member);
+        }
+    }
+    let members = &members;
+    let names = members.iter().map(|m| m.name()).collect::<Vec<_>>();
 
     let needed_shared = unique(members.iter().flat_map(|m| &m.shared).map(|r| &r.target));
     let needed_local = unique(members.iter().flat_map(|m| &m.local).map(|r| &r.target));
@@ -635,19 +785,34 @@ pub(crate) fn instances(
                 syn::Error::new(
                     group.from.span(),
                     format!(
-                        "this group's `{name}` has no settings: add `{name}({}priority = ..)` \
-                         to `tasks = [..]`",
+                        "this group's `{name}` is not declared: add `{}` to the module",
                         match member.signature.asyncness {
-                            None => "binds = <interrupt>, ",
-                            Some(_) => "",
+                            None =>
+                                format!("#[task(binds = <interrupt>, priority = ..)] fn {name};"),
+                            Some(_) => format!("#[task(priority = ..)] async fn {name};"),
                         }
                     ),
                 )
             })?;
+        match (&member.signature.asyncness, &settings.asyncness) {
+            (Some(_), None) => {
+                return Err(syn::Error::new(
+                    settings.member.span(),
+                    format!("`{name}` is a software task: declare it `async fn {name};`"),
+                ));
+            }
+            (None, Some(asyncness)) => {
+                return Err(syn::Error::new(
+                    asyncness.span,
+                    format!("`{name}` is a hardware task: declare it `fn {name};`"),
+                ));
+            }
+            _ => {}
+        }
         if member.signature.asyncness.is_none() && settings.binds.is_none() {
             return Err(syn::Error::new(
                 settings.member.span(),
-                format!("`{name}` is a hardware task; bind it: `{name}(binds = <interrupt>, ..)`"),
+                format!("`{name}` is a hardware task; bind it: `#[task(binds = <interrupt>, ..)]`"),
             ));
         }
 
@@ -730,11 +895,33 @@ pub(crate) fn instances(
                 config,
                 spawn,
             },
-            attributes: group.attributes.clone(),
+            attributes: group
+                .attributes
+                .iter()
+                .chain(&settings.attributes)
+                .cloned()
+                .collect(),
             signature,
         });
     }
-    Ok(instances)
+
+    // The selection is a real module, so a member is named as it was declared:
+    // `sbus_link::parse::spawn(..)`, as RTIC names any task.
+    let cfgs = group
+        .attributes
+        .iter()
+        .filter(|attribute| attribute.path().is_ident("cfg"));
+    let aliases = members.iter().map(|member| {
+        let (member, task) = (member.name(), rename(member.name()));
+        quote!(pub use super::#task as #member;)
+    });
+    let module = quote! {
+        #(#cfgs)*
+        pub mod #prefix {
+            #(#aliases)*
+        }
+    };
+    Ok((instances, module))
 }
 
 #[cfg(test)]
@@ -742,103 +929,140 @@ mod tests {
     use super::*;
     use crate::app::{App, expand};
 
-    const LIBRARY: &str = "
-        #[task(shared = [port], local = [uart], spawn = [frame = parse])] fn on_uart();
-        #[task(local = [stream = tx_stream])] fn on_tx();
-        #[task(spawn = [decoded])] async fn parse(bytes: usize);
-        pub group rx = [on_uart, parse];
-        pub group both = [rx, on_tx];
-    ";
-
-    fn defined(source: &str) -> syn::Result<String> {
-        define(syn::parse_str(source)?).map(|output| output.to_string())
+    fn defined(arguments: &str, module: &str) -> syn::Result<String> {
+        define(syn::parse_str(arguments)?, syn::parse_str(module)?).map(|o| o.to_string())
     }
 
-    /// The members as `both`'s macro would append them.
-    const BOTH: &str = "@group link {
-        #[task(from = lib::on_uart, shared = [port = port], local = [uart = uart],
-               spawn = [frame = parse])] fn on_uart();
-        #[task(from = lib::parse, spawn = [decoded = decoded])] async fn parse(bytes: usize);
-        #[task(from = lib::on_tx, local = [stream = tx_stream])] fn on_tx();
+    const RX: &str = "pub mod rx {
+        use super::*;
+        #[ferroforge::task(shared = [port: Port], local = [uart: Uart], spawn = [frame(n: usize)])]
+        pub fn on_uart(cx: on_uart::Context) {}
+        #[ferroforge::task(spawn = [decoded(n: usize)])]
+        pub async fn parse(cx: parse::Context, n: usize) {}
     }";
 
-    fn application(selection: &str, definition: &str) -> syn::Result<String> {
-        let source = format!("device = chip::pac, use my_lib as lib;\n{selection}\n{definition}");
+    /// What `both`'s macro appends, and what `rx`'s appends after it.
+    const BOTH: &str = "@group link from lib::both { use lib::rx; use lib::tx; }
+        @group link from lib::rx {
+            #[task(from = lib::rx::on_uart, shared = [port = port], local = [uart = uart],
+                   spawn = [frame = parse], config = [])] fn on_uart();
+            #[task(from = lib::rx::parse, shared = [], local = [], spawn = [decoded = decoded],
+                   config = [])] async fn parse(n: usize);
+        }";
+    const TX: &str = "@group link from lib::tx {
+        #[task(from = lib::tx::on_tx, shared = [], local = [stream = stream], spawn = [],
+               config = [])] fn on_tx();
+    }";
+
+    const SELECTION: &str = "#[group(from = lib::both, shared = [port = uart],
+            local = [uart = usart, stream = tx_stream], spawn = [decoded = sbus])]
+        mod link {
+            #[task(binds = USART1, priority = 3)] fn on_uart;
+            #[task(binds = DMA1, priority = 2)] fn on_tx;
+            #[task(priority = 1)] async fn parse;
+        }";
+
+    fn application(selection: &str, definitions: &str) -> syn::Result<String> {
+        let source = format!("device = chip::pac, use my_lib as lib;\n{selection}\n{definitions}");
         expand(syn::parse_str::<App>(&source)?).map(|output| output.to_string())
     }
 
-    const SELECTION: &str = "#[group(from = lib::both, shared = [port = uart],
-        local = [uart = usart, tx_stream: u32 = 0], spawn = [decoded = sbus],
-        tasks = [on_uart(binds = USART1, priority = 3), on_tx(binds = DMA1, priority = 2),
-                 parse(priority = 1)])] mod link;";
-
     #[test]
-    fn each_group_is_an_exported_macro_holding_its_members() {
-        let output = defined(LIBRARY).unwrap();
+    fn a_group_reads_its_members_from_the_definitions() {
+        let output = defined("spawn = [frame = parse]", RX).unwrap();
+        assert!(output.contains("pub mod rx"), "the module stays: {output}");
         assert!(output.contains("macro_rules ! rx"), "{output}");
-        assert!(output.contains("macro_rules ! both"), "{output}");
-        assert_eq!(output.matches("# [macro_export]").count(), 2, "{output}");
-        // `both` names `rx`, so it holds rx's members and its own.
-        let both = &output[output.find("macro_rules ! both").unwrap()..];
-        for member in ["fn on_uart", "fn parse", "fn on_tx"] {
-            assert!(both.contains(member), "{member}: {both}");
-        }
-        assert!(both.contains("from = $ crate :: on_tx"), "{both}");
+        assert!(
+            output.contains("from = $ crate :: rx :: on_uart"),
+            "{output}"
+        );
+        assert!(output.contains("frame = parse"), "wired inside: {output}");
+        assert!(output.contains("decoded = decoded"), "left open: {output}");
+        // The context is the adapter's; only the task's own inputs are carried.
+        assert!(output.contains("async fn parse (n : usize) ;"), "{output}");
+        // `use super::*;` is an import, not an included group.
+        assert!(!output.contains("use $ crate :: super"), "{output}");
     }
 
     #[test]
-    fn two_members_cannot_share_a_local() {
+    fn a_definitions_own_locals_are_not_the_firmwares_to_bind() {
+        let output = defined(
+            "",
+            "pub mod tx { #[ferroforge::task(local = [stream: S, sent: u32 = 0])] \
+             pub fn on_tx(cx: on_tx::Context) {} }",
+        )
+        .unwrap();
+        assert!(output.contains("local = [stream = stream]"), "{output}");
+    }
+
+    #[test]
+    fn a_pub_use_glob_includes_another_group() {
+        let output = defined(
+            "",
+            "pub mod both { pub use super::rx::*; pub use super::tx::*; }",
+        )
+        .unwrap();
+        assert!(output.contains("use $ crate :: rx ;"), "{output}");
+        assert!(output.contains("use $ crate :: tx ;"), "{output}");
+    }
+
+    #[test]
+    fn two_members_cannot_need_one_local() {
         let error = defined(
-            "#[task(local = [uart])] fn a(); #[task(local = [uart])] fn b(); group g = [a, b];",
+            "",
+            "pub mod g { #[ferroforge::task(local = [uart: U])] pub fn a(cx: a::Context) {} \
+             #[ferroforge::task(local = [uart: U])] pub fn b(cx: b::Context) {} }",
         )
         .unwrap_err()
         .to_string();
-        assert!(error.contains("both bind local `uart`"), "{error}");
+        assert!(error.contains("both need a local called `uart`"), "{error}");
     }
 
     #[test]
-    fn an_undefined_selection_hands_the_application_to_its_group() {
+    fn a_selection_asks_each_group_it_names_or_includes_in_turn() {
         let output = application(SELECTION, "").unwrap();
         assert!(output.starts_with("my_lib :: both ! { link ;"), "{output}");
-        assert!(output.contains("mod link ;"), "{output}");
+        let output = application(SELECTION, BOTH).unwrap();
+        assert!(output.starts_with("lib :: tx ! { link ;"), "{output}");
     }
 
     #[test]
-    fn a_defined_selection_becomes_one_instance_per_member() {
-        let output = application(SELECTION, BOTH).unwrap();
+    fn a_complete_selection_becomes_one_instance_per_member() {
+        let output = application(SELECTION, &format!("{BOTH} {TX}")).unwrap();
         for task in ["fn link_on_uart", "async fn link_parse", "fn link_on_tx"] {
             assert!(output.contains(task), "{task}: {output}");
         }
-        // Wired inside the group, and to the firmware's own task outside it.
         assert!(output.contains("frame : link_parse :: spawn"), "{output}");
         assert!(output.contains("decoded : sbus :: spawn"), "{output}");
-        // The group's names reach the firmware's resources.
         assert!(output.contains("port : cx . shared . uart"), "{output}");
-        assert!(output.contains("uart : cx . local . usart"), "{output}");
-        assert!(output.contains("tx_stream : u32 = 0"), "{output}");
         assert!(
             output.contains("stream : cx . local . tx_stream"),
             "{output}"
         );
         assert!(output.contains("binds = USART1 , priority = 3"), "{output}");
+        // Each member is reachable by the name it was declared with.
+        assert!(
+            output.contains("pub mod link { pub use super :: link_on_uart as on_uart ;"),
+            "{output}"
+        );
     }
 
     #[test]
     fn every_group_name_is_bound_once() {
         for (from, to, message) in [
-            ("spawn = [decoded = sbus],", "", "needs spawn `decoded`"),
+            ("spawn = [decoded = sbus]", "", "needs spawn `decoded`"),
             (
-                "shared = [port = uart],",
-                "shared = [port = uart, extra],",
+                "shared = [port = uart]",
+                "shared = [port = uart, extra]",
                 "`extra` is not a shared name",
             ),
             (
-                "shared = [port = uart],",
-                "shared = [port = uart, port = b],",
+                "shared = [port = uart]",
+                "shared = [port = uart, port = b]",
                 "bound twice",
             ),
         ] {
-            let error = application(&SELECTION.replace(from, to), BOTH)
+            let error = application(&SELECTION.replace(from, to), &format!("{BOTH} {TX}"))
                 .unwrap_err()
                 .to_string();
             assert!(error.contains(message), "{to}: {error}");
@@ -846,25 +1070,31 @@ mod tests {
     }
 
     #[test]
-    fn every_member_is_given_its_settings() {
+    fn every_member_is_declared_as_the_task_it_is() {
         for (from, to, message) in [
             (
-                "on_tx(binds = DMA1, priority = 2),",
+                "#[task(binds = DMA1, priority = 2)] fn on_tx;",
                 "",
-                "`on_tx` has no settings",
+                "`on_tx` is not declared",
             ),
             (
-                "on_tx(binds = DMA1, priority = 2)",
-                "on_tx(priority = 2)",
-                "is a hardware task",
+                "binds = DMA1, priority = 2",
+                "priority = 2",
+                "is a hardware task; bind it",
             ),
             (
-                "parse(priority = 1)",
-                "parse(priority = 1), idle",
+                "async fn parse;",
+                "fn parse;",
+                "declare it `async fn parse;`",
+            ),
+            ("fn on_tx;", "async fn on_tx;", "declare it `fn on_tx;`"),
+            (
+                "async fn parse;",
+                "async fn parse; fn idle;",
                 "not a task of this group",
             ),
         ] {
-            let error = application(&SELECTION.replace(from, to), BOTH)
+            let error = application(&SELECTION.replace(from, to), &format!("{BOTH} {TX}"))
                 .unwrap_err()
                 .to_string();
             assert!(error.contains(message), "{to}: {error}");

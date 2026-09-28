@@ -261,24 +261,30 @@ ferroforge::app! {
 
     // The DMA UART's four tasks, selected as the set they are. The library
     // wires `on_uart` to `parse` itself; this binds the group's resources once
-    // and sets each member's priority. The two receive handlers share one
-    // priority because both lock `uart`, and the parser sits below them; the
-    // library's documentation says why, and nothing checks it.
+    // and declares each member as RTIC declares a task. The two receive
+    // handlers share one priority because both lock `uart`, and the parser sits
+    // below them; the library's documentation says why, and nothing checks it.
     #[group(
         from = uart_dma::uart_dma,
         shared = [port = uart],
-        local = [uart = usart, tx_stream, tx_sent: u32 = 0],
+        local = [uart = usart, stream = tx_stream],
         spawn = [decoded = sbus],
-        tasks = [
-            on_uart(binds = USART1, priority = 12),
-            // No spawn: a wrap is not a frame, so this one only watches for
-            // the reader being lapped.
-            on_rx(binds = DMA2_STREAM2, priority = 12),
-            on_tx(binds = DMA2_STREAM7, priority = 4),
-            parse(priority = 1),
-        ],
     )]
-    mod sbus_link;
+    mod sbus_link {
+        #[task(binds = USART1, priority = 12)]
+        fn on_uart;
+
+        // No spawn: a wrap is not a frame, so this one only watches for the
+        // reader being lapped.
+        #[task(binds = DMA2_STREAM2, priority = 12)]
+        fn on_rx;
+
+        #[task(binds = DMA2_STREAM7, priority = 4)]
+        fn on_tx;
+
+        #[task(priority = 1)]
+        async fn parse;
+    }
 
     // The OSD: one portable definition, this firmware's clock, this firmware's
     // serial port. Ten refreshes a second is fast enough that a stick looks
