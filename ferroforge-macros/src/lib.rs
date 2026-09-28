@@ -11,6 +11,7 @@
 //! ordinary compile error at the authored line.
 
 mod app;
+mod group;
 mod task;
 
 use ferroforge_contracts::{TaskArguments, TaskContract};
@@ -24,6 +25,18 @@ use syn::{ItemFn, parse_macro_input};
 pub fn app(input: TokenStream) -> TokenStream {
     let application = parse_macro_input!(input as app::App);
     match app::expand(application) {
+        Ok(output) => output.into(),
+        Err(error) => error.to_compile_error().into(),
+    }
+}
+
+/// Named sets of tasks that only work together, selected by a firmware in one
+/// `#[group(from = ..)] mod name;` declaration inside `app!`. Each set becomes
+/// an exported `macro_rules!` that hands its members to `app!`.
+#[proc_macro]
+pub fn group(input: TokenStream) -> TokenStream {
+    let library = parse_macro_input!(input as group::Library);
+    match group::define(library) {
         Ok(output) => output.into(),
         Err(error) => error.to_compile_error().into(),
     }

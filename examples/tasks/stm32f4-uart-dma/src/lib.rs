@@ -193,3 +193,31 @@ pub fn on_tx(cx: on_tx::Context) {
 pub async fn parse(cx: parse::Context, bytes: usize) {
     let _: Result<(), usize> = cx.spawn.decoded(bytes);
 }
+
+// The tasks above only work as a set, so they are offered as one. Each member
+// binds its requirements to the group's own names; a firmware binds those once,
+// and gives each member its priority and, for a handler, its interrupt.
+// `frame = parse` names another member, so it is wired inside the group and a
+// firmware selecting both never sees it.
+ferroforge::group! {
+    #[task(shared = [port], local = [uart], spawn = [frame = parse])]
+    fn on_uart();
+
+    #[task(shared = [port])]
+    fn on_rx();
+
+    #[task(local = [stream = tx_stream, sent = tx_sent])]
+    fn on_tx();
+
+    #[task(spawn = [decoded])]
+    async fn parse(bytes: usize);
+
+    /// Receiving: the idle-line and wrap handlers, and the parser they feed.
+    pub group uart_dma_rx = [on_uart, on_rx, parse];
+
+    /// Transmitting: the stream-drained handler alone.
+    pub group uart_dma_tx = [on_tx];
+
+    /// Both directions.
+    pub group uart_dma = [uart_dma_rx, uart_dma_tx];
+}

@@ -83,7 +83,6 @@ ferroforge::app! {
         // touches.
         usart: stm32f4xx_hal::pac::USART1,
         tx_stream: Stream7<DMA2>,
-        tx_sent: u32,
         sbus_channels: [u16; 16],
     }
 
@@ -217,7 +216,6 @@ ferroforge::app! {
                 pulse_count: 0,
                 usart,
                 tx_stream: streams.7,
-                tx_sent: 0,
                 sbus_channels: [0; 16],
             },
         )
@@ -261,34 +259,26 @@ ferroforge::app! {
     )]
     fn pulse(cx: pulse::Context);
 
-    // The DMA UART's four tasks. The two receive handlers share one priority
-    // because both lock `uart`, and the parser sits below them; the library's
-    // documentation says why, and nothing checks it.
-    #[task(
-        from = uart_dma::on_uart,
-        binds = USART1,
-        priority = 12,
+    // The DMA UART's four tasks, selected as the set they are. The library
+    // wires `on_uart` to `parse` itself; this binds the group's resources once
+    // and sets each member's priority. The two receive handlers share one
+    // priority because both lock `uart`, and the parser sits below them; the
+    // library's documentation says why, and nothing checks it.
+    #[group(
+        from = uart_dma::uart_dma,
         shared = [port = uart],
-        local = [uart = usart],
-        spawn = [frame = parse_frame],
+        local = [uart = usart, tx_stream, tx_sent: u32 = 0],
+        spawn = [decoded = sbus],
+        tasks = [
+            on_uart(binds = USART1, priority = 12),
+            // No spawn: a wrap is not a frame, so this one only watches for
+            // the reader being lapped.
+            on_rx(binds = DMA2_STREAM2, priority = 12),
+            on_tx(binds = DMA2_STREAM7, priority = 4),
+            parse(priority = 1),
+        ],
     )]
-    fn uart_irq(cx: uart_irq::Context);
-
-    // No spawn: a wrap is not a frame, so this one only watches for the
-    // reader being lapped.
-    #[task(from = uart_dma::on_rx, binds = DMA2_STREAM2, priority = 12, shared = [port = uart])]
-    fn dma_rx(cx: dma_rx::Context);
-
-    #[task(
-        from = uart_dma::on_tx,
-        binds = DMA2_STREAM7,
-        priority = 4,
-        local = [stream = tx_stream, sent = tx_sent],
-    )]
-    fn dma_tx(cx: dma_tx::Context);
-
-    #[task(from = uart_dma::parse, priority = 1, spawn = [decoded = sbus])]
-    async fn parse_frame(_cx: parse_frame::Context, bytes: usize);
+    mod sbus_link;
 
     // The OSD: one portable definition, this firmware's clock, this firmware's
     // serial port. Ten refreshes a second is fast enough that a stick looks

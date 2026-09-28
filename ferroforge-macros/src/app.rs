@@ -9,6 +9,7 @@
 //! Rust path, so a wrong definition, binding or type is an ordinary compile
 //! error at the authored line.
 
+use crate::group::{GroupDefinition, GroupInstance};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote, quote_spanned};
 use syn::{
@@ -21,9 +22,10 @@ use syn::{
 /// `requirement = resource`, the only genuinely new spelling in the grammar.
 /// A bare name binds a requirement to the resource of the same name, as RTIC
 /// writes a claim and as Rust writes a struct field it already has in scope.
-struct Rebind {
-    requirement: Ident,
-    target: Ident,
+#[derive(Clone)]
+pub(crate) struct Rebind {
+    pub(crate) requirement: Ident,
+    pub(crate) target: Ident,
 }
 
 impl Parse for Rebind {
@@ -46,11 +48,12 @@ impl Parse for Rebind {
 /// `name: Type = value`. The type is stated here because an `impl` of the
 /// definition's `Config` trait must name it, and the macro never reads the
 /// definition. A mismatch fails to compile against the trait.
-struct ConfigValue {
-    docs: Vec<Attribute>,
-    name: Ident,
-    ty: Type,
-    value: Expr,
+#[derive(Clone)]
+pub(crate) struct ConfigValue {
+    pub(crate) docs: Vec<Attribute>,
+    pub(crate) name: Ident,
+    pub(crate) ty: Type,
+    pub(crate) value: Expr,
 }
 
 impl Parse for ConfigValue {
@@ -81,9 +84,13 @@ impl Parse for ConfigValue {
 /// One entry of an instance's `local = [..]`: a binding to a firmware resource,
 /// or RTIC's own task-local form, `name: Type = value`, which the firmware
 /// supplies on the task itself rather than through `#[local]` and `init`.
-enum LocalBinding {
+#[derive(Clone)]
+pub(crate) enum LocalBinding {
     Resource(Rebind),
     TaskLocal {
+        /// The definition's name for it. The same as `name` when written on an
+        /// instance; a group binds a member's requirement to a group-level one.
+        requirement: Ident,
         name: Ident,
         ty: Box<Type>,
         value: Box<Expr>,
@@ -93,11 +100,12 @@ enum LocalBinding {
 impl Parse for LocalBinding {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         if input.peek(Ident) && input.peek2(Token![:]) && !input.peek2(Token![::]) {
-            let name = input.parse()?;
+            let name: Ident = input.parse()?;
             input.parse::<Token![:]>()?;
             let ty = Box::new(input.parse()?);
             input.parse::<Token![=]>()?;
             return Ok(Self::TaskLocal {
+                requirement: name.clone(),
                 name,
                 ty,
                 value: Box::new(input.parse()?),
@@ -109,10 +117,12 @@ impl Parse for LocalBinding {
 
 impl LocalBinding {
     /// The definition's name for it, and the firmware's.
-    fn names(&self) -> (&Ident, &Ident) {
+    pub(crate) fn names(&self) -> (&Ident, &Ident) {
         match self {
             Self::Resource(rebind) => (&rebind.requirement, &rebind.target),
-            Self::TaskLocal { name, .. } => (name, name),
+            Self::TaskLocal {
+                requirement, name, ..
+            } => (requirement, name),
         }
     }
 
@@ -123,23 +133,25 @@ impl LocalBinding {
                 let target = &rebind.target;
                 quote!(#target)
             }
-            Self::TaskLocal { name, ty, value } => quote!(#name: #ty = #value),
+            Self::TaskLocal {
+                name, ty, value, ..
+            } => quote!(#name: #ty = #value),
         }
     }
 }
 
 #[derive(Default)]
-struct TaskAttribute {
-    from: Option<Path>,
-    priority: Option<LitInt>,
-    binds: Option<Path>,
-    local: Vec<LocalBinding>,
-    shared: Vec<Rebind>,
-    config: Vec<ConfigValue>,
-    spawn: Vec<Rebind>,
+pub(crate) struct TaskAttribute {
+    pub(crate) from: Option<Path>,
+    pub(crate) priority: Option<LitInt>,
+    pub(crate) binds: Option<Path>,
+    pub(crate) local: Vec<LocalBinding>,
+    pub(crate) shared: Vec<Rebind>,
+    pub(crate) config: Vec<ConfigValue>,
+    pub(crate) spawn: Vec<Rebind>,
 }
 
-fn bracketed_list<T: Parse>(input: ParseStream<'_>) -> syn::Result<Vec<T>> {
+pub(crate) fn bracketed_list<T: Parse>(input: ParseStream<'_>) -> syn::Result<Vec<T>> {
     let content;
     syn::bracketed!(content in input);
     Ok(Punctuated::<T, Token![,]>::parse_terminated(&content)?
@@ -186,19 +198,24 @@ impl Parse for TaskAttribute {
     }
 }
 
-struct Instance {
-    attribute: TaskAttribute,
+pub(crate) struct Instance {
+    pub(crate) attribute: TaskAttribute,
     /// Every attribute on the declaration but its `#[task(..)]` - documentation,
     /// `#[cfg]` and lints - carried to the task RTIC receives, as RTIC keeps
     /// them on a task of its own.
-    attributes: Vec<Attribute>,
-    signature: Signature,
+    pub(crate) attributes: Vec<Attribute>,
+    pub(crate) signature: Signature,
 }
 
 enum Element {
     /// Authored items - `use`, `Shared`, `Local`, `init` - passed through.
     Verbatim(Item),
     Instance(Instance),
+    /// A `#[group(from = ..)] mod name;` selection of several tasks at once.
+    Group(GroupInstance),
+    /// What a group's own macro appended: its members, keyed by the selection
+    /// they are for. Never authored.
+    Definition(GroupDefinition),
 }
 
 /// A bodyless `#[task(from = ..)] fn name(..);` declaration.
@@ -267,6 +284,9 @@ const MONOTONIC_SLOT: &str = "__FfMonotonic";
 const NO_MONOTONIC: &str = "NoMonotonicDeclared";
 
 pub struct App {
+    /// Everything `app!` was given, kept so that a group's macro can be handed
+    /// the whole application back. See [`crate::group`].
+    original: TokenStream,
     device: Path,
     dispatchers: Vec<Ident>,
     /// `None` leaves RTIC's own default alone rather than restating it.
@@ -278,6 +298,7 @@ pub struct App {
 /// matter, with defaults for everything a firmware need not say.
 impl Parse for App {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let original: TokenStream = input.fork().parse()?;
         let mut device: Option<Path> = None;
         let mut dispatchers = Vec::new();
         let mut peripherals = None;
@@ -335,8 +356,19 @@ impl Parse for App {
 
         let mut elements = Vec::new();
         while !input.is_empty() {
+            if input.peek(Token![@]) {
+                elements.push(Element::Definition(input.parse()?));
+                continue;
+            }
             let attributes = input.call(Attribute::parse_outer)?;
-            if let Some(attribute) = instance_attribute(&attributes)? {
+            if attributes
+                .iter()
+                .any(|attribute| attribute.path().is_ident("group"))
+            {
+                elements.push(Element::Group(GroupInstance::parse_with(
+                    input, attributes,
+                )?));
+            } else if let Some(attribute) = instance_attribute(&attributes)? {
                 elements.push(Element::Instance(parse_instance(
                     input, attribute, attributes,
                 )?));
@@ -348,6 +380,7 @@ impl Parse for App {
         }
 
         Ok(Self {
+            original,
             device,
             dispatchers,
             peripherals,
@@ -440,7 +473,7 @@ fn prepend_attributes(item: &mut Item, mut attributes: Vec<Attribute>) -> syn::R
     Ok(())
 }
 
-fn render_instance(instance: &Instance) -> syn::Result<TokenStream> {
+pub(crate) fn render_instance(instance: &Instance) -> syn::Result<TokenStream> {
     let Instance {
         attribute,
         attributes,
@@ -603,6 +636,7 @@ fn render_instance(instance: &Instance) -> syn::Result<TokenStream> {
 
 pub fn expand(application: App) -> syn::Result<TokenStream> {
     let App {
+        original,
         device,
         dispatchers,
         peripherals,
@@ -610,11 +644,59 @@ pub fn expand(application: App) -> syn::Result<TokenStream> {
     } = application;
     let monotonic = application_monotonic(&elements)?;
 
+    // A group selected but not yet defined here is handed to its own macro,
+    // which appends its members and calls `app!` again. One group per round.
+    let definitions = elements
+        .iter()
+        .filter_map(|element| match element {
+            Element::Definition(definition) => Some(definition),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let uses = elements
+        .iter()
+        .filter_map(|element| match element {
+            Element::Verbatim(Item::Use(item)) => Some(item),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let mut groups: Vec<&Ident> = Vec::new();
+    for element in &elements {
+        let Element::Group(group) = element else {
+            continue;
+        };
+        if let Some(first) = groups.iter().find(|name| **name == &group.name) {
+            return Err(syn::Error::new(
+                group.name.span(),
+                format!("a second group named `{first}`"),
+            ));
+        }
+        groups.push(&group.name);
+        if !definitions
+            .iter()
+            .any(|definition| definition.instance == group.name)
+        {
+            return Ok(crate::group::callback(group, &uses, &original));
+        }
+    }
+
     let mut body = Vec::new();
     for element in &elements {
         body.push(match element {
             Element::Verbatim(item) => quote!(#item),
             Element::Instance(instance) => render_instance(instance)?,
+            Element::Group(group) => {
+                let definition = definitions
+                    .iter()
+                    .find(|definition| definition.instance == group.name)
+                    .expect("every group was defined above");
+                let mut rendered = TokenStream::new();
+                for instance in crate::group::instances(group, definition)? {
+                    rendered.extend(render_instance(&instance)?);
+                }
+                rendered
+            }
+            Element::Definition(_) => TokenStream::new(),
         });
     }
 
