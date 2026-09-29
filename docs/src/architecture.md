@@ -145,7 +145,7 @@ instance. Init is written here and never moves, so RTIC generates the real
 them. No checking interfaces are generated.
 
 Every task a firmware runs is declared here, including each member of a
-[group](#groups). A library cannot supply declarations of its own accord:
+[task group](#task-groups). A library cannot supply declarations of its own accord:
 `#[rtic::app]` parses `mod app` before any inner macro expands, so a generated
 `#[task]` is never seen and RTIC reports "cannot find attribute `task` in this
 scope". Where tasks share state, the library can model it as one type, so the
@@ -222,11 +222,14 @@ must name it. A mismatch fails against the definition's trait.
 Priorities are the firmware's choice, unchecked beyond what RTIC checks, as in
 RTIC - a group's members included.
 
-## Groups
+## Task Groups
 
 Some tasks only work as a set: a DMA receive path and the parser behind it, a
-light and the log it reports to. A group selects such a set with one
-declaration. A library marks a module `#[ferroforge::group]`, as RTIC marks
+light and the log it reports to. A task group selects such a set with one
+declaration. The name is AADL's: RTIC has no word for this, and AADL's thread
+group is the same idea - threads and nested groups with their own ports and
+the connections between them, instantiated as often as needed. The code says
+`group` for short. A library marks a module `#[ferroforge::group]`, as RTIC marks
 `#[rtic::app] mod app`, and its members are the definitions the module
 `pub use`s. Including another group's contents takes all of them, and `spawn`
 on the group wires one member's call to another where both are known, so no

@@ -3,7 +3,7 @@
 FerroForge composes reusable RTIC tasks and project-owned initialization into a
 real RTIC firmware application.
 
-Agreed direction, updated 2026-09-16. This document is limited to two pages
+Agreed direction, updated 2026-09-29. This document is limited to two pages
 maximum.
 
 **Authority.** `AGENTS.md` in the repository root defines the authority order and
@@ -54,6 +54,8 @@ it. Implementation status does not change the requirements.
 
 **Naming.** FerroForge borrows RTIC's words for RTIC's ideas: `#[ferroforge::task]`
 marks a definition, `ferroforge::app!` declares the application selecting it.
+Where RTIC has no word it borrows AADL's: `#[ferroforge::group]` marks a task
+group, as AADL groups threads.
 
 **Open:** nothing. Backends ship with FerroForge; a library is an ordinary Cargo
 dependency and lives wherever Cargo can find it.

@@ -38,7 +38,7 @@ Start from the task, not the chapter. Read the named sections, not whole files.
 | Task | Read |
 | --- | --- |
 | Authoring or changing a reusable task | `architecture.md` Task Authoring |
-| Defining or selecting a group of tasks | `architecture.md` Groups |
+| Defining or selecting a task group | `architecture.md` Task Groups |
 | Firmware composition, init, or resources | G5; `architecture.md` Firmware Composition |
 | Hardware tasks and interrupt binding | G3 and G4; `architecture.md` Task Authoring |
 | Dependencies and manifests | `dependencies.md` |
@@ -62,12 +62,12 @@ links there instead of restating it.
 | ferro-wasp adoption: its gaps and migration order | `ferro-wasp-adoption.md` |
 | What was decided, and where it is specified | `review.md` (index only) |
 
-The whole book is 1595 lines, so read a chapter when a section is not enough:
+The whole book is 1603 lines, so read a chapter when a section is not enough:
 
-- `governing-requirements.md` (63) - G1-G7. Loaded at launch for Claude.
-- `architecture.md` (316) - the agreed call-through model. Owns the canonical
+- `governing-requirements.md` (65) - G1-G7. Loaded at launch for Claude.
+- `architecture.md` (319) - the agreed call-through model. Owns the canonical
   authoring design; other chapters link here rather than restate it.
-- `review.md` (279) - current decisions, the next open point, an index of
+- `review.md` (282) - current decisions, the next open point, an index of
   older decisions still in force, and what the call-through model superseded.
 - `implementation-plan.md` (72) - known defects, and what is left, in unblocking
   order.

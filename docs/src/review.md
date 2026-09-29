@@ -6,7 +6,7 @@ what is left to build is in [remaining work](implementation-plan.md).
 
 ## Current Decisions
 
-**Groups select tasks that only work as a set, 2026-09-29.** This reverses the
+**Task groups select tasks that only work as a set, 2026-09-29.** This reverses the
 removal of groups on 2026-09-18. That removal rested on three limits of the
 first design: a group named concrete peripherals and so could be selected only
 once, a protocol that did not own its transport did not fit, and the block
@@ -16,7 +16,10 @@ across crates, so SBUS is the DMA UART's receive group with a decoder behind
 it; and a group wires its members' calls and binds the union of their
 resources once. What still bound of the removal stands: priorities and
 interrupt bindings are the firmware's, declared member by member as RTIC
-declares a task. Specified in [groups](architecture.md#groups).
+declares a task. The name is AADL's thread group, taken where RTIC has no
+word; `component` and SysML v2's `part` were weighed and rejected, the one
+naming every kind of unit and the other anything structural at all. Specified
+in [task groups](architecture.md#task-groups).
 
 **Drift rules live in `ferroforge.toml`, 2026-09-27.** Differences expected
 between firmwares are forgiven by blanket rules in one project-wide file:
@@ -245,7 +248,7 @@ the rule.
 | Related tasks share a source module with imports declared once at module scope | [architecture](architecture.md#task-authoring) |
 | Task kind follows the signature: `async fn` software, `fn` hardware with a composition-supplied interrupt | [architecture](architecture.md#task-authoring) |
 | Native HAL init, authored in the firmware and never moved | [architecture](architecture.md#firmware-composition) |
-| Groups select tasks that only work as a set; priorities and interrupts stay the firmware's | [architecture](architecture.md#groups) |
+| Task groups select tasks that only work as a set; priorities and interrupts stay the firmware's | [architecture](architecture.md#task-groups) |
 | A published version never changes; a breaking change is a new minor version under 0.x | [workflow](workflow.md#release) |
 | Build only the coverage concrete uses need; the final target build remains the verification | [architecture](architecture.md#incremental-coverage) |
 | Cargo manifests are the source of dependency requirements | [dependencies](dependencies.md#where-requirements-live) |
