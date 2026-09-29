@@ -233,7 +233,9 @@ pub fn define(arguments: GroupArguments, module: ItemMod) -> syn::Result<TokenSt
     let name = &module.ident;
 
     let mut members: Vec<Member> = Vec::new();
-    let mut includes: Vec<Path> = Vec::new();
+    // Where each included group is, and the name its copy goes under: none
+    // for a glob, which merges it; `as heartbeat` for a named copy.
+    let mut includes: Vec<(Path, Option<Ident>)> = Vec::new();
     // Every input type gets an alias in the group's module, where the author's
     // own imports resolve it, so the firmware can name it by path.
     let mut aliases: Vec<TokenStream> = Vec::new();
@@ -249,7 +251,11 @@ pub fn define(arguments: GroupArguments, module: ItemMod) -> syn::Result<TokenSt
                 }) else {
                     continue;
                 };
-                let task: TaskArguments = attribute.parse_args()?;
+                // A bare `#[task]` declares nothing, as for any definition.
+                let task: TaskArguments = match &attribute.meta {
+                    syn::Meta::Path(_) => TaskArguments::default(),
+                    _ => attribute.parse_args()?,
+                };
                 let mut signature = function.sig.clone();
                 let fn_name = &function.sig.ident;
                 // The context is the adapter's to supply.
@@ -305,8 +311,8 @@ pub fn define(arguments: GroupArguments, module: ItemMod) -> syn::Result<TokenSt
             // Only a `pub use` re-exports another group's tasks as this
             // group's; a private `use super::*;` is an ordinary import.
             Item::Use(item) if matches!(item.vis, syn::Visibility::Public(_)) => {
-                if let Some(group) = glob_source(&item.tree) {
-                    includes.push(group);
+                if let Some(include) = group_source(&item.tree) {
+                    includes.push(include);
                 }
             }
             _ => {}
@@ -354,14 +360,19 @@ pub fn define(arguments: GroupArguments, module: ItemMod) -> syn::Result<TokenSt
     // path works from the firmware however this crate reached it - through
     // `super::`, or through another crate the firmware does not depend on.
     let mut included = Vec::new();
-    for (index, path) in includes.iter().enumerate() {
+    for (index, (path, copy)) in includes.iter().enumerate() {
         let alias = format_ident!("__ff_include_{}", index);
-        let group = &path.segments.last().expect("a glob names a module").ident;
+        let group = &path
+            .segments
+            .last()
+            .expect("an include names a module")
+            .ident;
         aliases.push(quote! {
             #[doc(hidden)]
             pub use #path as #alias;
         });
-        included.push(quote!(use self::#alias as #group;));
+        let copy = copy.as_ref().map(|copy| quote!(in #copy));
+        included.push(quote!(use self::#alias as #group #copy;));
     }
     // A group's macro is exported at its crate's root, which the firmware can
     // name only through the group's module: this alias is that route.
@@ -396,19 +407,29 @@ pub fn define(arguments: GroupArguments, module: ItemMod) -> syn::Result<TokenSt
     })
 }
 
-/// `use super::uart_dma_rx::*;` names the group at `super::uart_dma_rx`.
-fn glob_source(tree: &UseTree) -> Option<Path> {
+/// `pub use super::uart_dma_rx::*;` merges the group at `super::uart_dma_rx`
+/// into this one; `pub use super::light as heartbeat;` includes a copy of the
+/// group at `super::light` whose every name is prefixed `heartbeat_`, so the
+/// same group can be included twice.
+fn group_source(tree: &UseTree) -> Option<(Path, Option<Ident>)> {
     let mut segments: Vec<Ident> = Vec::new();
     let mut tree = tree;
     while let UseTree::Path(path) = tree {
         segments.push(path.ident.clone());
         tree = &path.tree;
     }
-    let is_glob = matches!(tree, UseTree::Glob(_));
+    let copy = match tree {
+        UseTree::Glob(_) => None,
+        UseTree::Rename(rename) => {
+            segments.push(rename.ident.clone());
+            Some(rename.rename.clone())
+        }
+        _ => return None,
+    };
     let names_a_module = segments
         .last()
         .is_some_and(|last| !["self", "super", "crate"].contains(&&*last.to_string()));
-    (is_glob && names_a_module).then(|| syn::parse_quote!(#(#segments)::*))
+    names_a_module.then(|| (syn::parse_quote!(#(#segments)::*), copy))
 }
 
 /// What a group's macro appended: `@group <selection> { members }`.
@@ -417,8 +438,9 @@ pub(crate) struct GroupDefinition {
     /// The group this came from, so a selection knows which it has.
     from: Path,
     /// Further groups this one is the union with, still to be asked: where,
-    /// relative to this group's module, and what the group is called.
-    includes: Vec<(Path, Ident)>,
+    /// relative to this group's module, what the group is called, and the
+    /// name a named copy of it goes under.
+    includes: Vec<(Path, Ident, Option<Ident>)>,
     /// Calls this group wires to a member, which may be an included group's.
     wires: Vec<Rebind>,
     members: Vec<Member>,
@@ -444,7 +466,15 @@ impl Parse for GroupDefinition {
             content.parse::<Token![use]>()?;
             let path = content.parse()?;
             content.parse::<Token![as]>()?;
-            includes.push((path, content.parse()?));
+            let group = content.parse()?;
+            let copy = match content.peek(Token![in]) {
+                true => {
+                    content.parse::<Token![in]>()?;
+                    Some(content.parse()?)
+                }
+                false => None,
+            };
+            includes.push((path, group, copy));
             content.parse::<Token![;]>()?;
         }
         let keyword: Ident = content.parse()?;
@@ -717,31 +747,72 @@ fn rebase(path: &Path, base: &Path) -> Path {
     syn::parse_quote!(#leading #(#result)::*)
 }
 
-/// Every group module this selection draws on, by name: the one it names and,
-/// transitively, the ones those include. A module's path comes from the
-/// firmware's own `from`, so a group may sit anywhere in its crate.
+/// One group as this selection reaches it: which group, where its module is,
+/// and the copy names on the way down, which prefix every name it has.
+#[derive(Clone)]
+struct Reached {
+    prefix: Vec<Ident>,
+    name: String,
+    path: Path,
+}
+
+impl Reached {
+    fn prefixed(&self, name: &Ident) -> Ident {
+        let mut joined = String::new();
+        for copy in &self.prefix {
+            joined.push_str(&copy.to_string());
+            joined.push('_');
+        }
+        joined.push_str(&name.to_string());
+        Ident::new(&joined, name.span())
+    }
+
+    fn prefixed_rebind(&self, rebind: &Rebind) -> Rebind {
+        Rebind {
+            requirement: rebind.requirement.clone(),
+            target: self.prefixed(&rebind.target),
+        }
+    }
+}
+
+/// Every group this selection draws on: the one it names and, transitively,
+/// the ones those include. A module's path comes from the firmware's own
+/// `from`, so a group may sit anywhere in its crate. A group included twice
+/// under two copy names is reached twice, and asked for once.
 fn group_modules(
     group: &GroupInstance,
     mine: &[&GroupDefinition],
     uses: &[&ItemUse],
-) -> Vec<(String, Path)> {
+) -> Vec<Reached> {
     let from = resolve_alias(&group.from, uses);
-    let mut modules = vec![(last(&from), from)];
+    let mut reached = vec![Reached {
+        prefix: Vec::new(),
+        name: last(&from),
+        path: from,
+    }];
     let mut index = 0;
-    while index < modules.len() {
-        let (name, base) = modules[index].clone();
-        if let Some(definition) = mine.iter().find(|d| last(&d.from) == name) {
-            for (include, group) in &definition.includes {
-                let path = rebase(include, &base);
-                let group = group.to_string();
-                if !modules.iter().any(|(known, _)| *known == group) {
-                    modules.push((group, path));
+    while index < reached.len() {
+        let parent = reached[index].clone();
+        if let Some(definition) = mine.iter().find(|d| last(&d.from) == parent.name) {
+            for (include, group, copy) in &definition.includes {
+                let mut prefix = parent.prefix.clone();
+                prefix.extend(copy.clone());
+                let child = Reached {
+                    prefix,
+                    name: group.to_string(),
+                    path: rebase(include, &parent.path),
+                };
+                if !reached
+                    .iter()
+                    .any(|r| r.name == child.name && r.prefix == child.prefix)
+                {
+                    reached.push(child);
                 }
             }
         }
         index += 1;
     }
-    modules
+    reached
 }
 
 /// The next group this selection still needs members from, handed the whole
@@ -759,9 +830,10 @@ pub(crate) fn next_callback(
     let name = &group.name;
     group_modules(group, &mine, uses)
         .into_iter()
-        .find(|(module, _)| !mine.iter().any(|d| last(&d.from) == *module))
-        .map(|(module, path)| {
-            let group = format_ident!("__ff_group_{}", module);
+        .find(|reached| !mine.iter().any(|d| last(&d.from) == reached.name))
+        .map(|reached| {
+            let path = &reached.path;
+            let group = format_ident!("__ff_group_{}", reached.name);
             quote!(#path::__ff_crate::#group! { #name ; #original })
         })
 }
@@ -821,9 +893,13 @@ fn check_bindings(
         return Err(syn::Error::new(
             group.from.span(),
             format!(
-                "this group needs {kind} {} bound as well: `{kind} = [{} = ..]`",
+                "this group needs {kind} {} bound as well: `{kind} = [{}{} = ..]`",
                 list(&missing),
-                missing[0]
+                missing[0],
+                match kind {
+                    "config" => ": <type>",
+                    _ => "",
+                }
             ),
         ));
     }
@@ -837,21 +913,37 @@ pub(crate) fn instances(
     definitions: &[&GroupDefinition],
     uses: &[&ItemUse],
 ) -> syn::Result<(Vec<Instance>, TokenStream)> {
-    // A member reached through two includes is still one member. Its paths
-    // are made absolute against the module it came from.
-    let modules = group_modules(group, definitions, uses);
+    // Each group reached contributes its members, with paths made absolute
+    // against its module and every name prefixed with its copy names. The
+    // same group merged twice at one level is still one set of members.
     let mut owned: Vec<Member> = Vec::new();
-    for definition in definitions {
-        let base = &modules
+    let mut wires: Vec<Rebind> = Vec::new();
+    for reached in group_modules(group, definitions, uses) {
+        let definition = definitions
             .iter()
-            .find(|(name, _)| *name == last(&definition.from))
-            .expect("every definition was asked for by module")
-            .1;
+            .find(|d| last(&d.from) == reached.name)
+            .expect("every group reached has answered");
+        let base = &reached.path;
+        wires.extend(definition.wires.iter().map(|wire| Rebind {
+            requirement: reached.prefixed(&wire.requirement),
+            target: reached.prefixed(&wire.target),
+        }));
         for member in &definition.members {
+            let mut member = member.clone();
+            member.signature.ident = reached.prefixed(member.name());
             if owned.iter().any(|m| m.name() == member.name()) {
                 continue;
             }
-            let mut member = member.clone();
+            for list in [
+                &mut member.shared,
+                &mut member.local,
+                &mut member.spawn,
+                &mut member.config,
+            ] {
+                for rebind in list.iter_mut() {
+                    *rebind = reached.prefixed_rebind(rebind);
+                }
+            }
             member.from = member.from.map(|from| rebase(&from, base));
             for input in member.signature.inputs.iter_mut() {
                 if let syn::FnArg::Typed(typed) = input
@@ -864,10 +956,6 @@ pub(crate) fn instances(
         }
     }
     // An outer group's wires reach calls its included groups left open.
-    let wires = definitions
-        .iter()
-        .flat_map(|d| &d.wires)
-        .collect::<Vec<_>>();
     for wire in &wires {
         if !owned.iter().any(|m| m.name() == &wire.target) {
             return Err(syn::Error::new(
@@ -1353,5 +1441,76 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("none of its groups has"), "{error}");
+    }
+
+    /// The same group twice, as named copies: every name a copy has is
+    /// prefixed, and the outer group's wires reach each copy's open call.
+    #[test]
+    fn a_group_included_twice_is_two_named_copies() {
+        let output = defined(
+            "spawn = [heartbeat_report = report, beacon_report = report]",
+            "pub mod lights { pub use super::light as heartbeat; \
+             pub use super::light as beacon; pub use super::reporter::*; }",
+        )
+        .unwrap();
+        assert!(
+            output.contains("use self :: __ff_include_0 as light in heartbeat ;"),
+            "{output}"
+        );
+        assert!(
+            output.contains("use self :: __ff_include_1 as light in beacon ;"),
+            "{output}"
+        );
+        assert!(
+            output.contains("use self :: __ff_include_2 as reporter ;"),
+            "{output}"
+        );
+
+        let definitions = "
+            @group two from lights {
+                use self::__ff_include_0 as light in heartbeat;
+                use self::__ff_include_1 as light in beacon;
+                use self::__ff_include_2 as reporter;
+                spawn = [heartbeat_report = report, beacon_report = report];
+            }
+            @group two from light {
+                spawn = [];
+                #[task(from = self::blink, shared = [enabled = enabled], local = [led = led],
+                       spawn = [report = report], config = [period_ms = period_ms])]
+                async fn blink() -> !;
+            }
+            @group two from reporter {
+                spawn = [];
+                #[task(from = self::report, shared = [], local = [], spawn = [], config = [])]
+                async fn report(value: self::__ff_report_input_0);
+            }";
+        let selection = "#[group(from = lib::lights, local = [heartbeat_led, beacon_led],
+                shared = [heartbeat_enabled, beacon_enabled],
+                config = [heartbeat_period_ms: u32 = 250, beacon_period_ms: u32 = 1000])]
+            mod two {
+                #[task(priority = 1)] async fn heartbeat_blink;
+                #[task(priority = 2)] async fn beacon_blink;
+                #[task(priority = 1)] async fn report;
+            }";
+
+        // Asked once, though reached twice.
+        let first = definitions.split("@group two from light {").next().unwrap();
+        let output = application(selection, first).unwrap();
+        assert!(output.contains("__ff_group_light !"), "{output}");
+
+        let output = application(selection, definitions).unwrap();
+        for task in ["async fn two_heartbeat_blink", "async fn two_beacon_blink"] {
+            assert!(output.contains(task), "{task}: {output}");
+        }
+        assert!(
+            output.contains("led : cx . local . heartbeat_led"),
+            "{output}"
+        );
+        assert!(output.contains("led : cx . local . beacon_led"), "{output}");
+        assert!(output.contains("report : two_report :: spawn"), "{output}");
+        assert!(
+            output.contains("my_lib :: lights :: __ff_include_0 :: blink"),
+            "{output}"
+        );
     }
 }

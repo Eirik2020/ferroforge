@@ -1,7 +1,7 @@
 //! A second application on the same board, and the one with hardware attached.
 //!
-//! No task crate changes to support any of it. `blink` is instantiated twice
-//! with different names, pins, counters, gates and periods; the HAL-specific
+//! `blink` is instantiated twice, as two named copies of one group, with
+//! different names, pins, counters, gates and periods; the HAL-specific
 //! `on_timer` is bound to `TIM3` here - the definition names no interrupt, so
 //! which line serves it is the composition's choice.
 //!
@@ -40,7 +40,7 @@ ferroforge::app! {
 
     systick_monotonic!(Mono, 1000);
 
-    use ferroforge_task_blinky::{blink, report};
+    use ferroforge_task_blinky as blinky;
     use ferroforge_task_msp_displayport::{self as osd, msp::Line, paint};
     use ferroforge_task_stm32f4_timer::on_timer;
     use ferroforge_task_stm32f4_sbus::{self as sbus, Channels};
@@ -111,8 +111,8 @@ ferroforge::app! {
         pulse_timer.start(50u32.millis().into()).unwrap();
         pulse_timer.listen(Event::Update);
 
-        heartbeat::spawn().unwrap();
-        beacon::spawn().unwrap();
+        lights::heartbeat_blink::spawn().unwrap();
+        lights::beacon_blink::spawn().unwrap();
         status::spawn().unwrap();
         osd_paint::spawn().unwrap();
 
@@ -221,31 +221,27 @@ ferroforge::app! {
         )
     }
 
-    // Two instances of one definition. They differ in every binding a
-    // composition controls - name, priority, resources, gate and period - and
-    // share only the definition itself and the telemetry task they report to.
-    #[task(
-        from = blink,
-        priority = 1,
-        local = [led = heartbeat_led, count = heartbeat_count],
-        shared = [enabled = heartbeat_enabled],
-        config = [period_ms: u32 = 250],
-        spawn = [report = telemetry],
+    // One group holding the same light twice, as `heartbeat` and `beacon`, and
+    // the reporter both copies are wired to. Every name a copy has is prefixed
+    // with its copy's name, so the firmware's resources bind by bare name. The
+    // two lights still differ in every binding a composition controls - name,
+    // priority, resources, gate and period - and share only the definition.
+    #[group(
+        from = blinky::lights,
+        local = [heartbeat_led, heartbeat_count, beacon_led, beacon_count],
+        shared = [heartbeat_enabled, beacon_enabled],
+        config = [heartbeat_period_ms: u32 = 250, beacon_period_ms: u32 = 1000],
     )]
-    async fn heartbeat(cx: heartbeat::Context) -> !;
+    mod lights {
+        #[task(priority = 1)]
+        async fn heartbeat_blink;
 
-    #[task(
-        from = blink,
-        priority = 2,
-        local = [led = beacon_led, count = beacon_count],
-        shared = [enabled = beacon_enabled],
-        config = [period_ms: u32 = 1000],
-        spawn = [report = telemetry],
-    )]
-    async fn beacon(cx: beacon::Context) -> !;
+        #[task(priority = 2)]
+        async fn beacon_blink;
 
-    #[task(from = report, priority = 1)]
-    async fn telemetry(_cx: telemetry::Context, value: u32);
+        #[task(priority = 1)]
+        async fn report;
+    }
 
     // The HAL-specific hardware task. Unlike a portable definition it can read
     // and clear the peripheral's update flag, which is what makes the binding
@@ -255,7 +251,7 @@ ferroforge::app! {
         binds = TIM3,
         priority = 3,
         local = [timer = pulse_timer, elapsed = pulse_count],
-        spawn = [elapsed = telemetry],
+        spawn = [elapsed = lights_report],
     )]
     fn pulse(cx: pulse::Context);
 
