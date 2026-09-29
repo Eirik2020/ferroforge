@@ -25,16 +25,18 @@ Each of these has been observed. None is a design question.
 ## OSD Hardware Validation
 
 `examples/tasks/msp-displayport` and its host tests say the frames are well formed. On
-hardware, a transmitter drew nothing, and the cause has not been looked for. The number to watch is `answered` in the firmware's
-status line: it counts requests replied to, so it separates a transmitter that
-is not connected from one that is being talked to wrongly.
+hardware, a transmitter drew nothing, and the cause has not been looked for, so
+no firmware selects it now. A firmware that does should report how many of the
+transmitter's requests were answered: that separates a transmitter that is not
+connected from one that is being talked to wrongly.
 
 ## A DMA UART That Transmits
 
 The receive half of `examples/tasks/stm32f4-uart-dma` has been driven by real SBUS
 traffic, which is what settled whether its four tasks divide the work correctly.
 `on_tx` has had no such test: nothing starts a transmit, so it counts
-completions that never happen. The open question is whether a transmitting
+completions that never happen, and it is the one member of the beacon's groups
+that only compiles. The open question is whether a transmitting
 firmware needs anything from these tasks that the receive side did not already
 force into `Port`.
 

@@ -1,8 +1,9 @@
 # FerroForge
 
 Reusable [RTIC](https://rtic.rs) tasks, selected into firmware. This crate
-provides the two macros: `#[ferroforge::task]` marks a definition, and
-`ferroforge::app!` declares the application that selects it.
+provides three macros: `#[ferroforge::task]` marks a definition,
+`#[ferroforge::group]` marks a set of definitions that only work together, and
+`ferroforge::app!` declares the application that selects them.
 
 A task is an ordinary function in its own crate. It names what it needs, and
 compiles on its own without any firmware:

@@ -144,12 +144,12 @@ instance. Init is written here and never moves, so RTIC generates the real
 `init::Context` and the real `spawn` functions and Rust checks the body against
 them. No checking interfaces are generated.
 
-Every task a firmware runs is declared here, one by one, including tasks that
-only work as a set. A library cannot supply declarations: `#[rtic::app]` parses
-`mod app` before any inner macro expands, so a generated `#[task]` is never seen
-and RTIC reports "cannot find attribute `task` in this scope". Where such tasks
-share state, the library can model it as one type, so the firmware binds one
-resource rather than several that could be wired apart.
+Every task a firmware runs is declared here, including each member of a
+[group](#groups). A library cannot supply declarations of its own accord:
+`#[rtic::app]` parses `mod app` before any inner macro expands, so a generated
+`#[task]` is never seen and RTIC reports "cannot find attribute `task` in this
+scope". Where tasks share state, the library can model it as one type, so the
+firmware binds one resource rather than several that could be wired apart.
 
 Its header is RTIC's, parsed the way RTIC parses its own - a loop, so order does
 not matter, with a default for everything a firmware need not say:
@@ -219,9 +219,70 @@ crate, which is the coupling this design exists to remove.
 Configuration values state their type, `period_ms: u32 = 500`, because an `impl`
 must name it. A mismatch fails against the definition's trait.
 
-Tasks that only work as a set are declared one by one like any others; there is
-no group of tasks selected together. Priorities are the firmware's choice,
-unchecked beyond what RTIC checks, as in RTIC.
+Priorities are the firmware's choice, unchecked beyond what RTIC checks, as in
+RTIC - a group's members included.
+
+## Groups
+
+Some tasks only work as a set: a DMA receive path and the parser behind it, a
+light and the log it reports to. A group selects such a set with one
+declaration. A library marks a module `#[ferroforge::group]`, as RTIC marks
+`#[rtic::app] mod app`, and its members are the definitions the module
+`pub use`s. Including another group's contents takes all of them, and `spawn`
+on the group wires one member's call to another where both are known, so no
+firmware has to:
+
+```rust,ignore
+/// SBUS: another crate's DMA UART receive group, and a decoder behind it.
+#[ferroforge::group(spawn = [decoded = decode])]
+pub mod sbus_rx {
+    pub use ferroforge_task_stm32f4_uart_dma::uart_dma_rx::*;
+    pub use super::decode;
+}
+```
+
+A firmware selects the set inside `app!` with `#[group(from = ..)] mod name
+{ .. }`, binding the union of the members' resources, configuration and
+outgoing calls once, and declares each member as RTIC declares a task:
+
+```rust,ignore
+#[group(from = sbus::sbus_rx, shared = [port = uart], local = [uart = usart], spawn = [channels = show])]
+mod sbus {
+    #[task(binds = USART1, priority = 12)]
+    fn on_uart;
+    #[task(binds = DMA2_STREAM2, priority = 12)]
+    fn on_rx;
+    #[task(priority = 1)]
+    async fn parse;
+    #[task(priority = 1)]
+    async fn decode;
+}
+```
+
+A group states no priority and no interrupt: those stay the firmware's, member
+by member, because which priorities fit and which interrupts are free depend on
+everything else the firmware runs.
+
+- Every public task is also a group of one, so a group includes a single task
+  by name.
+- A group may include another more than once as named copies, `pub use
+  super::light as heartbeat`. Every name a copy has is prefixed with the copy's
+  name - `heartbeat_led`, `heartbeat_period_ms` - so copies bind different
+  resources and configuration and share only the definitions. A firmware may
+  select one group several times too; the module name keeps each selection's
+  tasks apart.
+- Groups nest to any depth and across crates, and a group's `spawn` wires may
+  reach any level below it.
+- A mistake in a selection is reported on the line that made it, naming what
+  the group has or what to write: a member that is not the group's, one left
+  undeclared, one of the wrong kind or without `binds`, and a resource the
+  group does not need or one left unbound.
+
+The members reach RTIC as tokens, which is the only way it sees a task. Each
+group is also a `macro_rules!` holding its members; `app!`, meeting a group
+it has no members for, hands the application to that macro, which appends
+them and calls `app!` again. So `app!` still reads nothing but its own input
+and what a group hands back.
 
 ## What Checking Guarantees
 

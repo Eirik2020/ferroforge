@@ -8,8 +8,8 @@ What exists today, as distinct from the agreed design in
 | Crate | Role |
 | --- | --- |
 | `ferroforge-contracts` | Task declaration parsing and structural validation. No HAL dependency. |
-| `ferroforge-macros` | `task` and `app!`, and nothing else. |
-| `ferroforge` | Facade. Re-exports the two macros; no runtime types. |
+| `ferroforge-macros` | `task`, `group` and `app!`, and nothing else. |
+| `ferroforge` | Facade. Re-exports the three macros; no runtime types. |
 | `ferroforge-cli` | The `ferroforge` binary. Carries the chip data, recognizes projects, and delegates to Cargo. |
 | `msp` | MSP v1, DisplayPort and a text canvas. No dependencies, not FerroForge's - it is here because a task crate uses it, not because it is part of the tool. |
 
@@ -38,16 +38,18 @@ synchronous handler bound to `TIM2`. Its reusable tasks live in
 same target with no FerroForge machinery beyond the `#[task]` attribute.
 
 `examples/firmware/nucleo-f401re-beacon` is a second application on the same board,
-selecting the same definitions with none of the same bindings. It instantiates
-`blink` twice - different names, pins, counters, gates and periods - and the
-HAL-specific `on_timer` once against `TIM3`. Adding it required no edit to
-either task crate. Only PA5 carries an LED, so the second pin is a bare header
-pin and that half of it is a build rather than an observation.
+selecting the same definitions with none of the same bindings, and the one that
+exercises groups. It selects `blinky`'s `lights` group - two named copies of the
+`light` group, each a light and the announcer it is wired to - and `light` a
+third time on its own, each copy logging under its own label, plus the
+HAL-specific `on_timer` against `TIM3`. Only PA5 carries an LED; the other
+copies' pins are bare header pins, so they are observed through their log lines.
 
-It is also the firmware with hardware on it, and the one running two serial
-protocols at once: SBUS in on USART1 by circular DMA, MSP DisplayPort out on
-USART6 to a video transmitter. The wiring is in its own module documentation,
-where someone about to connect a cable will look.
+It also receives SBUS through `stm32f4-sbus`'s `sbus_link`, a group of groups
+across two crates, and carries a stand-in receiver that sends frames with known
+channels out of USART6, so one wire to PA10 runs the whole receive path on a
+bare board. The wiring is in its own module documentation, where someone about
+to connect a cable will look.
 
 `examples/firmware/nucleo-h753zi` is a Cortex-M7 on a different HAL, with a part whose
 memory is more than the pair `cortex-m-rt` needs. It reuses `report` from the
@@ -57,8 +59,10 @@ task's counterpart. It does **not** use `blink`: that bounds on `embedded-hal`
 in the firmware instead.
 
 `examples/tasks/stm32f4-uart-dma` is four tasks that only work as a set, sharing one
-`Port`. `nucleo-f401re-beacon` selects all four as ordinary declarations,
-configures a circular receive, and decodes SBUS on the bytes they deliver.
+`Port`: the receive three as the `uart_dma_rx` group, and `on_tx`. It names
+USART1 and its streams as concrete types. `examples/tasks/stm32f4-sbus` puts a
+decoder behind the receive group as `sbus_rx`, and `sbus_link` adds `on_tx`;
+`nucleo-f401re-beacon` selects that and configures the circular receive.
 
 Two constraints the tasks exist to hold. Delivery happens on the idle line and
 nowhere else: in circular mode a transfer-complete means the buffer filled, not
@@ -69,8 +73,7 @@ so a handler that ignores them wedges reception rather than degrading it.
 
 `examples/tasks/msp-displayport` is the OSD, and the portable case on something larger
 than an LED: it names no HAL and no chip, takes no forwarding feature, and
-checks for ARM on its own. `nucleo-f401re-beacon` selects it alongside the SBUS
-tasks, so the two protocols run at once on one firmware.
+checks for ARM on its own. No firmware selects it: on hardware it drew nothing.
 
 It is one task, and the shape is the point. A DisplayPort
 transmitter has to be answered before it hands over the canvas, so the traffic

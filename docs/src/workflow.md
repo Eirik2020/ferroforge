@@ -27,13 +27,16 @@ The tests that do are opt-in, because each drives a cross-compile:
 cargo test --workspace --locked -- --ignored
 ```
 
-That checks every task crate on its own, links every firmware, and plants ten
-defects in copies of them - a hardware task given inputs, an `async` task given
-an interrupt, a configuration type disagreeing with its definition, a binding
-naming a resource that does not exist, a resource whose type is not what a
-HAL-specific task declares, a task needing a monotonic the application lacks, a
-monotonic counting in `u32`, a spawn alias bound to a task with other inputs, a
-dispatcher that is also bound, and too few dispatchers - asserting the message each one must fail with, and for
+That checks every task crate on its own, links every firmware, and plants
+sixteen defects in copies of them - a hardware task given inputs, an `async`
+task given an interrupt, a configuration type disagreeing with its definition,
+a binding naming a resource that does not exist, a resource whose type is not
+what a HAL-specific task declares, a task needing a monotonic the application
+lacks, a monotonic counting in `u32`, a spawn alias bound to a task with other
+inputs, a dispatcher that is also bound, too few dispatchers, and six ways of
+selecting a group wrongly: a misspelt member, one left out, one of the wrong
+kind, a hardware member without `binds`, and a resource the group does not
+need or one it needs left unbound - asserting the message each one must fail with, and for
 the spawn alias that the error shows the authored binding. Each unmutated copy
 is checked first, so a broken harness cannot pass as a rejection. It compiles
 spawn aliases of zero, one and two inputs and a task reading `Mono::now()`,
