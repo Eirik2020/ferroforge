@@ -16,11 +16,15 @@
 //! | Pin | Signal |
 //! | --- | --- |
 //! | PA10 | SBUS in, through an external inverter. 100000 baud, 8E2 |
+//! | PA2 | SBUS out, a stand-in receiver: jumper to PA10 to test without one |
 //! | PC6 | DisplayPort out, to the transmitter's serial RX. 115200 8N1 |
 //! | PC7 | DisplayPort in, from the transmitter's serial TX |
 //!
 //! Ground is shared with both. PA5 is the board's LD2; PB0 is an ordinary
-//! header pin with no LED on it.
+//! header pin with no LED on it. On a NUCLEO, PA2 is Arduino D1 and PA10 is
+//! D2, so one jumper between them runs the whole SBUS path on a bare board:
+//! `sbus_source` sends frames whose channels are known, and `show` logs what
+//! the group decoded, so the two can be compared.
 
 #![no_std]
 #![no_main]
@@ -45,13 +49,14 @@ ferroforge::app! {
     use ferroforge_task_stm32f4_timer::on_timer;
     use ferroforge_task_stm32f4_sbus::{self as sbus, Channels};
     use ferroforge_task_stm32f4_uart_dma as uart_dma;
+    use super::sbus_frame;
     use stm32f4xx_hal::{
         dma::{
             DmaChannel, DmaDirection, DmaEvent, Stream7, StreamsTuple,
             traits::Stream as _,
         },
         gpio::{Output, PA5, PB0, PushPull},
-        pac::{DMA2, TIM3, USART6},
+        pac::{DMA2, TIM3, USART2, USART6},
         prelude::*,
         rcc::Config,
         serial::{Serial, config::DmaConfig, config::StopBits},
@@ -85,6 +90,7 @@ ferroforge::app! {
         // touches.
         usart: stm32f4xx_hal::pac::USART1,
         tx_stream: Stream7<DMA2>,
+        sbus_out: USART2,
     }
 
     #[init]
@@ -108,13 +114,14 @@ ferroforge::app! {
         // it can express is 65535 ticks - about 65 ms. Asking for more is
         // `Err(WrongAutoReload)` at runtime, which a build cannot catch.
         let mut pulse_timer = cx.device.TIM3.counter_us(&mut rcc);
-        pulse_timer.start(50u32.millis().into()).unwrap();
+        pulse_timer.start(50u32.millis()).unwrap();
         pulse_timer.listen(Event::Update);
 
         lights::heartbeat_blink::spawn().unwrap();
         lights::beacon_blink::spawn().unwrap();
         status::spawn().unwrap();
         osd_paint::spawn().unwrap();
+        sbus_source::spawn().unwrap();
 
         // USART1 for SBUS: 100000 baud, 8E2, inverted on the wire so an
         // external inverter sits between the receiver and PA10.
@@ -200,6 +207,28 @@ ferroforge::app! {
         // interrupt continuously.
         osd_usart.cr1().modify(|_, w| w.rxneie().set_bit());
 
+        // USART2 for the stand-in receiver, transmit only, in SBUS's own
+        // framing. RTIC borrows USART2's interrupt vector as a dispatcher, which
+        // is why this port is only ever polled: no USART2 interrupt is enabled,
+        // so the vector still fires only when RTIC pends it. PA3 is the
+        // ST-Link's serial line on a NUCLEO, so the receiver is switched off.
+        let sbus_serial = Serial::<_, u8>::new(
+            cx.device.USART2,
+            (
+                gpioa.pa2.into_alternate::<7>(),
+                gpioa.pa3.into_alternate::<7>(),
+            ),
+            stm32f4xx_hal::serial::Config::default()
+                .baudrate(100_000.bps())
+                .wordlength_9()
+                .parity_even()
+                .stopbits(StopBits::STOP2),
+            &mut rcc,
+        )
+        .unwrap();
+        let (sbus_out, _sbus_pins) = sbus_serial.release();
+        sbus_out.cr1().modify(|_, w| w.re().clear_bit());
+
         (
             Shared {
                 heartbeat_enabled: true,
@@ -217,6 +246,7 @@ ferroforge::app! {
                 pulse_count: 0,
                 usart,
                 tx_stream: streams.7,
+                sbus_out,
             },
         )
     }
@@ -392,6 +422,38 @@ ferroforge::app! {
         }
     }
 
+    /// A stand-in SBUS receiver, so the group can be tested on a bare board:
+    /// one frame every 14 ms, as a receiver sends them, out of PA2.
+    ///
+    /// Channel 1 counts, as `172 + sent % 1640`, and channels 2 to 4 are fixed
+    /// at 992, 172 and 1811, so a frame decoded intact is recognisable in
+    /// `show`'s log line: with nothing lost, channel 1 there is
+    /// `172 + good % 1640`. Polled, a byte at a time; a frame is 25 bytes of 12
+    /// bits at 100000 baud, 3 ms at the lowest priority.
+    #[task(priority = 1, local = [sbus_out, sent: u32 = 0])]
+    async fn sbus_source(cx: sbus_source::Context) {
+        loop {
+            *cx.local.sent = cx.local.sent.wrapping_add(1);
+            let sent = *cx.local.sent;
+            let mut channels = [0u16; 16];
+            channels[0] = 172 + (sent % 1640) as u16;
+            channels[1] = 992;
+            channels[2] = 172;
+            channels[3] = 1811;
+            for (index, channel) in channels.iter_mut().enumerate().skip(4) {
+                *channel = 1000 + index as u16;
+            }
+            for byte in sbus_frame(&channels) {
+                while cx.local.sbus_out.sr().read().txe().bit_is_clear() {}
+                cx.local.sbus_out.dr().write(|w| w.dr().set(u16::from(byte)));
+            }
+            if sent.is_multiple_of(100) {
+                defmt::info!("sbus-source: sent {=u32}", sent);
+            }
+            Mono::delay(14u64.millis()).await;
+        }
+    }
+
     /// What the channels are for, as an ordinary RTIC task: the SBUS group
     /// decodes, and this firmware puts them in the goggles and the log.
     #[task(priority = 1, shared = [link], local = [flags: (bool, bool) = (false, false)])]
@@ -435,7 +497,7 @@ ferroforge::app! {
         let flags = (update.failsafe, update.lost);
         let changed = flags != *cx.local.flags;
         *cx.local.flags = flags;
-        if !changed && update.good % 50 != 0 {
+        if !changed && !update.good.is_multiple_of(50) {
             return;
         }
 
@@ -451,4 +513,25 @@ ferroforge::app! {
             update.bad
         );
     }
+}
+
+/// One SBUS frame: `0x0F`, sixteen 11-bit channels packed least significant
+/// bit first into 22 bytes, a flags byte with nothing set, then `0x00`.
+fn sbus_frame(channels: &[u16; 16]) -> [u8; 25] {
+    let mut frame = [0u8; 25];
+    frame[0] = 0x0F;
+    let mut bits = 0u32;
+    let mut held = 0u32;
+    let mut index = 1;
+    for channel in channels {
+        bits |= u32::from(*channel & 0x07FF) << held;
+        held += 11;
+        while held >= 8 {
+            frame[index] = bits as u8;
+            index += 1;
+            bits >>= 8;
+            held -= 8;
+        }
+    }
+    frame
 }
