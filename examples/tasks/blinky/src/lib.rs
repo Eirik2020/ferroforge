@@ -43,14 +43,30 @@ pub async fn report(_cx: report::Context, value: u32) {
     defmt::info!("blink count={=u32}", value);
 }
 
-/// Two lights reporting to one place: the same task twice, each copy under its
-/// own name, so every name it has is prefixed - `heartbeat_led`,
-/// `beacon_period_ms`, `heartbeat_blink`. Both copies' reports are wired to the
-/// one reporter, which is merged in unprefixed.
-#[ferroforge::group(spawn = [heartbeat_report = report, beacon_report = report])]
+/// Where one light's counts go, under the name its firmware gives it, so two
+/// lights in one log can be told apart line by line.
+#[ferroforge::task(config = [label: &'static str])]
+pub async fn announce(_cx: announce::Context, value: u32) {
+    defmt::info!("{=str} count={=u32}", CONFIG::LABEL, value);
+}
+
+/// One light and its own log line: a group of two, with the light's `report`
+/// wired to its announcer inside the group.
+#[ferroforge::group(spawn = [report = announce])]
+pub mod light {
+    pub use super::announce;
+    pub use super::blink;
+}
+
+/// Two lights, each announcing itself, and a reporter for whatever else the
+/// firmware wants counted: the `light` group twice, each copy under its own
+/// name so every name it has is prefixed - `heartbeat_led`, `beacon_label`,
+/// `heartbeat_announce` - and each copy wired inside itself. The reporter is
+/// merged in unprefixed.
+#[ferroforge::group]
 pub mod lights {
-    pub use super::blink as heartbeat;
-    pub use super::blink as beacon;
+    pub use super::light as heartbeat;
+    pub use super::light as beacon;
     pub use super::report;
 }
 

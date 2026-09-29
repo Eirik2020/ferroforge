@@ -20,8 +20,8 @@
 //! | PC6 | DisplayPort out, to the transmitter's serial RX. 115200 8N1 |
 //! | PC7 | DisplayPort in, from the transmitter's serial TX |
 //!
-//! Ground is shared with both. PA5 is the board's LD2; PB0 is an ordinary
-//! header pin with no LED on it. On a NUCLEO, PA2 is Arduino D1 and PA10 is
+//! Ground is shared with both. PA5 is the board's LD2; PB0 and PA8 (Arduino
+//! D7) are ordinary header pins with no LED on them. On a NUCLEO, PA2 is Arduino D1 and PA10 is
 //! D2, so one jumper between them runs the whole SBUS path on a bare board:
 //! `sbus_source` sends frames whose channels are known, and `show` logs what
 //! the group decoded, so the two can be compared.
@@ -55,7 +55,7 @@ ferroforge::app! {
             DmaChannel, DmaDirection, DmaEvent, Stream7, StreamsTuple,
             traits::Stream as _,
         },
-        gpio::{Output, PA5, PB0, PushPull},
+        gpio::{Output, PA5, PA8, PB0, PushPull},
         pac::{DMA2, TIM3, USART2, USART6},
         prelude::*,
         rcc::Config,
@@ -72,6 +72,10 @@ ferroforge::app! {
         uart: uart_dma::Port,
         // The whole OSD conversation, for the same reason.
         link: osd::Link,
+        // Frames the stand-in receiver sent, and what the SBUS group made of
+        // them - good and bad - so the status line can account for every one.
+        sbus_sent: u32,
+        sbus_seen: (u32, u32),
         // Shared rather than local because two tasks need it: the handler that
         // moves bytes, and the one that asks the port to start moving them.
         osd_usart: USART6,
@@ -85,6 +89,8 @@ ferroforge::app! {
         beacon_count: u32,
         pulse_timer: CounterUs<TIM3>,
         pulse_count: u32,
+        spare_led: PA8<Output<PushPull>>,
+        spare_count: u32,
         // The receive stream lives in the shared `Port`, because reading its
         // cursor is what two tasks need. These are the pieces only one task
         // touches.
@@ -103,8 +109,10 @@ ferroforge::app! {
         let gpioc = cx.device.GPIOC.split(&mut rcc);
         let mut heartbeat_led = gpioa.pa5.into_push_pull_output();
         let mut beacon_led = gpiob.pb0.into_push_pull_output();
+        let mut spare_led = gpioa.pa8.into_push_pull_output();
         heartbeat_led.set_low();
         beacon_led.set_low();
+        spare_led.set_low();
 
         // The HAL-specific task reads and clears this timer's flags; init owns
         // everything else about it.
@@ -119,6 +127,7 @@ ferroforge::app! {
 
         lights::heartbeat_blink::spawn().unwrap();
         lights::beacon_blink::spawn().unwrap();
+        spare::blink::spawn().unwrap();
         status::spawn().unwrap();
         osd_paint::spawn().unwrap();
         sbus_source::spawn().unwrap();
@@ -232,9 +241,11 @@ ferroforge::app! {
         (
             Shared {
                 heartbeat_enabled: true,
-                beacon_enabled: false,
+                beacon_enabled: true,
                 uart: uart_dma::Port::new(rx_stream, ring),
                 link: osd::Link::new(),
+                sbus_sent: 0,
+                sbus_seen: (0, 0),
                 osd_usart,
             },
             Local {
@@ -244,6 +255,8 @@ ferroforge::app! {
                 beacon_count: 0,
                 pulse_timer,
                 pulse_count: 0,
+                spare_led,
+                spare_count: 0,
                 usart,
                 tx_stream: streams.7,
                 sbus_out,
@@ -251,26 +264,57 @@ ferroforge::app! {
         )
     }
 
-    // One group holding the same light twice, as `heartbeat` and `beacon`, and
-    // the reporter both copies are wired to. Every name a copy has is prefixed
+    // One group holding the same group of two twice, as `heartbeat` and
+    // `beacon` - a light and the announcer it is wired to inside the group -
+    // plus a reporter merged in unprefixed. Every name a copy has is prefixed
     // with its copy's name, so the firmware's resources bind by bare name. The
-    // two lights still differ in every binding a composition controls - name,
-    // priority, resources, gate and period - and share only the definition.
+    // two copies differ in every binding a composition controls - name,
+    // priority, resources, gate, period and label - and share only the
+    // definitions; each announces itself, so the log tells them apart.
     #[group(
         from = blinky::lights,
         local = [heartbeat_led, heartbeat_count, beacon_led, beacon_count],
         shared = [heartbeat_enabled, beacon_enabled],
-        config = [heartbeat_period_ms: u32 = 250, beacon_period_ms: u32 = 1000],
+        config = [
+            heartbeat_period_ms: u32 = 250,
+            heartbeat_label: &'static str = "heartbeat",
+            beacon_period_ms: u32 = 1000,
+            beacon_label: &'static str = "beacon",
+        ],
     )]
     mod lights {
         #[task(priority = 1)]
         async fn heartbeat_blink;
 
+        #[task(priority = 1)]
+        async fn heartbeat_announce;
+
         #[task(priority = 2)]
         async fn beacon_blink;
 
+        #[task(priority = 2)]
+        async fn beacon_announce;
+
         #[task(priority = 1)]
         async fn report;
+    }
+
+    // The group `lights` holds twice, selected a third time on its own. A
+    // group is a definition like a task is, so a firmware may select it as
+    // often as it has resources for; the module's name keeps each selection's
+    // tasks apart. PA8 is Arduino D7, free for an LED.
+    #[group(
+        from = blinky::light,
+        local = [led = spare_led, count = spare_count],
+        shared = [enabled = heartbeat_enabled],
+        config = [period_ms: u32 = 500, label: &'static str = "spare"],
+    )]
+    mod spare {
+        #[task(priority = 1)]
+        async fn blink;
+
+        #[task(priority = 1)]
+        async fn announce;
     }
 
     // The HAL-specific hardware task. Unlike a portable definition it can read
@@ -390,7 +434,11 @@ ferroforge::app! {
     /// with nothing to say, or not running at all. `deliveries` counts what the
     /// DMA UART tasks handed on, so a stuck receiver and a mis-framed one look
     /// different from here.
-    #[task(priority = 1, shared = [uart, link], local = [last_deliveries: u32 = 0])]
+    #[task(
+        priority = 1,
+        shared = [uart, link, sbus_sent, sbus_seen],
+        local = [last_deliveries: u32 = 0],
+    )]
     async fn status(mut cx: status::Context) {
         loop {
             let (deliveries, overruns, errors) = cx
@@ -417,6 +465,17 @@ ferroforge::app! {
                 answered,
                 refused
             );
+            // Every frame accounted for: with the jumper fitted, `missing` is 0
+            // or 1 - a frame can be on the wire as this reads - and `bad` is 0.
+            let sent = cx.shared.sbus_sent.lock(|count| *count);
+            let (good, bad) = cx.shared.sbus_seen.lock(|seen| *seen);
+            defmt::info!(
+                "sbus: sent={=u32} decoded={=u32} bad={=u32} missing={=u32}",
+                sent,
+                good,
+                bad,
+                sent.wrapping_sub(good.wrapping_add(bad))
+            );
             *cx.local.last_deliveries = deliveries;
             Mono::delay(1000u64.millis()).await;
         }
@@ -430,8 +489,8 @@ ferroforge::app! {
     /// `show`'s log line: with nothing lost, channel 1 there is
     /// `172 + good % 1640`. Polled, a byte at a time; a frame is 25 bytes of 12
     /// bits at 100000 baud, 3 ms at the lowest priority.
-    #[task(priority = 1, local = [sbus_out, sent: u32 = 0])]
-    async fn sbus_source(cx: sbus_source::Context) {
+    #[task(priority = 1, shared = [sbus_sent], local = [sbus_out, sent: u32 = 0])]
+    async fn sbus_source(mut cx: sbus_source::Context) {
         loop {
             *cx.local.sent = cx.local.sent.wrapping_add(1);
             let sent = *cx.local.sent;
@@ -447,17 +506,24 @@ ferroforge::app! {
                 while cx.local.sbus_out.sr().read().txe().bit_is_clear() {}
                 cx.local.sbus_out.dr().write(|w| w.dr().set(u16::from(byte)));
             }
-            if sent.is_multiple_of(100) {
-                defmt::info!("sbus-source: sent {=u32}", sent);
-            }
+            // Counted only once the whole frame is out, so a frame is never
+            // counted as sent before it could have been received.
+            cx.shared.sbus_sent.lock(|count| *count = sent);
             Mono::delay(14u64.millis()).await;
         }
     }
 
     /// What the channels are for, as an ordinary RTIC task: the SBUS group
     /// decodes, and this firmware puts them in the goggles and the log.
-    #[task(priority = 1, shared = [link], local = [flags: (bool, bool) = (false, false)])]
+    #[task(
+        priority = 1,
+        shared = [link, sbus_seen],
+        local = [flags: (bool, bool) = (false, false)],
+    )]
     async fn show(mut cx: show::Context, update: Channels) {
+        cx.shared
+            .sbus_seen
+            .lock(|seen| *seen = (update.good, update.bad));
         // The goggles. Raw receiver units on screen, deliberately: that is what
         // the log line below prints, and two displays of the same stick
         // disagreeing would be a puzzle worth nobody's time.

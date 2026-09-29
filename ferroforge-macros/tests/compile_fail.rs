@@ -117,6 +117,57 @@ const CASES: &[Case] = &[
         to: "spawn = [report = status_blink],",
         expected: "spawn = [report = status_blink],",
     },
+    // A group's members are declared in the firmware, so every way of
+    // declaring them wrongly must be reported on the line that did it, saying
+    // what the group has or what to write instead.
+    Case {
+        name: "group-member-misspelt",
+        firmware: BEACON,
+        file: MAIN,
+        from: "async fn beacon_announce;",
+        to: "async fn beacon_anounce;",
+        expected: "`beacon_anounce` is not a task of this group; its tasks are",
+    },
+    Case {
+        name: "group-member-left-out",
+        firmware: BEACON,
+        file: MAIN,
+        from: "#[task(priority = 1)]\n        async fn decode;",
+        to: "",
+        expected: "add `#[task(priority = ..)] async fn decode;` to the module",
+    },
+    Case {
+        name: "group-member-of-the-wrong-kind",
+        firmware: BEACON,
+        file: MAIN,
+        from: "        fn on_uart;",
+        to: "        async fn on_uart;",
+        expected: "`on_uart` is a hardware task: declare it `fn on_uart;`",
+    },
+    Case {
+        name: "group-hardware-member-unbound",
+        firmware: BEACON,
+        file: MAIN,
+        from: "#[task(binds = USART1, priority = 12)]",
+        to: "#[task(priority = 12)]",
+        expected: "`on_uart` is a hardware task; bind it",
+    },
+    Case {
+        name: "group-resource-it-does-not-need",
+        firmware: BEACON,
+        file: MAIN,
+        from: "local = [heartbeat_led, heartbeat_count, beacon_led, beacon_count],",
+        to: "local = [heartbeat_led, heartbeat_count, beacon_led, beacon_count, sbus_out],",
+        expected: "`sbus_out` is not a local name of this group",
+    },
+    Case {
+        name: "group-resource-left-unbound",
+        firmware: BEACON,
+        file: MAIN,
+        from: "local = [heartbeat_led, heartbeat_count, beacon_led, beacon_count],",
+        to: "local = [heartbeat_led, heartbeat_count, beacon_led],",
+        expected: "this group needs local `beacon_count` bound as well",
+    },
     // Dispatchers are the author's choice, passed through unchanged - so RTIC's
     // own validation of that choice must still reach the authored line.
     Case {
