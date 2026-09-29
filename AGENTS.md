@@ -43,6 +43,7 @@ Start from the task, not the chapter. Read the named sections, not whole files.
 | Hardware tasks and interrupt binding | G3 and G4; `architecture.md` Task Authoring |
 | Dependencies and manifests | `dependencies.md` |
 | Building or checking anything | `workflow.md` |
+| Writing Rust documentation | `documentation.md` Rust Documentation |
 | What the code does today | `prototype.md` |
 | What is left to build | `implementation-plan.md` |
 | Adopting FerroForge in ferro-wasp | `ferro-wasp-adoption.md` |
@@ -62,7 +63,7 @@ links there instead of restating it.
 | ferro-wasp adoption: its gaps and migration order | `ferro-wasp-adoption.md` |
 | What was decided, and where it is specified | `review.md` (index only) |
 
-The whole book is 1603 lines, so read a chapter when a section is not enough:
+The whole book is 1648 lines, so read a chapter when a section is not enough:
 
 - `governing-requirements.md` (65) - G1-G7. Loaded at launch for Claude.
 - `architecture.md` (319) - the agreed call-through model. Owns the canonical
@@ -73,8 +74,8 @@ The whole book is 1603 lines, so read a chapter when a section is not enough:
   order.
 - `ferro-wasp-adoption.md` (110) - what ferro-wasp needs, and the migration
   order.
-- `workflow.md` (362) - every command, including the opt-in cross-compiles.
-- `prototype.md` (166) - what exists today and what does not.
+- `workflow.md` (375) - every command, including the opt-in cross-compiles.
+- `prototype.md` (176) - what exists today and what does not.
 - `dependencies.md` (112) - where requirements live, and how a HAL-specific
   crate names a chip without choosing one.
 

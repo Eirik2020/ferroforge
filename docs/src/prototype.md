@@ -113,6 +113,16 @@ asserting nothing. See [workflow](workflow.md) for how to run them.
   depend on the board. One compiled fixture holds all of them. The Foxeer
   flight app is built from these definitions for every task but its USB and
   storage tasks.
+- Task groups select tasks that only work as a set in one declaration, with
+  named copies, repeated selection and nesting across crates
+  ([task groups](architecture.md#task-groups)). The beacon runs a group of
+  groups on hardware.
+- A task reading time takes the firmware's monotonic at any rate, counting in
+  `u64`: SysTick, which every backend builds 64-bit, or a hardware timer
+  chosen with `monotonic-timer`.
+- Entries take documentation, which reaches the field or constant each becomes,
+  and a task-local with an initial value takes `#[cfg]`. An instance keeps its
+  own attributes, and `app!` passes through any item RTIC accepts.
 - Configuration is an associated-const trait read as `CONFIG::FIELD`, so values
   stay compile-time and work inside macro calls. They do not work in const
   positions such as array lengths: the trait reaches the body as a generic

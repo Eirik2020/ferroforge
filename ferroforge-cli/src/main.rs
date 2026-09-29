@@ -1,9 +1,12 @@
 //! The FerroForge CLI.
 //!
-//! The verbs are Cargo's, because a firmware crate is an ordinary Cargo package
-//! and pretending otherwise would only add vocabulary. `check`, `build` and
-//! `run` refresh what the chip implies and then hand over to Cargo; `sync` is
-//! the one verb Cargo has no analogue for, and does only the refreshing.
+//! The verbs are Cargo's where Cargo has one, because a firmware crate is an
+//! ordinary Cargo package and pretending otherwise would only add vocabulary.
+//! `check`, `build` and `run` refresh what the chip implies and then hand over
+//! to Cargo; `sync` does only the refreshing, and `drift` and `chips` are
+//! FerroForge's own.
+
+#![deny(missing_docs)]
 
 mod all;
 mod backend;

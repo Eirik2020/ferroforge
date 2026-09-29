@@ -1,14 +1,18 @@
 //! FerroForge's procedural macros.
 //!
-//! Two entry points, and nothing between them, named as RTIC names the same
-//! ideas. `#[ferroforge::task]` turns a task definition into an ordinary
-//! generic function and a real context type; `ferroforge::app!` expands a
-//! firmware in place into a real `#[rtic::app]` whose handlers construct that
-//! context and call the function.
+//! Three entry points, named as RTIC names the same ideas and, where RTIC has
+//! no word, as AADL does. `#[ferroforge::task]` turns a task definition into an
+//! ordinary generic function and a real context type; `#[ferroforge::group]`
+//! marks a module of definitions as a task group, selected together;
+//! `ferroforge::app!` expands a firmware in place into a real `#[rtic::app]`
+//! whose handlers construct that context and call the function.
 //!
-//! Neither reads the other's crate. `app!` emits real Rust paths into the task
-//! crates a firmware depends on, so a wrong definition, binding or type is an
-//! ordinary compile error at the authored line.
+//! None reads another crate's source. `app!` emits real Rust paths into the
+//! task crates a firmware depends on, so a wrong definition, binding or type is
+//! an ordinary compile error at the authored line; a task group's members
+//! reach it as tokens its own macro hands back.
+
+#![deny(missing_docs)]
 
 mod app;
 mod group;
@@ -30,8 +34,9 @@ pub fn app(input: TokenStream) -> TokenStream {
     }
 }
 
-/// A module of task definitions that only work together, selected by a
-/// firmware in one `#[group(from = ..)] mod name { .. }` inside `app!`. The
+/// A task group: a module of task definitions that only work together, named
+/// after AADL's thread group and selected by a firmware in one
+/// `#[group(from = ..)] mod name { .. }` inside `app!`. The
 /// module is left as written; alongside it goes an exported `macro_rules!`
 /// that hands its members to `app!`.
 #[proc_macro_attribute]

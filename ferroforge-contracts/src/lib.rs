@@ -1,7 +1,11 @@
-//! Source contracts shared by the procedural macro and host discovery.
+//! What a task definition declares, parsed and checked for the macros.
 //!
-//! This crate parses declarations, not task-body semantics. It has no target
-//! HAL dependencies. Parsing the standalone syntax is not a checking expansion.
+//! `#[task]` reads a definition's arguments and signature through this crate
+//! and checks their structure - duplicate names, a missing type, an attribute
+//! out of place - before anything is expanded. It reads declarations, never
+//! task bodies, and depends on no HAL.
+
+#![deny(missing_docs)]
 
 use std::collections::BTreeSet;
 
@@ -37,11 +41,17 @@ pub fn identifier_key(name: &Ident) -> String {
 /// checks once it knows the entry's category.
 #[derive(Clone, Debug)]
 pub struct Resource {
+    /// The name the body reads it by, `cx.local.name`.
     pub name: Ident,
+    /// Its inline type, or `None` when a bound in `bounds` stands in for one.
     pub ty: Option<Type>,
+    /// A local's initial value, `name: Type = value`, making it the task's own.
     pub init: Option<Expr>,
+    /// Where `#[lock_free]` was written, for a shared resource received as `&mut T`.
     pub lock_free: Option<Span>,
+    /// Its documentation, carried to the field or constant it becomes.
     pub docs: Vec<Attribute>,
+    /// Its `#[cfg]`s, accepted only on a local with an initial value.
     pub cfgs: Vec<Attribute>,
 }
 
@@ -90,9 +100,13 @@ impl Parse for Resource {
     }
 }
 
+/// A resource typed by what it can do rather than what it is:
+/// `bounds = [led: StatefulOutputPin]`.
 #[derive(Clone, Debug)]
 pub struct ResourceBound {
+    /// The local or shared resource the bound applies to.
     pub name: Ident,
+    /// The traits its type must implement.
     pub traits: Punctuated<TypeParamBound, Token![+]>,
 }
 
@@ -105,9 +119,12 @@ impl Parse for ResourceBound {
     }
 }
 
+/// A named, typed input: a task's own parameter, or one a spawn alias takes.
 #[derive(Clone, Debug)]
 pub struct Parameter {
+    /// The parameter's name.
     pub name: Ident,
+    /// The parameter's type.
     pub ty: Type,
 }
 
@@ -122,8 +139,11 @@ impl Parse for Parameter {
     }
 }
 
+/// An outgoing call a task makes, `spawn = [report(value: u32)]`, which the
+/// firmware binds to one of its own tasks.
 #[derive(Clone, Debug)]
 pub struct Spawn {
+    /// The alias the body calls, `cx.spawn.report(..)`.
     pub name: Ident,
     /// `Some([])` is an explicit zero-input signature, `report()`. `None` is the
     /// bare name `report`, which carries no signature to bound the closure with.
@@ -148,10 +168,14 @@ impl Parse for Spawn {
     }
 }
 
-/// Registry requirements are retained only for the existing prototype adapter.
+/// An entry of `dependencies = [..]`. Parsed only so that a definition still
+/// stating one is told where it belongs: a task crate's dependencies are its
+/// `Cargo.toml`'s, and `#[task]` refuses the argument.
 #[derive(Clone, Debug)]
 pub struct TaskDependency {
+    /// The crate named.
     pub id: Ident,
+    /// The features asked of it.
     pub features: Vec<LitStr>,
 }
 
@@ -176,15 +200,22 @@ impl Parse for TaskDependency {
     }
 }
 
+/// Everything a `#[task(..)]` attribute declares about the task it marks.
 #[derive(Clone, Debug, Default)]
 pub struct TaskArguments {
+    /// `bounds = [..]`: resources typed by trait.
     pub bounds: Vec<ResourceBound>,
+    /// `local = [..]`: resources only this task touches.
     pub local: Vec<Resource>,
+    /// `shared = [..]`: resources it locks, or holds `#[lock_free]`.
     pub shared: Vec<Resource>,
+    /// `config = [..]`: values the firmware supplies per instance.
     pub config: Vec<Resource>,
+    /// `spawn = [..]`: the calls it makes.
     pub spawn: Vec<Spawn>,
     /// Source reference, not the system's actual tick rate or hardware clock.
     pub monotonic: Option<Path>,
+    /// `dependencies = [..]`, refused where it is found.
     pub dependencies: Vec<TaskDependency>,
 }
 
@@ -438,16 +469,28 @@ pub enum TaskKind {
     Hardware,
 }
 
+/// A definition as `#[task]` reads it: its arguments, checked, and what its
+/// signature says about the task.
 #[derive(Clone, Debug)]
 pub struct TaskContract {
+    /// The attribute's arguments, validated.
     pub arguments: TaskArguments,
+    /// Whether it is a software or a hardware task.
     pub kind: TaskKind,
+    /// The name the body gives its context, `cx`.
     pub context: Ident,
+    /// The inputs after the context.
     pub inputs: Vec<Parameter>,
+    /// Whether it returns `!`, running for ever.
     pub diverges: bool,
 }
 
 impl TaskContract {
+    /// Read a definition from its arguments and signature, refusing a shape
+    /// RTIC could not run: an unsafe, generic or foreign function, one whose
+    /// first parameter is not its `task_name::Context`, a hardware task that
+    /// takes inputs or does not return, and a software task returning anything
+    /// but `()` or `!`.
     pub fn new(arguments: TaskArguments, signature: &Signature) -> syn::Result<Self> {
         arguments.validate_standalone()?;
         if signature.unsafety.is_some()

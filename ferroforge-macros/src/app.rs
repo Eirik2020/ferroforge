@@ -285,7 +285,7 @@ const NO_MONOTONIC: &str = "NoMonotonicDeclared";
 
 pub struct App {
     /// Everything `app!` was given, kept so that a group's macro can be handed
-    /// the whole application back. See [`crate::group`].
+    /// the whole application back. See [the group module](mod@crate::group).
     original: TokenStream,
     device: Path,
     dispatchers: Vec<Ident>,

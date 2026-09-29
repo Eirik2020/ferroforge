@@ -19,7 +19,19 @@ cargo test --workspace --locked
 ```
 
 This covers task declaration parsing, macro expansion, and the backend data the
-CLI emits from. It does not build any firmware.
+CLI emits from, and holds every module to having documentation. It does not
+build any firmware.
+
+The documentation is built with rustdoc's warnings denied, so a broken link or
+unrendered markup fails it, the private modules included:
+
+```text
+RUSTDOCFLAGS="-D warnings" cargo doc -p ferroforge -p ferroforge-macros -p ferroforge-contracts --no-deps --document-private-items
+RUSTDOCFLAGS="-D warnings" cargo doc -p ferroforge-cli --no-deps --document-private-items
+```
+
+Two invocations, because the CLI's binary and the facade are both named
+`ferroforge`, and documented together one overwrites the other's pages.
 
 The tests that do are opt-in, because each drives a cross-compile:
 
@@ -50,7 +62,8 @@ Run them when changing an expansion. A case that starts failing with the wrong
 message is the point: it means a defect stopped being diagnosable at the
 authored line.
 
-CI runs both suites, `cargo fmt --check` and `cargo clippy` with warnings denied,
+CI runs both suites, `cargo fmt --check`, `cargo clippy` with warnings denied
+and the documentation build above,
 on every push to `main` and every pull request, and weekly, because a failure
 that shows up only now and then needs repeated runs to be caught. Formatting and
 clippy are therefore part of passing, not advice.

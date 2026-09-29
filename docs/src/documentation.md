@@ -13,15 +13,15 @@ agreed architecture, and open proposals clearly distinguished.
 One topic, one owner. Each design topic is specified in exactly one chapter;
 every other mention links to it instead of restating it. The ownership list is
 in the documentation map in the root `AGENTS.md`. When a decision is reached,
-record it in the [review chapter](review.md) as a one-line entry naming where it
-is specified, and write the specification itself in the owning chapter. Do not
-update several chapters "consistently" with the same rule - that is how the same
-decision ends up in three places and drifts apart.
+record it in the [review chapter](review.md) as a short dated entry naming where
+it is specified, with a row in its index of binding decisions, and write the
+specification itself in the owning chapter. Do not update several chapters
+"consistently" with the same rule - that is how the same decision ends up in
+three places and drifts apart.
 
-The prototype chapter includes selected live Rust files using mdBook's include
-preprocessor. Embedded and proposed code examples are marked `rust,ignore`
-because they need their own target, app context, or an as-yet undecided API;
-validate actual source with the commands in the [workflow](workflow.md).
+Code examples in the book are marked `rust,ignore`, because they need their own
+target, app context, or an as-yet undecided API; validate actual source with
+the commands in the [workflow](workflow.md).
 
 Build the book after edits:
 
@@ -29,10 +29,26 @@ Build the book after edits:
 mdbook build docs
 ```
 
-Missing summary chapters fail the build (`create-missing = false`). Check
-internal links, the decision record, and implementation phase gates too.
-`docs/book/` is disposable build output and is ignored by Git and ordinary
-source searches.
+Missing summary chapters fail the build (`create-missing = false`). The build
+does not check links between chapters, so check them, and the decision record,
+by hand. `docs/book/` is disposable build output and is ignored by Git and
+ordinary source searches.
+
+## Rust Documentation
+
+Every module in the four FerroForge crates - `ferroforge`, `ferroforge-macros`,
+`ferroforge-contracts` and `ferroforge-cli` - says what it is for, and every
+public item is documented. The book owns the design; module documentation says
+what a module is for and why it is shaped as it is, and links to the book
+rather than restating it. The example crates are examples, and are not held to
+this.
+
+It is enforced, not asked for. Each crate root denies `missing_docs`, which
+covers public items; a test, `ferroforge/tests/documentation.rs`, reads every
+source file for module documentation, which is what reaches the private
+modules that most of FerroForge is; and the documentation is built with
+rustdoc's warnings denied, broken links among them, so what is written also
+renders. The commands are in [the workflow](workflow.md#check-the-host-crates).
 
 ## Archive Access Policy
 
