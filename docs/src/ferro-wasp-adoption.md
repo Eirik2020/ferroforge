@@ -4,7 +4,8 @@ The [decision record](review.md) says FerroForge co-evolves with the
 [ferro-wasp](https://github.com/Eirik2020/ferro-wasp) flight controller. This
 chapter is the plan for that: what ferro-wasp needs from FerroForge before it can
 adopt it, and the order to migrate in. It was written against FerroForge 0.2.0
-and ferro-wasp `370460b`.
+and ferro-wasp `370460b`, and last checked against FerroForge 0.4.0 and
+ferro-wasp `b3721aa`.
 
 Short answer: the macros fit ferro-wasp's architecture, and so does the CLI.
 The macros are usable without the CLI, so adoption started with the macro
@@ -12,16 +13,13 @@ release and the CLI is no longer what holds the rest back.
 
 ## What Already Fits
 
-- ferro-wasp declares `systick_monotonic!(Mono, 1000)`, which FerroForge 0.3
-  requires. Moving to 0.4, where any rate fits once the monotonic counts in
-  `u64` ([task authoring](architecture.md#task-authoring)), is mechanical but
-  not small; a copy migrated end to end showed what it takes. Its firmware
-  manifests enable `systick-64bit`. Timestamps from `Mono::now()` become `u64`
-  where ferro-wasp's own APIs take `u32`, about 25 sites in
-  `ferrowasp-stm32f4-tasks`, which narrow with `as u32` - keeping the wrap they
-  have now - or widen. Durations built from `u32` values take `u64::from`, and
-  the Foxeer app's four bare literals take `u64`, since it imports both
-  preludes. Then every active firmware builds and ferro-wasp's host tests pass.
+- ferro-wasp's `systick_monotonic!(Mono, 1000)` counts in `u64` with
+  `systick-64bit`, as FerroForge 0.4 requires of any rate
+  ([task authoring](architecture.md#task-authoring)). Its own APIs take those
+  `u64` timestamps rather than narrowing them, so they do not wrap; only its
+  fixed log and status formats keep `u32`. Its `u32` durations take
+  `u64::from`, and bare literals take `u64` in an app that imports both the
+  HAL's prelude and the monotonic's.
 - `app!` passes `init`, `#[shared]`, `#[local]`, `dispatchers` and
   `peripherals = true` through unchanged, so the Foxeer F405 V2 `init` - about
   580 lines, including `#[init(local = [..])]` DMA buffers - does not change.
@@ -77,11 +75,9 @@ Each step re-runs the tests ferro-wasp's own
 selects for what it touched, and a change to a safety-relevant task re-gates
 flight.
 
-1. **FerroForge 0.4**, once released, as measured above. The image changes, so
-   the next flight re-gates.
-2. **The last two tasks.** `usb_fs` and `flash_manager_task` become definitions,
+1. **The last two tasks.** `usb_fs` and `flash_manager_task` become definitions,
    as [kept in the app](#kept-in-the-app) describes.
-3. **CLI adoption.** Adopt `ferroforge sync` and `run`, and retire ferro-wasp's
+2. **CLI adoption.** Adopt `ferroforge sync` and `run`, and retire ferro-wasp's
    `tools/rtic-app-builder`, which overlaps with FerroForge, so the two do not
    drift.
 
