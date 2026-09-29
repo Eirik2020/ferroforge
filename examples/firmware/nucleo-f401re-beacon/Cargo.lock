@@ -263,17 +263,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ferroforge-task-msp-displayport"
-version = "0.1.0"
-dependencies = [
- "ferroforge",
- "fugit",
- "msp",
- "rtic",
- "rtic-monotonics",
-]
-
-[[package]]
 name = "ferroforge-task-stm32f4-sbus"
 version = "0.1.0"
 dependencies = [
@@ -372,10 +361,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
-name = "msp"
-version = "0.1.0"
-
-[[package]]
 name = "nb"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -400,7 +385,6 @@ dependencies = [
  "defmt-rtt",
  "ferroforge",
  "ferroforge-task-blinky",
- "ferroforge-task-msp-displayport",
  "ferroforge-task-stm32f4-sbus",
  "ferroforge-task-stm32f4-timer",
  "ferroforge-task-stm32f4-uart-dma",

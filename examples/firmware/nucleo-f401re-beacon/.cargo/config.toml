@@ -15,4 +15,4 @@ rustflags = [
 ]
 
 [env]
-DEFMT_LOG = "info,ferroforge_task_blinky=off"
+DEFMT_LOG = "info"

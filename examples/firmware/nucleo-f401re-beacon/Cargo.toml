@@ -10,9 +10,10 @@ build = false
 # memory layout, probe identity, target triple, PAC path and platform
 # crates - is derived from this, and nothing else records it.
 chip = "stm32f401re"
-# What goes into DEFMT_LOG. The blink counter is per-tick and would drown the
-# SBUS output, so it is off here rather than removed from the library.
-defmt-log = "info,ferroforge_task_blinky=off"
+# What goes into DEFMT_LOG. Everything, the blink counters included: each
+# light announces itself by name, which is how a run tells the group's copies
+# apart. The timer's own count through `report` is the busiest line.
+defmt-log = "info"
 
 [[bin]]
 name = "nucleo-f401re-beacon"
@@ -23,7 +24,6 @@ bench = false
 [dependencies]
 ferroforge = { path = "../../../ferroforge" }
 ferroforge-task-blinky = { path = "../../tasks/blinky" }
-ferroforge-task-msp-displayport = { path = "../../tasks/msp-displayport" }
 ferroforge-task-stm32f4-timer = { path = "../../tasks/stm32f4-timer" }
 ferroforge-task-stm32f4-sbus = { path = "../../tasks/stm32f4-sbus" }
 ferroforge-task-stm32f4-uart-dma = { path = "../../tasks/stm32f4-uart-dma" }
