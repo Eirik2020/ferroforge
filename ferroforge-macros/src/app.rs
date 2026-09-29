@@ -684,7 +684,7 @@ pub fn expand(application: App) -> syn::Result<TokenStream> {
             Element::Instance(instance) => render_instance(instance)?,
             Element::Group(group) => {
                 let mine = crate::group::definitions_for(group, &definitions);
-                let (instances, module) = crate::group::instances(group, &mine)?;
+                let (instances, module) = crate::group::instances(group, &mine, &uses)?;
                 let mut rendered = TokenStream::new();
                 for instance in instances {
                     rendered.extend(render_instance(&instance)?);

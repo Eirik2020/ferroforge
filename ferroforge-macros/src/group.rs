@@ -17,12 +17,18 @@
 //! to that macro, which appends the members and calls `app!` again.
 //!
 //! ```text
-//! app! { .. #[group(from = lib::g)] mod x { .. } .. }
-//!   -> lib::g! { x ; .. }
-//!   -> app! { .. @group x from $crate::g { use $crate::rx; members } }
-//!   -> lib::rx! { x ; .. }          (once per group g includes)
+//! app! { .. #[group(from = lib::serial::g)] mod x { .. } .. }
+//!   -> lib::g! { x ; .. }                 (exported at the crate root)
+//!   -> app! { .. @group x from g { use super::rx; members from self::.. } }
+//!   -> lib::rx! { x ; .. }                (once per group g includes)
 //!   -> #[rtic::app] mod app { .. x_member_a .. x_member_b .. mod x { .. } }
 //! ```
+//!
+//! A group's macro cannot know where its module sits, so every path in what it
+//! appends is relative - `self::on_uart`, `super::rx` - and `app!` makes it
+//! absolute against the path the firmware wrote in `from`. A member's input
+//! types travel as aliases in the group's module, so a type the library names
+//! through its own imports is still nameable from the firmware.
 
 use ferroforge_contracts::TaskArguments;
 use proc_macro2::TokenStream;
@@ -53,6 +59,7 @@ impl ToTokens for Rebind {
 /// write the adapter and does not read the definition. Each list binds the
 /// definition's requirement to a name in the group's namespace; a `spawn`
 /// naming another member of the same group is wired inside the group.
+#[derive(Clone)]
 pub(crate) struct Member {
     docs: Vec<Attribute>,
     from: Option<Path>,
@@ -138,7 +145,8 @@ impl Member {
     }
 
     /// The member as a group's macro hands it to `app!`: the same form, with
-    /// the definition's path made absolute through `$crate`.
+    /// every path relative to the group's module as `self::..`, because only
+    /// the firmware knows where that module is.
     fn emit(&self) -> TokenStream {
         let Self {
             docs,
@@ -159,7 +167,7 @@ impl Member {
         quote! {
             #(#docs)*
             #[task(
-                from = $crate::#from,
+                from = #from,
                 shared = [#(#shared),*],
                 local = [#(#local),*],
                 spawn = [#(#spawn),*],
@@ -220,7 +228,10 @@ pub fn define(arguments: GroupArguments, module: ItemMod) -> syn::Result<TokenSt
     let name = &module.ident;
 
     let mut members: Vec<Member> = Vec::new();
-    let mut includes: Vec<Ident> = Vec::new();
+    let mut includes: Vec<Path> = Vec::new();
+    // Every input type gets an alias in the group's module, where the author's
+    // own imports resolve it, so the firmware can name it by path.
+    let mut aliases: Vec<TokenStream> = Vec::new();
     for item in items {
         match item {
             Item::Fn(function) => {
@@ -235,8 +246,21 @@ pub fn define(arguments: GroupArguments, module: ItemMod) -> syn::Result<TokenSt
                 };
                 let task: TaskArguments = attribute.parse_args()?;
                 let mut signature = function.sig.clone();
+                let fn_name = &function.sig.ident;
                 // The context is the adapter's to supply.
                 signature.inputs = signature.inputs.into_iter().skip(1).collect();
+                for (index, input) in signature.inputs.iter_mut().enumerate() {
+                    if let syn::FnArg::Typed(typed) = input {
+                        let alias = format_ident!("__ff_{}_input_{}", fn_name, index);
+                        let ty = &typed.ty;
+                        aliases.push(quote! {
+                            #[doc(hidden)]
+                            #[allow(non_camel_case_types)]
+                            pub type #alias = #ty;
+                        });
+                        *typed.ty = syn::parse_quote!(self::#alias);
+                    }
+                }
                 let bare = |names: Vec<&Ident>| {
                     names
                         .into_iter()
@@ -246,10 +270,9 @@ pub fn define(arguments: GroupArguments, module: ItemMod) -> syn::Result<TokenSt
                         })
                         .collect::<Vec<_>>()
                 };
-                let fn_name = &function.sig.ident;
                 members.push(Member {
                     docs: Vec::new(),
-                    from: Some(syn::parse_quote!(#name::#fn_name)),
+                    from: Some(syn::parse_quote!(self::#fn_name)),
                     shared: bare(task.shared.iter().map(|r| &r.name).collect()),
                     local: bare(
                         task.local
@@ -318,6 +341,12 @@ pub fn define(arguments: GroupArguments, module: ItemMod) -> syn::Result<TokenSt
     }
 
     let emitted = members.iter().map(Member::emit);
+    let mut module = module.clone();
+    if let Some((_, items)) = &mut module.content {
+        for alias in aliases {
+            items.push(syn::parse2(alias)?);
+        }
+    }
     Ok(quote! {
         #module
 
@@ -327,8 +356,8 @@ pub fn define(arguments: GroupArguments, module: ItemMod) -> syn::Result<TokenSt
             ($instance:ident ; $($application:tt)*) => {
                 ::ferroforge::app! {
                     $($application)*
-                    @group $instance from $crate::#name {
-                        #(use $crate::#includes;)*
+                    @group $instance from #name {
+                        #(use #includes;)*
                         #(#emitted)*
                     }
                 }
@@ -337,17 +366,19 @@ pub fn define(arguments: GroupArguments, module: ItemMod) -> syn::Result<TokenSt
     })
 }
 
-/// `use super::uart_dma_rx::*;` names the group `uart_dma_rx`.
-fn glob_source(tree: &UseTree) -> Option<Ident> {
-    match tree {
-        UseTree::Path(path) => match path.tree.as_ref() {
-            UseTree::Glob(_) if !["self", "super", "crate"].contains(&&*path.ident.to_string()) => {
-                Some(path.ident.clone())
-            }
-            inner => glob_source(inner),
-        },
-        _ => None,
+/// `use super::uart_dma_rx::*;` names the group at `super::uart_dma_rx`.
+fn glob_source(tree: &UseTree) -> Option<Path> {
+    let mut segments: Vec<Ident> = Vec::new();
+    let mut tree = tree;
+    while let UseTree::Path(path) = tree {
+        segments.push(path.ident.clone());
+        tree = &path.tree;
     }
+    let is_glob = matches!(tree, UseTree::Glob(_));
+    let names_a_module = segments
+        .last()
+        .is_some_and(|last| !["self", "super", "crate"].contains(&&*last.to_string()));
+    (is_glob && names_a_module).then(|| syn::parse_quote!(#(#segments)::*))
 }
 
 /// What a group's macro appended: `@group <selection> { members }`.
@@ -617,11 +648,63 @@ pub(crate) fn definitions_for<'a>(
         .collect()
 }
 
+/// `path` made absolute against the module `base`: `self::x` is inside it,
+/// `super::x` beside it, `crate::x` at its crate's root. Anything else already
+/// starts at a crate.
+fn rebase(path: &Path, base: &Path) -> Path {
+    let mut segments = path.segments.iter().peekable();
+    let mut result: Vec<Ident> = base.segments.iter().map(|s| s.ident.clone()).collect();
+    match segments.peek().map(|s| s.ident.to_string()) {
+        Some(first) if first == "self" || first == "super" || first == "crate" => {}
+        _ => return path.clone(),
+    }
+    while let Some(segment) = segments.peek() {
+        match segment.ident.to_string().as_str() {
+            "self" => {}
+            "super" => {
+                result.pop();
+            }
+            "crate" => result.truncate(1),
+            _ => break,
+        }
+        segments.next();
+    }
+    result.extend(segments.map(|s| s.ident.clone()));
+    let leading = base.leading_colon;
+    syn::parse_quote!(#leading #(#result)::*)
+}
+
+/// Every group module this selection draws on, by name: the one it names and,
+/// transitively, the ones those include. A module's path comes from the
+/// firmware's own `from`, so a group may sit anywhere in its crate.
+fn group_modules(
+    group: &GroupInstance,
+    mine: &[&GroupDefinition],
+    uses: &[&ItemUse],
+) -> Vec<(String, Path)> {
+    let from = resolve_alias(&group.from, uses);
+    let mut modules = vec![(last(&from), from)];
+    let mut index = 0;
+    while index < modules.len() {
+        let (name, base) = modules[index].clone();
+        if let Some(definition) = mine.iter().find(|d| last(&d.from) == name) {
+            for include in &definition.includes {
+                let path = rebase(include, &base);
+                if !modules.iter().any(|(known, _)| *known == last(&path)) {
+                    modules.push((last(&path), path));
+                }
+            }
+        }
+        index += 1;
+    }
+    modules
+}
+
 /// The next group this selection still needs members from, handed the whole
 /// application; `None` once every group it names or includes has answered.
 ///
-/// Groups are told apart by name: a `$crate` path cannot be compared with the
-/// firmware's own spelling of the same crate.
+/// A group's macro is exported at its crate's root whatever module the group
+/// is in, so it is called there, by the module's name.
 pub(crate) fn next_callback(
     group: &GroupInstance,
     definitions: &[&GroupDefinition],
@@ -629,17 +712,16 @@ pub(crate) fn next_callback(
     original: &TokenStream,
 ) -> Option<TokenStream> {
     let mine = definitions_for(group, definitions);
-    let answered = |path: &Path| mine.iter().any(|d| last(&d.from) == last(path));
     let name = &group.name;
-    if !answered(&group.from) {
-        let from = resolve_alias(&group.from, uses);
-        return Some(quote!(#from! { #name ; #original }));
-    }
-    let include = mine
-        .iter()
-        .flat_map(|definition| &definition.includes)
-        .find(|include| !answered(include))?;
-    Some(quote!(#include! { #name ; #original }))
+    group_modules(group, &mine, uses)
+        .into_iter()
+        .find(|(module, _)| !mine.iter().any(|d| last(&d.from) == *module))
+        .map(|(module, path)| {
+            let leading = path.leading_colon;
+            let krate = &path.segments[0].ident;
+            let module = format_ident!("{}", module);
+            quote!(#leading #krate::#module! { #name ; #original })
+        })
 }
 
 fn unique<'a>(names: impl Iterator<Item = &'a Ident>) -> Vec<&'a Ident> {
@@ -711,15 +793,35 @@ fn check_bindings(
 pub(crate) fn instances(
     group: &GroupInstance,
     definitions: &[&GroupDefinition],
+    uses: &[&ItemUse],
 ) -> syn::Result<(Vec<Instance>, TokenStream)> {
-    // A member reached through two includes is still one member.
-    let mut members: Vec<&Member> = Vec::new();
-    for member in definitions.iter().flat_map(|d| &d.members) {
-        if !members.iter().any(|m| m.name() == member.name()) {
-            members.push(member);
+    // A member reached through two includes is still one member. Its paths
+    // are made absolute against the module it came from.
+    let modules = group_modules(group, definitions, uses);
+    let mut owned: Vec<Member> = Vec::new();
+    for definition in definitions {
+        let base = &modules
+            .iter()
+            .find(|(name, _)| *name == last(&definition.from))
+            .expect("every definition was asked for by module")
+            .1;
+        for member in &definition.members {
+            if owned.iter().any(|m| m.name() == member.name()) {
+                continue;
+            }
+            let mut member = member.clone();
+            member.from = member.from.map(|from| rebase(&from, base));
+            for input in member.signature.inputs.iter_mut() {
+                if let syn::FnArg::Typed(typed) = input
+                    && let syn::Type::Path(ty) = typed.ty.as_mut()
+                {
+                    ty.path = rebase(&ty.path, base);
+                }
+            }
+            owned.push(member);
         }
     }
-    let members = &members;
+    let members = &owned.iter().collect::<Vec<_>>();
     let names = members.iter().map(|m| m.name()).collect::<Vec<_>>();
 
     let needed_shared = unique(members.iter().flat_map(|m| &m.shared).map(|r| &r.target));
@@ -942,15 +1044,15 @@ mod tests {
     }";
 
     /// What `both`'s macro appends, and what `rx`'s appends after it.
-    const BOTH: &str = "@group link from lib::both { use lib::rx; use lib::tx; }
-        @group link from lib::rx {
-            #[task(from = lib::rx::on_uart, shared = [port = port], local = [uart = uart],
+    const BOTH: &str = "@group link from both { use super::rx; use super::tx; }
+        @group link from rx {
+            #[task(from = self::on_uart, shared = [port = port], local = [uart = uart],
                    spawn = [frame = parse], config = [])] fn on_uart();
-            #[task(from = lib::rx::parse, shared = [], local = [], spawn = [decoded = decoded],
-                   config = [])] async fn parse(n: usize);
+            #[task(from = self::parse, shared = [], local = [], spawn = [decoded = decoded],
+                   config = [])] async fn parse(n: self::__ff_parse_input_0);
         }";
-    const TX: &str = "@group link from lib::tx {
-        #[task(from = lib::tx::on_tx, shared = [], local = [stream = stream], spawn = [],
+    const TX: &str = "@group link from tx {
+        #[task(from = self::on_tx, shared = [], local = [stream = stream], spawn = [],
                config = [])] fn on_tx();
     }";
 
@@ -972,16 +1074,21 @@ mod tests {
         let output = defined("spawn = [frame = parse]", RX).unwrap();
         assert!(output.contains("pub mod rx"), "the module stays: {output}");
         assert!(output.contains("macro_rules ! rx"), "{output}");
-        assert!(
-            output.contains("from = $ crate :: rx :: on_uart"),
-            "{output}"
-        );
+        assert!(output.contains("from = self :: on_uart"), "{output}");
         assert!(output.contains("frame = parse"), "wired inside: {output}");
         assert!(output.contains("decoded = decoded"), "left open: {output}");
-        // The context is the adapter's; only the task's own inputs are carried.
-        assert!(output.contains("async fn parse (n : usize) ;"), "{output}");
+        // The context is the adapter's; only the task's own inputs are carried,
+        // each through an alias the firmware can name by path.
+        assert!(
+            output.contains("async fn parse (n : self :: __ff_parse_input_0) ;"),
+            "{output}"
+        );
+        assert!(
+            output.contains("pub type __ff_parse_input_0 = usize ;"),
+            "{output}"
+        );
         // `use super::*;` is an import, not an included group.
-        assert!(!output.contains("use $ crate :: super"), "{output}");
+        assert!(!output.contains("use super ;"), "{output}");
     }
 
     #[test]
@@ -1002,8 +1109,8 @@ mod tests {
             "pub mod both { pub use super::rx::*; pub use super::tx::*; }",
         )
         .unwrap();
-        assert!(output.contains("use $ crate :: rx ;"), "{output}");
-        assert!(output.contains("use $ crate :: tx ;"), "{output}");
+        assert!(output.contains("use super :: rx ;"), "{output}");
+        assert!(output.contains("use super :: tx ;"), "{output}");
     }
 
     #[test]
@@ -1022,8 +1129,9 @@ mod tests {
     fn a_selection_asks_each_group_it_names_or_includes_in_turn() {
         let output = application(SELECTION, "").unwrap();
         assert!(output.starts_with("my_lib :: both ! { link ;"), "{output}");
+        // An included group is asked at its crate's root, by name.
         let output = application(SELECTION, BOTH).unwrap();
-        assert!(output.starts_with("lib :: tx ! { link ;"), "{output}");
+        assert!(output.starts_with("my_lib :: tx ! { link ;"), "{output}");
     }
 
     #[test]
@@ -1033,6 +1141,12 @@ mod tests {
             assert!(output.contains(task), "{task}: {output}");
         }
         assert!(output.contains("frame : link_parse :: spawn"), "{output}");
+        // Paths come back absolute, against where the firmware found the group.
+        assert!(output.contains("my_lib :: rx :: on_uart"), "{output}");
+        assert!(
+            output.contains("n : my_lib :: rx :: __ff_parse_input_0"),
+            "{output}"
+        );
         assert!(output.contains("decoded : sbus :: spawn"), "{output}");
         assert!(output.contains("port : cx . shared . uart"), "{output}");
         assert!(
@@ -1099,5 +1213,27 @@ mod tests {
                 .to_string();
             assert!(error.contains(message), "{to}: {error}");
         }
+    }
+
+    #[test]
+    fn a_group_may_sit_anywhere_in_its_crate() {
+        let base: Path = syn::parse_quote!(lib::serial::both);
+        for (relative, absolute) in [
+            ("self::on_uart", "lib :: serial :: both :: on_uart"),
+            ("super::rx", "lib :: serial :: rx"),
+            ("crate::rx", "lib :: rx"),
+            ("other::rx", "other :: rx"),
+        ] {
+            let path: Path = syn::parse_str(relative).unwrap();
+            assert_eq!(rebase(&path, &base).to_token_stream().to_string(), absolute);
+        }
+        let selection = SELECTION.replace("from = lib::both", "from = lib::serial::both");
+        let output = application(&selection, BOTH).unwrap();
+        assert!(output.starts_with("my_lib :: tx ! { link ;"), "{output}");
+        let output = application(&selection, &format!("{BOTH} {TX}")).unwrap();
+        assert!(
+            output.contains("my_lib :: serial :: rx :: on_uart"),
+            "{output}"
+        );
     }
 }
