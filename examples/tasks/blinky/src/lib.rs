@@ -16,55 +16,43 @@ fn increment(value: &mut u32) {
     *value = value.wrapping_add(1);
 }
 
-/// One light: the blink task alone. A group of one is still worth having,
-/// because a group can include it more than once.
-#[ferroforge::group]
-pub mod light {
-    use super::*;
-
-    #[ferroforge::task(
-        bounds = [led: StatefulOutputPin],
-        local = [led, count: u32],
-        shared = [enabled: bool],
-        config = [period_ms: u32],
-        spawn = [report(value: u32)],
-        monotonic = Mono,
-    )]
-    pub async fn blink(mut cx: blink::Context) -> ! {
-        loop {
-            if cx.shared.enabled.lock(|enabled| *enabled) {
-                let _ = StatefulOutputPin::toggle(&mut *cx.local.led);
-                increment(cx.local.count);
-                let _: Result<(), u32> = cx.spawn.report(*cx.local.count);
-            }
-            Mono::delay(u64::from(CONFIG::PERIOD_MS).millis()).await;
+/// One light. A task is also a group of one, so a group can include it by
+/// name, as many times as it likes.
+#[ferroforge::task(
+    bounds = [led: StatefulOutputPin],
+    local = [led, count: u32],
+    shared = [enabled: bool],
+    config = [period_ms: u32],
+    spawn = [report(value: u32)],
+    monotonic = Mono,
+)]
+pub async fn blink(mut cx: blink::Context) -> ! {
+    loop {
+        if cx.shared.enabled.lock(|enabled| *enabled) {
+            let _ = StatefulOutputPin::toggle(&mut *cx.local.led);
+            increment(cx.local.count);
+            let _: Result<(), u32> = cx.spawn.report(*cx.local.count);
         }
+        Mono::delay(u64::from(CONFIG::PERIOD_MS).millis()).await;
     }
 }
 
 /// Where blink counts go.
-#[ferroforge::group]
-pub mod reporter {
-    #[ferroforge::task]
-    pub async fn report(_cx: report::Context, value: u32) {
-        defmt::info!("blink count={=u32}", value);
-    }
+#[ferroforge::task]
+pub async fn report(_cx: report::Context, value: u32) {
+    defmt::info!("blink count={=u32}", value);
 }
 
-/// Two lights reporting to one place: the same group twice, each copy under its
+/// Two lights reporting to one place: the same task twice, each copy under its
 /// own name, so every name it has is prefixed - `heartbeat_led`,
 /// `beacon_period_ms`, `heartbeat_blink`. Both copies' reports are wired to the
 /// one reporter, which is merged in unprefixed.
 #[ferroforge::group(spawn = [heartbeat_report = report, beacon_report = report])]
 pub mod lights {
-    pub use super::light as heartbeat;
-    pub use super::light as beacon;
-    pub use super::reporter::*;
+    pub use super::blink as heartbeat;
+    pub use super::blink as beacon;
+    pub use super::report;
 }
-
-// Each task is still selectable on its own, from where it always was.
-pub use light::blink;
-pub use reporter::report;
 
 /// Synchronous, so the contract reads it as a hardware task. The definition
 /// never names an interrupt: composition binds one, so the same handler can

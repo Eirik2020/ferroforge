@@ -91,9 +91,9 @@ pub mod sbus_rx {
 }
 
 /// Both directions of the DMA UART, receiving SBUS: a group of a group of
-/// groups, across two crates.
+/// groups and a task, across two crates.
 #[ferroforge::group]
 pub mod sbus_link {
     pub use super::sbus_rx::*;
-    pub use ferroforge_task_stm32f4_uart_dma::uart_dma_tx::*;
+    pub use ferroforge_task_stm32f4_uart_dma::on_tx;
 }

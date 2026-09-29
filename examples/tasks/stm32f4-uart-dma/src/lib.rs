@@ -193,30 +193,24 @@ pub mod uart_dma_rx {
     }
 }
 
-/// Transmitting: the stream-drained handler alone.
-#[ferroforge::group]
-pub mod uart_dma_tx {
-    use super::*;
-
-    /// The transmit stream drained. Nothing here touches `Port`, so its priority
-    /// has no bearing on the others'.
-    #[ferroforge::task(local = [stream: Stream7<DMA2>, sent: u32 = 0])]
-    pub fn on_tx(cx: on_tx::Context) {
-        if !cx.local.stream.is_transfer_complete() {
-            return;
-        }
-        cx.local.stream.clear_transfer_complete();
-        *cx.local.sent = cx.local.sent.wrapping_add(1);
+/// The transmit stream drained. Nothing here touches `Port`, so its priority
+/// has no bearing on the others'. One task needs no group around it: a task is
+/// a group of one, so a group includes it by name.
+#[ferroforge::task(local = [stream: Stream7<DMA2>, sent: u32 = 0])]
+pub fn on_tx(cx: on_tx::Context) {
+    if !cx.local.stream.is_transfer_complete() {
+        return;
     }
+    cx.local.stream.clear_transfer_complete();
+    *cx.local.sent = cx.local.sent.wrapping_add(1);
 }
 
-/// Both directions: the union of the two groups above.
+/// Both directions: the receive group and the transmit task.
 #[ferroforge::group]
 pub mod uart_dma {
     pub use super::uart_dma_rx::*;
-    pub use super::uart_dma_tx::*;
+    pub use super::on_tx;
 }
 
 // Each task is still selectable on its own, from where it always was.
 pub use uart_dma_rx::{on_rx, on_uart, parse};
-pub use uart_dma_tx::on_tx;

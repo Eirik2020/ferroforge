@@ -34,6 +34,10 @@
 //! A member's input types travel as aliases in the group's module, so a type
 //! the library names through its own imports is still nameable from the
 //! firmware.
+//!
+//! Every public task is also a group of one, so a group includes a single task
+//! by name - `pub use super::on_tx;`, or `pub use super::blink as heartbeat;`
+//! for a named copy - without a module around it.
 
 use ferroforge_contracts::TaskArguments;
 use proc_macro2::TokenStream;
@@ -256,57 +260,14 @@ pub fn define(arguments: GroupArguments, module: ItemMod) -> syn::Result<TokenSt
                     syn::Meta::Path(_) => TaskArguments::default(),
                     _ => attribute.parse_args()?,
                 };
-                let mut signature = function.sig.clone();
                 let fn_name = &function.sig.ident;
-                // The context is the adapter's to supply.
-                signature.inputs = signature.inputs.into_iter().skip(1).collect();
-                for (index, input) in signature.inputs.iter_mut().enumerate() {
-                    if let syn::FnArg::Typed(typed) = input {
-                        let alias = format_ident!("__ff_{}_input_{}", fn_name, index);
-                        let ty = &typed.ty;
-                        aliases.push(quote! {
-                            #[doc(hidden)]
-                            #[allow(non_camel_case_types)]
-                            pub type #alias = #ty;
-                        });
-                        *typed.ty = syn::parse_quote!(self::#alias);
-                    }
-                }
-                let bare = |names: Vec<&Ident>| {
-                    names
-                        .into_iter()
-                        .map(|name| Rebind {
-                            requirement: name.clone(),
-                            target: name.clone(),
-                        })
-                        .collect::<Vec<_>>()
-                };
-                members.push(Member {
-                    docs: Vec::new(),
-                    from: Some(syn::parse_quote!(self::#fn_name)),
-                    shared: bare(task.shared.iter().map(|r| &r.name).collect()),
-                    local: bare(
-                        task.local
-                            .iter()
-                            .filter(|r| r.init.is_none())
-                            .map(|r| &r.name)
-                            .collect(),
-                    ),
-                    spawn: task
-                        .spawn
-                        .iter()
-                        .map(|call| Rebind {
-                            requirement: call.name.clone(),
-                            target: arguments
-                                .spawn
-                                .iter()
-                                .find(|wire| wire.requirement == call.name)
-                                .map_or_else(|| call.name.clone(), |wire| wire.target.clone()),
-                        })
-                        .collect(),
-                    config: bare(task.config.iter().map(|r| &r.name).collect()),
-                    signature,
-                });
+                members.push(member(
+                    &task,
+                    &function.sig,
+                    syn::parse_quote!(self::#fn_name),
+                    &arguments.spawn,
+                    &mut aliases,
+                ));
             }
             // Only a `pub use` re-exports another group's tasks as this
             // group's; a private `use super::*;` is an ordinary import.
@@ -385,11 +346,27 @@ pub fn define(arguments: GroupArguments, module: ItemMod) -> syn::Result<TokenSt
             items.push(syn::parse2(alias)?);
         }
     }
-    let wires = &arguments.spawn;
-    let macro_name = format_ident!("__ff_group_{}", name);
+    let callback = callback(
+        name,
+        quote!(#(#included)*),
+        &arguments.spawn,
+        quote!(#(#emitted)*),
+    );
     Ok(quote! {
         #module
+        #callback
+    })
+}
 
+/// The exported `macro_rules!` that hands a group's members to `app!`.
+fn callback(
+    name: &Ident,
+    included: TokenStream,
+    wires: &[Rebind],
+    members: TokenStream,
+) -> TokenStream {
+    let macro_name = format_ident!("__ff_group_{}", name);
+    quote! {
         #[doc(hidden)]
         #[macro_export]
         macro_rules! #macro_name {
@@ -397,20 +374,117 @@ pub fn define(arguments: GroupArguments, module: ItemMod) -> syn::Result<TokenSt
                 ::ferroforge::app! {
                     $($application)*
                     @group $instance from #name {
-                        #(#included)*
+                        #included
                         spawn = [#(#wires),*];
-                        #(#emitted)*
+                        #members
                     }
                 }
             };
         }
-    })
+    }
+}
+
+/// One definition as a group member: its signature past the context, and
+/// each requirement bound to the same name in the group's namespace, except
+/// the calls `wires` connects to another member. Input types become aliases
+/// in the group's module, pushed onto `aliases`.
+fn member(
+    task: &TaskArguments,
+    signature: &Signature,
+    from: Path,
+    wires: &[Rebind],
+    aliases: &mut Vec<TokenStream>,
+) -> Member {
+    let mut signature = signature.clone();
+    let fn_name = signature.ident.clone();
+    // The context is the adapter's to supply.
+    signature.inputs = signature.inputs.into_iter().skip(1).collect();
+    for (index, input) in signature.inputs.iter_mut().enumerate() {
+        if let syn::FnArg::Typed(typed) = input {
+            let alias = format_ident!("__ff_{}_input_{}", fn_name, index);
+            let ty = &typed.ty;
+            aliases.push(quote! {
+                #[doc(hidden)]
+                #[allow(non_camel_case_types)]
+                pub type #alias = #ty;
+            });
+            *typed.ty = syn::parse_quote!(self::#alias);
+        }
+    }
+    let bare = |names: Vec<&Ident>| {
+        names
+            .into_iter()
+            .map(|name| Rebind {
+                requirement: name.clone(),
+                target: name.clone(),
+            })
+            .collect::<Vec<_>>()
+    };
+    Member {
+        docs: Vec::new(),
+        from: Some(from),
+        shared: bare(task.shared.iter().map(|r| &r.name).collect()),
+        local: bare(
+            task.local
+                .iter()
+                .filter(|r| r.init.is_none())
+                .map(|r| &r.name)
+                .collect(),
+        ),
+        spawn: task
+            .spawn
+            .iter()
+            .map(|call| Rebind {
+                requirement: call.name.clone(),
+                target: wires
+                    .iter()
+                    .find(|wire| wire.requirement == call.name)
+                    .map_or_else(|| call.name.clone(), |wire| wire.target.clone()),
+            })
+            .collect(),
+        config: bare(task.config.iter().map(|r| &r.name).collect()),
+        signature,
+    }
+}
+
+/// Every public task is also a group of one, so a group can include it by
+/// name - `pub use super::blink as heartbeat;` - without a module around it.
+///
+/// Its group module is the one the task already has, `blink`, beside the
+/// function of the same name; the first half of the result goes inside that
+/// module, the second beside it. The module reaches the function as
+/// `self::__ff_definition`, because a path through `super` would be rebased
+/// against wherever the firmware found the module, and the function is not
+/// there when the module was reached through an include alias.
+pub(crate) fn solo(task: &TaskArguments, function: &syn::ItemFn) -> (TokenStream, TokenStream) {
+    if !matches!(function.vis, syn::Visibility::Public(_)) {
+        return (TokenStream::new(), TokenStream::new());
+    }
+    let name = &function.sig.ident;
+    let mut aliases = Vec::new();
+    let member = member(
+        task,
+        &function.sig,
+        syn::parse_quote!(self::__ff_definition),
+        &[],
+        &mut aliases,
+    );
+    let inside = quote! {
+        #[doc(hidden)]
+        pub use super::#name as __ff_definition;
+        #[doc(hidden)]
+        pub use crate as __ff_crate;
+        #(#aliases)*
+    };
+    let beside = callback(name, TokenStream::new(), &[], member.emit());
+    (inside, beside)
 }
 
 /// `pub use super::uart_dma_rx::*;` merges the group at `super::uart_dma_rx`
-/// into this one; `pub use super::light as heartbeat;` includes a copy of the
-/// group at `super::light` whose every name is prefixed `heartbeat_`, so the
-/// same group can be included twice.
+/// into this one, and `pub use super::on_tx;` merges one task;
+/// `pub use super::blink as heartbeat;` includes a copy of the task or group
+/// at `super::blink` whose every name is prefixed `heartbeat_`, so the same
+/// one can be included twice.
 fn group_source(tree: &UseTree) -> Option<(Path, Option<Ident>)> {
     let mut segments: Vec<Ident> = Vec::new();
     let mut tree = tree;
@@ -420,6 +494,17 @@ fn group_source(tree: &UseTree) -> Option<(Path, Option<Ident>)> {
     }
     let copy = match tree {
         UseTree::Glob(_) => None,
+        // A task is a group of one, so naming one merges it. Only a lowercase
+        // name: a type re-exported beside the tasks is not a member.
+        UseTree::Name(name)
+            if name
+                .ident
+                .to_string()
+                .starts_with(|first: char| first.is_ascii_lowercase()) =>
+        {
+            segments.push(name.ident.clone());
+            None
+        }
         UseTree::Rename(rename) => {
             segments.push(rename.ident.clone());
             Some(rename.rename.clone())
@@ -1268,6 +1353,57 @@ mod tests {
         )
         .unwrap();
         assert!(output.contains("local = [stream = stream]"), "{output}");
+    }
+
+    #[test]
+    fn naming_a_task_includes_it_and_a_type_is_left_alone() {
+        let output = defined(
+            "",
+            "pub mod both { pub use super::rx::*; pub use super::on_tx; \
+             pub use super::blink as heartbeat; pub use super::Port; }",
+        )
+        .unwrap();
+        assert!(
+            output.contains("use self :: __ff_include_1 as on_tx ;"),
+            "{output}"
+        );
+        assert!(
+            output.contains("use self :: __ff_include_2 as blink in heartbeat ;"),
+            "{output}"
+        );
+        assert!(!output.contains("as Port"), "{output}");
+    }
+
+    #[test]
+    fn a_public_task_is_a_group_of_one() {
+        let task: TaskArguments =
+            syn::parse_str("local = [led, count: u32 = 0], spawn = [report(value: u32)]").unwrap();
+        let function: syn::ItemFn =
+            syn::parse_str("pub async fn blink(cx: blink::Context, n: u8) {}").unwrap();
+        let (inside, beside) = solo(&task, &function);
+        let (inside, beside) = (inside.to_string(), beside.to_string());
+        assert!(
+            inside.contains("pub use super :: blink as __ff_definition ;"),
+            "{inside}"
+        );
+        assert!(
+            inside.contains("pub type __ff_blink_input_0 = u8 ;"),
+            "{inside}"
+        );
+        assert!(
+            beside.contains("macro_rules ! __ff_group_blink"),
+            "{beside}"
+        );
+        assert!(
+            beside.contains("from = self :: __ff_definition"),
+            "{beside}"
+        );
+        // The initialised local stays the definition's.
+        assert!(beside.contains("local = [led = led]"), "{beside}");
+
+        let private: syn::ItemFn = syn::parse_str("async fn blink(cx: blink::Context) {}").unwrap();
+        let (inside, beside) = solo(&task, &private);
+        assert!(inside.is_empty() && beside.is_empty());
     }
 
     #[test]

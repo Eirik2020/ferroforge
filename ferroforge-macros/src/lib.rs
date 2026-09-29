@@ -53,8 +53,10 @@ pub fn task(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(attr as TaskArguments);
     let function = parse_macro_input!(item as ItemFn);
 
+    let (inside, beside) = group::solo(&args, &function);
     let output = TaskContract::new(args, &function.sig)
-        .and_then(|contract| task::expand(contract, function));
+        .and_then(|contract| task::expand(contract, function, inside))
+        .map(|output| quote::quote!(#output #beside));
 
     match output {
         Ok(output) => output.into(),

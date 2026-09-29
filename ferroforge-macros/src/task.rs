@@ -54,7 +54,12 @@ impl<'a> Visit<'a> for OldConfigSpelling {
     }
 }
 
-pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStream2> {
+/// `extra` goes inside the task's module, for a group of one to use.
+pub fn expand(
+    contract: TaskContract,
+    mut function: ItemFn,
+    extra: TokenStream2,
+) -> Result<TokenStream2> {
     let arguments: TaskArguments = contract.arguments.clone();
     let task_name = function.sig.ident.clone();
     let visibility = function.vis.clone();
@@ -455,6 +460,8 @@ pub fn expand(contract: TaskContract, mut function: ItemFn) -> Result<TokenStrea
         #visibility mod #task_name {
             use super::*;
 
+            #extra
+
             pub struct Local<#local_list> {
                 #(#local_fields)*
                 #local_marker
@@ -552,7 +559,7 @@ mod tests {
         let arguments = syn::parse_str::<TaskArguments>(arguments)?;
         let function = syn::parse_str::<ItemFn>(function)?;
         let contract = TaskContract::new(arguments, &function.sig)?;
-        expand(contract, function).map(|output| output.to_string())
+        expand(contract, function, TokenStream2::new()).map(|output| output.to_string())
     }
 
     /// Configuration is the `CONFIG` type parameter's associated constant, so
