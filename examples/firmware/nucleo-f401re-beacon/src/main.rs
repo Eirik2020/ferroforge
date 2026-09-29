@@ -6,7 +6,8 @@
 //! which line serves it is the composition's choice.
 //!
 //! Two serial protocols run at once, which is what this firmware is for now.
-//! USART1 receives SBUS by circular DMA through the `stm32f4-uart-dma` tasks,
+//! USART1 receives SBUS by circular DMA through the `stm32f4-sbus` group, which
+//! is the `stm32f4-uart-dma` tasks with a decoder behind them,
 //! and USART6 speaks MSP DisplayPort to a video transmitter - so the channels
 //! the receiver sends come back out in a pilot's goggles.
 //!
@@ -42,6 +43,7 @@ ferroforge::app! {
     use ferroforge_task_blinky::{blink, report};
     use ferroforge_task_msp_displayport::{self as osd, msp::Line, paint};
     use ferroforge_task_stm32f4_timer::on_timer;
+    use ferroforge_task_stm32f4_sbus::{self as sbus, Channels};
     use ferroforge_task_stm32f4_uart_dma as uart_dma;
     use stm32f4xx_hal::{
         dma::{
@@ -83,7 +85,6 @@ ferroforge::app! {
         // touches.
         usart: stm32f4xx_hal::pac::USART1,
         tx_stream: Stream7<DMA2>,
-        sbus_channels: [u16; 16],
     }
 
     #[init]
@@ -216,7 +217,6 @@ ferroforge::app! {
                 pulse_count: 0,
                 usart,
                 tx_stream: streams.7,
-                sbus_channels: [0; 16],
             },
         )
     }
@@ -259,16 +259,19 @@ ferroforge::app! {
     )]
     fn pulse(cx: pulse::Context);
 
-    // The DMA UART's four tasks, selected as the set they are. The library
-    // wires `on_uart` to `parse` itself; this binds the group's resources once
-    // and declares each member as RTIC declares a task. The two receive
-    // handlers share one priority because both lock `uart`, and the parser sits
-    // below them; the library's documentation says why, and nothing checks it.
+    // SBUS in and the DMA UART's transmit side, selected as one set: a group
+    // of groups from two crates. `sbus_link` is `sbus_rx` plus the UART's
+    // transmit group, and `sbus_rx` is the UART's receive group plus the SBUS
+    // decoder, wired to it by the SBUS crate. This binds the union of their
+    // resources once and declares each of the five tasks as RTIC declares a
+    // task. The two receive handlers share one priority because both lock
+    // `uart`, and the parser and decoder sit below them; the libraries'
+    // documentation says why, and nothing checks it.
     #[group(
-        from = uart_dma::uart_dma,
+        from = sbus::sbus_link,
         shared = [port = uart],
         local = [uart = usart, stream = tx_stream],
-        spawn = [decoded = sbus],
+        spawn = [channels = show],
     )]
     mod sbus_link {
         #[task(binds = USART1, priority = 12)]
@@ -284,6 +287,9 @@ ferroforge::app! {
 
         #[task(priority = 1)]
         async fn parse;
+
+        #[task(priority = 1)]
+        async fn decode;
     }
 
     // The OSD: one portable definition, this firmware's clock, this firmware's
@@ -390,69 +396,27 @@ ferroforge::app! {
         }
     }
 
-    /// SBUS decoding, as an ordinary RTIC task. The DMA UART tasks deliver bytes and
-    /// say how many; what they mean is the application's business, so there is
-    /// no FerroForge in this one at all.
-    ///
-    /// A frame is 25 bytes: `0x0F`, 22 bytes holding 16 channels of 11 bits
-    /// little-endian across byte boundaries, a flags byte, then `0x00`.
-    #[task(
-        priority = 1,
-        shared = [uart, link],
-        local = [sbus_channels, sbus_good: u32 = 0, sbus_bad: u32 = 0, sbus_flags: u8 = 0],
-    )]
-    async fn sbus(mut cx: sbus::Context, _bytes: usize) {
-        let (frame, len) = cx.shared.uart.lock(|port| (port.frame, port.frame_len));
-        if len < 25 || frame[0] != 0x0F || frame[24] != 0x00 {
-            // Counted rather than printed: a misaligned stream would otherwise
-            // produce a line per frame, at SBUS's ~140 Hz.
-            *cx.local.sbus_bad = cx.local.sbus_bad.wrapping_add(1);
-            if *cx.local.sbus_bad % 100 == 1 {
-                defmt::warn!(
-                    "sbus: {=u32} unparsable frames, last was {=usize} bytes \
-                     starting {=u8:#04x}",
-                    *cx.local.sbus_bad,
-                    len,
-                    frame[0]
-                );
-            }
-            return;
-        }
-
-        let mut bits = 0u32;
-        let mut held = 0u32;
-        let mut channel = 0usize;
-        for byte in &frame[1..23] {
-            bits |= u32::from(*byte) << held;
-            held += 8;
-            while held >= 11 && channel < 16 {
-                cx.local.sbus_channels[channel] = (bits & 0x07FF) as u16;
-                bits >>= 11;
-                held -= 11;
-                channel += 1;
-            }
-        }
-
-        *cx.local.sbus_good = cx.local.sbus_good.wrapping_add(1);
-
+    /// What the channels are for, as an ordinary RTIC task: the SBUS group
+    /// decodes, and this firmware puts them in the goggles and the log.
+    #[task(priority = 1, shared = [link], local = [flags: (bool, bool) = (false, false)])]
+    async fn show(mut cx: show::Context, update: Channels) {
         // The goggles. Raw receiver units on screen, deliberately: that is what
         // the log line below prints, and two displays of the same stick
         // disagreeing would be a puzzle worth nobody's time.
-        let state = frame[23] & 0x0C;
         cx.shared.link.lock(|link| {
             link.screen.set_row(1, b"FERROFORGE");
             for index in 0..5 {
                 let mut row = Line::new();
                 row.text(b"CH")
                     .number(index as u16, 1)
-                    .number(cx.local.sbus_channels[index], 6);
+                    .number(update.values[index], 6);
                 link.screen.set_row(3 + index, row.as_bytes());
             }
 
             let mut condition = Line::new();
-            if state & 0x08 != 0 {
+            if update.failsafe {
                 condition.text(b"FAILSAFE");
-            } else if state & 0x04 != 0 {
+            } else if update.lost {
                 condition.text(b"FRAME LOST");
             } else {
                 condition.text(b"RX OK");
@@ -464,7 +428,7 @@ ferroforge::app! {
             // controller uses, so its own display agrees with ours.
             for index in 0..osd::msp::poll::CHANNELS {
                 link.telemetry.channels[index] =
-                    (u32::from(cx.local.sbus_channels[index]) * 5 / 8 + 880) as u16;
+                    (u32::from(update.values[index]) * 5 / 8 + 880) as u16;
             }
         });
 
@@ -472,23 +436,23 @@ ferroforge::app! {
         // readable, and still fast enough to see a stick move. A change in the
         // failsafe or frame-lost flags prints immediately, because that is the
         // thing you want to notice.
-        let flags = frame[23] & 0x0C;
-        let changed = flags != *cx.local.sbus_flags;
-        *cx.local.sbus_flags = flags;
-        if !changed && *cx.local.sbus_good % 50 != 0 {
+        let flags = (update.failsafe, update.lost);
+        let changed = flags != *cx.local.flags;
+        *cx.local.flags = flags;
+        if !changed && update.good % 50 != 0 {
             return;
         }
 
         defmt::info!(
             "sbus #{=u32} ch1..4 = {} {} {} {}  failsafe={} lost={} bad={=u32}",
-            *cx.local.sbus_good,
-            cx.local.sbus_channels[0],
-            cx.local.sbus_channels[1],
-            cx.local.sbus_channels[2],
-            cx.local.sbus_channels[3],
-            flags & 0x08 != 0,
-            flags & 0x04 != 0,
-            *cx.local.sbus_bad
+            update.good,
+            update.values[0],
+            update.values[1],
+            update.values[2],
+            update.values[3],
+            update.failsafe,
+            update.lost,
+            update.bad
         );
     }
 }

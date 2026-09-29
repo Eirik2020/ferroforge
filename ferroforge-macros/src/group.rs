@@ -18,17 +18,22 @@
 //!
 //! ```text
 //! app! { .. #[group(from = lib::serial::g)] mod x { .. } .. }
-//!   -> lib::g! { x ; .. }                 (exported at the crate root)
-//!   -> app! { .. @group x from g { use super::rx; members from self::.. } }
-//!   -> lib::rx! { x ; .. }                (once per group g includes)
+//!   -> lib::serial::g::__ff_crate::__ff_group_g! { x ; .. }
+//!   -> app! { .. @group x from g { use self::__ff_include_0 as rx; members } }
+//!   -> lib::serial::g::__ff_include_0::__ff_crate::__ff_group_rx! { x ; .. }
 //!   -> #[rtic::app] mod app { .. x_member_a .. x_member_b .. mod x { .. } }
 //! ```
 //!
 //! A group's macro cannot know where its module sits, so every path in what it
-//! appends is relative - `self::on_uart`, `super::rx` - and `app!` makes it
-//! absolute against the path the firmware wrote in `from`. A member's input
-//! types travel as aliases in the group's module, so a type the library names
-//! through its own imports is still nameable from the firmware.
+//! appends is relative to that module - `self::on_uart` - and `app!` makes it
+//! absolute against the path the firmware wrote in `from`. The module carries
+//! the routes: `__ff_crate` to its crate's root, where its macro is exported,
+//! and `__ff_include_N` to each group it includes, which may be in another
+//! crate the firmware does not depend on. A group of groups is asked for its
+//! members level by level, and its `spawn` wires may reach any level below.
+//! A member's input types travel as aliases in the group's module, so a type
+//! the library names through its own imports is still nameable from the
+//! firmware.
 
 use ferroforge_contracts::TaskArguments;
 use proc_macro2::TokenStream;
@@ -308,8 +313,10 @@ pub fn define(arguments: GroupArguments, module: ItemMod) -> syn::Result<TokenSt
         }
     }
 
+    // A wire may name a member of an included group, which only `app!` sees;
+    // with nothing included, every wire must land here.
     for wire in &arguments.spawn {
-        if !members.iter().any(|m| m.name() == &wire.target) {
+        if includes.is_empty() && !members.iter().any(|m| m.name() == &wire.target) {
             return Err(syn::Error::new(
                 wire.target.span(),
                 format!("`{}` is not a task in this group", wire.target),
@@ -342,22 +349,45 @@ pub fn define(arguments: GroupArguments, module: ItemMod) -> syn::Result<TokenSt
 
     let emitted = members.iter().map(Member::emit);
     let mut module = module.clone();
+
+    // Each included group is reached through an alias in this module, so the
+    // path works from the firmware however this crate reached it - through
+    // `super::`, or through another crate the firmware does not depend on.
+    let mut included = Vec::new();
+    for (index, path) in includes.iter().enumerate() {
+        let alias = format_ident!("__ff_include_{}", index);
+        let group = &path.segments.last().expect("a glob names a module").ident;
+        aliases.push(quote! {
+            #[doc(hidden)]
+            pub use #path as #alias;
+        });
+        included.push(quote!(use self::#alias as #group;));
+    }
+    // A group's macro is exported at its crate's root, which the firmware can
+    // name only through the group's module: this alias is that route.
+    aliases.push(quote! {
+        #[doc(hidden)]
+        pub use crate as __ff_crate;
+    });
     if let Some((_, items)) = &mut module.content {
         for alias in aliases {
             items.push(syn::parse2(alias)?);
         }
     }
+    let wires = &arguments.spawn;
+    let macro_name = format_ident!("__ff_group_{}", name);
     Ok(quote! {
         #module
 
         #[doc(hidden)]
         #[macro_export]
-        macro_rules! #name {
+        macro_rules! #macro_name {
             ($instance:ident ; $($application:tt)*) => {
                 ::ferroforge::app! {
                     $($application)*
                     @group $instance from #name {
-                        #(use #includes;)*
+                        #(#included)*
+                        spawn = [#(#wires),*];
                         #(#emitted)*
                     }
                 }
@@ -386,8 +416,11 @@ pub(crate) struct GroupDefinition {
     pub(crate) instance: Ident,
     /// The group this came from, so a selection knows which it has.
     from: Path,
-    /// Further groups this one is the union with, still to be asked.
-    includes: Vec<Path>,
+    /// Further groups this one is the union with, still to be asked: where,
+    /// relative to this group's module, and what the group is called.
+    includes: Vec<(Path, Ident)>,
+    /// Calls this group wires to a member, which may be an included group's.
+    wires: Vec<Rebind>,
     members: Vec<Member>,
 }
 
@@ -409,9 +442,18 @@ impl Parse for GroupDefinition {
         let mut includes = Vec::new();
         while content.peek(Token![use]) {
             content.parse::<Token![use]>()?;
-            includes.push(content.parse()?);
+            let path = content.parse()?;
+            content.parse::<Token![as]>()?;
+            includes.push((path, content.parse()?));
             content.parse::<Token![;]>()?;
         }
+        let keyword: Ident = content.parse()?;
+        if keyword != "spawn" {
+            return Err(syn::Error::new(keyword.span(), "expected `spawn`"));
+        }
+        content.parse::<Token![=]>()?;
+        let wires = bracketed_list(&content)?;
+        content.parse::<Token![;]>()?;
         let mut members = Vec::new();
         while !content.is_empty() {
             members.push(content.parse()?);
@@ -420,6 +462,7 @@ impl Parse for GroupDefinition {
             instance,
             from,
             includes,
+            wires,
             members,
         })
     }
@@ -688,10 +731,11 @@ fn group_modules(
     while index < modules.len() {
         let (name, base) = modules[index].clone();
         if let Some(definition) = mine.iter().find(|d| last(&d.from) == name) {
-            for include in &definition.includes {
+            for (include, group) in &definition.includes {
                 let path = rebase(include, &base);
-                if !modules.iter().any(|(known, _)| *known == last(&path)) {
-                    modules.push((last(&path), path));
+                let group = group.to_string();
+                if !modules.iter().any(|(known, _)| *known == group) {
+                    modules.push((group, path));
                 }
             }
         }
@@ -704,7 +748,7 @@ fn group_modules(
 /// application; `None` once every group it names or includes has answered.
 ///
 /// A group's macro is exported at its crate's root whatever module the group
-/// is in, so it is called there, by the module's name.
+/// is in, so it is called there, through the module's own alias for its crate.
 pub(crate) fn next_callback(
     group: &GroupInstance,
     definitions: &[&GroupDefinition],
@@ -717,10 +761,8 @@ pub(crate) fn next_callback(
         .into_iter()
         .find(|(module, _)| !mine.iter().any(|d| last(&d.from) == *module))
         .map(|(module, path)| {
-            let leading = path.leading_colon;
-            let krate = &path.segments[0].ident;
-            let module = format_ident!("{}", module);
-            quote!(#leading #krate::#module! { #name ; #original })
+            let group = format_ident!("__ff_group_{}", module);
+            quote!(#path::__ff_crate::#group! { #name ; #original })
         })
 }
 
@@ -819,6 +861,33 @@ pub(crate) fn instances(
                 }
             }
             owned.push(member);
+        }
+    }
+    // An outer group's wires reach calls its included groups left open.
+    let wires = definitions
+        .iter()
+        .flat_map(|d| &d.wires)
+        .collect::<Vec<_>>();
+    for wire in &wires {
+        if !owned.iter().any(|m| m.name() == &wire.target) {
+            return Err(syn::Error::new(
+                group.from.span(),
+                format!(
+                    "this group wires `{}` to `{}`, which none of its groups has",
+                    wire.requirement, wire.target
+                ),
+            ));
+        }
+    }
+    let names = owned.iter().map(|m| m.name().clone()).collect::<Vec<_>>();
+    for member in &mut owned {
+        for call in &mut member.spawn {
+            if names.contains(&call.target) {
+                continue;
+            }
+            if let Some(wire) = wires.iter().find(|w| w.requirement == call.target) {
+                call.target = wire.target.clone();
+            }
         }
     }
     let members = &owned.iter().collect::<Vec<_>>();
@@ -1017,7 +1086,13 @@ pub(crate) fn instances(
         let (member, task) = (member.name(), rename(member.name()));
         quote!(pub use super::#task as #member;)
     });
+    // Nothing else in the expansion names `from`, so this keeps an import
+    // that exists only to spell it from being reported as unused.
+    let from = &group.from;
+    let cfgs = cfgs.collect::<Vec<_>>();
     let module = quote! {
+        #(#cfgs)*
+        use #from as _;
         #(#cfgs)*
         pub mod #prefix {
             #(#aliases)*
@@ -1044,14 +1119,18 @@ mod tests {
     }";
 
     /// What `both`'s macro appends, and what `rx`'s appends after it.
-    const BOTH: &str = "@group link from both { use super::rx; use super::tx; }
+    const BOTH: &str = "@group link from both {
+            use self::__ff_include_0 as rx; use self::__ff_include_1 as tx; spawn = [];
+        }
         @group link from rx {
+            spawn = [];
             #[task(from = self::on_uart, shared = [port = port], local = [uart = uart],
                    spawn = [frame = parse], config = [])] fn on_uart();
             #[task(from = self::parse, shared = [], local = [], spawn = [decoded = decoded],
                    config = [])] async fn parse(n: self::__ff_parse_input_0);
         }";
     const TX: &str = "@group link from tx {
+        spawn = [];
         #[task(from = self::on_tx, shared = [], local = [stream = stream], spawn = [],
                config = [])] fn on_tx();
     }";
@@ -1073,7 +1152,8 @@ mod tests {
     fn a_group_reads_its_members_from_the_definitions() {
         let output = defined("spawn = [frame = parse]", RX).unwrap();
         assert!(output.contains("pub mod rx"), "the module stays: {output}");
-        assert!(output.contains("macro_rules ! rx"), "{output}");
+        assert!(output.contains("macro_rules ! __ff_group_rx"), "{output}");
+        assert!(output.contains("pub use crate as __ff_crate ;"), "{output}");
         assert!(output.contains("from = self :: on_uart"), "{output}");
         assert!(output.contains("frame = parse"), "wired inside: {output}");
         assert!(output.contains("decoded = decoded"), "left open: {output}");
@@ -1109,8 +1189,14 @@ mod tests {
             "pub mod both { pub use super::rx::*; pub use super::tx::*; }",
         )
         .unwrap();
-        assert!(output.contains("use super :: rx ;"), "{output}");
-        assert!(output.contains("use super :: tx ;"), "{output}");
+        assert!(
+            output.contains("pub use super :: rx as __ff_include_0 ;"),
+            "{output}"
+        );
+        assert!(
+            output.contains("use self :: __ff_include_1 as tx ;"),
+            "{output}"
+        );
     }
 
     #[test]
@@ -1128,10 +1214,18 @@ mod tests {
     #[test]
     fn a_selection_asks_each_group_it_names_or_includes_in_turn() {
         let output = application(SELECTION, "").unwrap();
-        assert!(output.starts_with("my_lib :: both ! { link ;"), "{output}");
+        assert!(
+            output.starts_with("my_lib :: both :: __ff_crate :: __ff_group_both ! { link ;"),
+            "{output}"
+        );
         // An included group is asked at its crate's root, by name.
         let output = application(SELECTION, BOTH).unwrap();
-        assert!(output.starts_with("my_lib :: tx ! { link ;"), "{output}");
+        assert!(
+            output.starts_with(
+                "my_lib :: both :: __ff_include_1 :: __ff_crate :: __ff_group_tx ! { link ;"
+            ),
+            "{output}"
+        );
     }
 
     #[test]
@@ -1142,9 +1236,12 @@ mod tests {
         }
         assert!(output.contains("frame : link_parse :: spawn"), "{output}");
         // Paths come back absolute, against where the firmware found the group.
-        assert!(output.contains("my_lib :: rx :: on_uart"), "{output}");
         assert!(
-            output.contains("n : my_lib :: rx :: __ff_parse_input_0"),
+            output.contains("my_lib :: both :: __ff_include_0 :: on_uart"),
+            "{output}"
+        );
+        assert!(
+            output.contains("n : my_lib :: both :: __ff_include_0 :: __ff_parse_input_0"),
             "{output}"
         );
         assert!(output.contains("decoded : sbus :: spawn"), "{output}");
@@ -1229,11 +1326,32 @@ mod tests {
         }
         let selection = SELECTION.replace("from = lib::both", "from = lib::serial::both");
         let output = application(&selection, BOTH).unwrap();
-        assert!(output.starts_with("my_lib :: tx ! { link ;"), "{output}");
-        let output = application(&selection, &format!("{BOTH} {TX}")).unwrap();
         assert!(
-            output.contains("my_lib :: serial :: rx :: on_uart"),
+            output.starts_with(
+                "my_lib :: serial :: both :: __ff_include_1 :: __ff_crate :: __ff_group_tx ! { link ;"
+            ),
             "{output}"
         );
+        let output = application(&selection, &format!("{BOTH} {TX}")).unwrap();
+        assert!(
+            output.contains("my_lib :: serial :: both :: __ff_include_0 :: on_uart"),
+            "{output}"
+        );
+    }
+
+    /// An outer group wires a call one included group leaves open to another's
+    /// member, and the firmware no longer binds it.
+    #[test]
+    fn an_outer_group_wires_its_included_groups_together() {
+        let wired = BOTH.replacen("spawn = [];", "spawn = [decoded = on_tx];", 1);
+        let selection = SELECTION.replace(", spawn = [decoded = sbus]", "");
+        let output = application(&selection, &format!("{wired} {TX}")).unwrap();
+        assert!(output.contains("decoded : link_on_tx :: spawn"), "{output}");
+
+        let nowhere = BOTH.replacen("spawn = [];", "spawn = [decoded = nowhere];", 1);
+        let error = application(&selection, &format!("{nowhere} {TX}"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("none of its groups has"), "{error}");
     }
 }

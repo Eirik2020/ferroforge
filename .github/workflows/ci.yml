@@ -54,6 +54,7 @@ jobs:
             examples/firmware/nucleo-h753zi -> target
             examples/tasks/blinky -> target
             examples/tasks/msp-displayport -> target
+            examples/tasks/stm32f4-sbus -> target
             examples/tasks/stm32f4-timer -> target
             examples/tasks/stm32f4-uart-dma -> target
             examples/tasks/stm32h7-timer -> target

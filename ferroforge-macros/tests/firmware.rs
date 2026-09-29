@@ -78,6 +78,14 @@ fn a_hal_specific_task_crate_checks_independently() {
     checks_standalone("examples/tasks/stm32f4-timer", &["--features", "stm32f401"]);
 }
 
+/// A group of groups across crates: the SBUS crate's groups include the DMA
+/// UART crate's, and still check on their own.
+#[test]
+#[ignore = "cross-compiles; run with --ignored"]
+fn a_group_of_another_crates_groups_checks_independently() {
+    checks_standalone("examples/tasks/stm32f4-sbus", &["--features", "stm32f401"]);
+}
+
 /// The firmware crate is the binary, so one invocation proves the whole model:
 /// `app!` expanded into a real `#[rtic::app]`, the adapters type-checked
 /// against the task crate, and the result linked for the target.

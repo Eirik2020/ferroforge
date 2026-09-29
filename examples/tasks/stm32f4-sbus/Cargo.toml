@@ -1,0 +1,26 @@
+[package]
+name = "ferroforge-task-stm32f4-sbus"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+test = false
+bench = false
+
+[dependencies]
+defmt = { version = "1.0.1", default-features = true, features = [] }
+ferroforge = { path = "../../../ferroforge" }
+ferroforge-task-stm32f4-uart-dma = { path = "../stm32f4-uart-dma" }
+rtic = { version = "2.3.1", default-features = false, features = ["thumbv7-backend"] }
+
+[features]
+# Forwarded to the DMA UART crate, which forwards them to its HAL: this crate
+# names no chip itself, but cannot check without one.
+stm32f401 = ["ferroforge-task-stm32f4-uart-dma/stm32f401"]
+stm32f405 = ["ferroforge-task-stm32f4-uart-dma/stm32f405"]
+
+[package.metadata.ferroforge]
+check-only-dependencies = ["ferroforge"]
+
+[workspace]
