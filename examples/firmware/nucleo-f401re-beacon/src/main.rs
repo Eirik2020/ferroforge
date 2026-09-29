@@ -13,15 +13,14 @@
 //! | Pin | Signal |
 //! | --- | --- |
 //! | PA10 | SBUS in, through an external inverter. 100000 baud, 8E2 |
-//! | PA2 | SBUS out, a stand-in receiver: jumper to PA10 to test without one |
+//! | PA11 | SBUS out, a stand-in receiver: wire to PA10 to test without one |
 //!
 //! Ground is shared with the receiver. PA5 is the board's LD2; PB0 and PA8
 //! (Arduino D7) are ordinary header pins with no LED on them.
 //!
-//! On a NUCLEO-F401RE, one jumper runs the whole SBUS path on a bare board:
-//! morpho CN10 pin 35 (PA2) to pin 33 (PA10), which sit side by side. Not the
-//! Arduino D1: PA2 reaches it only through solder bridge SB62, open as shipped,
-//! because PA2 is the ST-Link's serial line. `sbus_source` sends frames whose
+//! One wire from PA11 to PA10 runs the whole SBUS path on a bare board: the
+//! stand-in receiver transmits on USART6, which nothing else here uses, and
+//! the SBUS group receives on USART1. `sbus_source` sends frames whose
 //! channels are known, and `show` logs what the group decoded, so the two can
 //! be compared.
 
@@ -35,8 +34,7 @@ ferroforge::app! {
     device = stm32f4xx_hal::pac,
     // A dispatcher is an interrupt vector RTIC borrows for software tasks, so
     // a peripheral raising the same vector would land in the dispatcher
-    // instead of its own handler. SPI1 is unused on this board, and USART2's
-    // interrupt is never enabled: the stand-in receiver polls it.
+    // instead of its own handler. SPI1 and USART2 are unused on this board.
     dispatchers = [USART2, SPI1],
 
     use rtic_monotonics::systick::prelude::*;
@@ -54,7 +52,7 @@ ferroforge::app! {
             traits::Stream as _,
         },
         gpio::{Output, PA5, PA8, PB0, PushPull},
-        pac::{DMA2, TIM3, USART2},
+        pac::{DMA2, TIM3, USART6},
         prelude::*,
         rcc::Config,
         serial::{Serial, config::DmaConfig, config::StopBits},
@@ -89,7 +87,7 @@ ferroforge::app! {
         // touches.
         usart: stm32f4xx_hal::pac::USART1,
         tx_stream: Stream7<DMA2>,
-        sbus_out: USART2,
+        sbus_out: USART6,
     }
 
     #[init]
@@ -183,16 +181,15 @@ ferroforge::app! {
         let _ = usart.sr().read();
         let _ = usart.dr().read();
 
-        // USART2 for the stand-in receiver, transmit only, in SBUS's own
-        // framing. RTIC borrows USART2's interrupt vector as a dispatcher, which
-        // is why this port is only ever polled: no USART2 interrupt is enabled,
-        // so the vector still fires only when RTIC pends it. PA3 is the
-        // ST-Link's serial line on a NUCLEO, so the receiver is switched off.
+        // USART6 for the stand-in receiver, transmit only, in SBUS's own
+        // framing, on PA11. Polled, so no USART6 interrupt is enabled. The HAL
+        // wants a receive pin to build the port, so PA12 is named and the
+        // receiver switched off at once: only the transmitter is wanted.
         let sbus_serial = Serial::<_, u8>::new(
-            cx.device.USART2,
+            cx.device.USART6,
             (
-                gpioa.pa2.into_alternate::<7>(),
-                gpioa.pa3.into_alternate::<7>(),
+                gpioa.pa11.into_alternate::<8>(),
+                gpioa.pa12.into_alternate::<8>(),
             ),
             stm32f4xx_hal::serial::Config::default()
                 .baudrate(100_000.bps())
@@ -340,16 +337,20 @@ ferroforge::app! {
     )]
     async fn status(mut cx: status::Context) {
         loop {
-            let (deliveries, overruns, errors) = cx
+            let (deliveries, overruns, errors, head) = cx
                 .shared
                 .uart
-                .lock(|port| (port.frames, port.overruns, port.errors));
+                .lock(|port| (port.frames, port.overruns, port.errors, port.head()));
+            // `ring-head` is where the DMA controller will write next. It moves
+            // with every byte USART1 receives, whether or not an idle line
+            // ever ends a frame, so it tells no signal apart from no frames.
             defmt::info!(
-                "alive: deliveries={=u32} (+{=u32}) ring-overruns={=u32} uart-errors={=u32}",
+                "alive: deliveries={=u32} (+{=u32}) ring-overruns={=u32} uart-errors={=u32} ring-head={=usize}",
                 deliveries,
                 deliveries.wrapping_sub(*cx.local.last_deliveries),
                 overruns,
-                errors
+                errors,
+                head
             );
             // Every frame accounted for: with the jumper fitted, `missing` is 0
             // or 1 - a frame can be on the wire as this reads - and `bad` is 0.
@@ -368,7 +369,7 @@ ferroforge::app! {
     }
 
     /// A stand-in SBUS receiver, so the group can be tested on a bare board:
-    /// one frame every 14 ms, as a receiver sends them, out of PA2.
+    /// one frame every 14 ms, as a receiver sends them, out of PA11.
     ///
     /// Channel 1 counts, as `172 + sent % 1640`, and channels 2 to 4 are fixed
     /// at 992, 172 and 1811, so a frame decoded intact is recognisable in
