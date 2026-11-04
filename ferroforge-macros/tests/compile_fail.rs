@@ -168,6 +168,21 @@ const CASES: &[Case] = &[
         to: "local = [heartbeat_led, heartbeat_count, beacon_led],",
         expected: "this group needs local `beacon_count` bound as well",
     },
+    // A group is read where it is defined, so an import in it that names no
+    // group is refused on its own line, not left out of the group.
+    Case {
+        name: "group-import-names-no-group",
+        firmware: BEACON,
+        file: MAIN,
+        from: "ferroforge::app! {",
+        to: "#[ferroforge::group]
+pub mod unnamed {
+    pub use ferroforge_task_blinky::{light as _};
+}
+
+ferroforge::app! {",
+        expected: "a copy of a group needs a name",
+    },
     // Dispatchers are the author's choice, passed through unchanged - so RTIC's
     // own validation of that choice must still reach the authored line.
     Case {

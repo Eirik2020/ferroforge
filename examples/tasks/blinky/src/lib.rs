@@ -51,11 +51,11 @@ pub async fn announce(_cx: announce::Context, value: u32) {
 }
 
 /// One light and its own log line: a group of two, with the light's `report`
-/// wired to its announcer inside the group.
+/// wired to its announcer inside the group. One braced import names both, as
+/// a line for each would.
 #[ferroforge::group(spawn = [report = announce])]
 pub mod light {
-    pub use super::announce;
-    pub use super::blink;
+    pub use super::{announce, blink};
 }
 
 /// Two lights, each announcing itself, and a reporter for whatever else the
@@ -65,9 +65,7 @@ pub mod light {
 /// merged in unprefixed.
 #[ferroforge::group]
 pub mod lights {
-    pub use super::light as heartbeat;
-    pub use super::light as beacon;
-    pub use super::report;
+    pub use super::{light as heartbeat, light as beacon, report};
 }
 
 /// Synchronous, so the contract reads it as a hardware task. The definition
