@@ -226,7 +226,8 @@ impl Parse for GroupArguments {
 /// The members are read from the definitions, so nothing is restated. A
 /// definition's own locals, `sent: u32 = 0`, stay the definition's; only the
 /// ones without a value are left for the firmware to bind. A `pub use` glob of
-/// another group module, `pub use super::uart_dma_rx::*;`, includes that group.
+/// another group module, `pub use super::uart_dma_rx::*;`, includes that group;
+/// `group_sources` reads every form of `pub use`, braces included.
 pub fn define(arguments: GroupArguments, module: ItemMod) -> syn::Result<TokenStream> {
     let Some((_, items)) = &module.content else {
         return Err(syn::Error::new(
@@ -272,12 +273,22 @@ pub fn define(arguments: GroupArguments, module: ItemMod) -> syn::Result<TokenSt
             // Only a `pub use` re-exports another group's tasks as this
             // group's; a private `use super::*;` is an ordinary import.
             Item::Use(item) if matches!(item.vis, syn::Visibility::Public(_)) => {
-                if let Some(include) = group_source(&item.tree) {
-                    includes.push(include);
-                }
+                includes.extend(group_sources(item)?);
             }
             _ => {}
         }
+    }
+
+    // A group with nothing in it can only be a mistake: a selection of it
+    // would bind nothing and run nothing.
+    if members.is_empty() && includes.is_empty() {
+        return Err(syn::Error::new(
+            name.span(),
+            format!(
+                "`{name}` has no members; a group holds `#[ferroforge::task]` \
+                 definitions and `pub use`s of tasks and groups"
+            ),
+        ));
     }
 
     // A wire may name a member of an included group, which only `app!` sees;
@@ -480,41 +491,116 @@ pub(crate) fn solo(task: &TaskArguments, function: &syn::ItemFn) -> (TokenStream
     (inside, beside)
 }
 
+/// Every group one `pub use` includes, in the order it names them.
+///
 /// `pub use super::uart_dma_rx::*;` merges the group at `super::uart_dma_rx`
 /// into this one, and `pub use super::on_tx;` merges one task;
 /// `pub use super::blink as heartbeat;` includes a copy of the task or group
 /// at `super::blink` whose every name is prefixed `heartbeat_`, so the same
-/// one can be included twice.
-fn group_source(tree: &UseTree) -> Option<(Path, Option<Ident>)> {
-    let mut segments: Vec<Ident> = Vec::new();
-    let mut tree = tree;
-    while let UseTree::Path(path) = tree {
-        segments.push(path.ident.clone());
-        tree = &path.tree;
-    }
-    let copy = match tree {
-        UseTree::Glob(_) => None,
-        // A task is a group of one, so naming one merges it. Only a lowercase
-        // name: a type re-exported beside the tasks is not a member.
-        UseTree::Name(name)
-            if name
-                .ident
-                .to_string()
-                .starts_with(|first: char| first.is_ascii_lowercase()) =>
-        {
-            segments.push(name.ident.clone());
-            None
+/// one can be included twice. A braced import is read leaf by leaf, so
+/// `pub use super::{uart_dma_rx::*, on_tx, blink as heartbeat};` includes what
+/// those three lines do, and `rx::{self}` names `rx` as `pub use rx;` would.
+///
+/// A name starting in uppercase is a type re-exported beside the tasks, not a
+/// member. Anything else that cannot name a group is refused on the line that
+/// wrote it, so no member goes missing without a word.
+fn group_sources(item: &ItemUse) -> syn::Result<Vec<(Path, Option<Ident>)>> {
+    let mut includes = Vec::new();
+    collect(
+        &item.tree,
+        item.leading_colon,
+        &mut Vec::new(),
+        &mut includes,
+    )?;
+    Ok(includes)
+}
+
+/// One level of a `pub use` tree below `prefix`, pushing onto `includes`.
+fn collect(
+    tree: &UseTree,
+    leading_colon: Option<Token![::]>,
+    prefix: &mut Vec<Ident>,
+    includes: &mut Vec<(Path, Option<Ident>)>,
+) -> syn::Result<()> {
+    let to_path =
+        |segments: &[Ident]| -> Path { syn::parse_quote!(#leading_colon #(#segments)::*) };
+    match tree {
+        UseTree::Path(path) => {
+            prefix.push(path.ident.clone());
+            let collected = collect(&path.tree, leading_colon, prefix, includes);
+            prefix.pop();
+            collected
+        }
+        UseTree::Group(group) => group
+            .items
+            .iter()
+            .try_for_each(|tree| collect(tree, leading_colon, prefix, includes)),
+        UseTree::Glob(glob) => {
+            if let Some(segments) = group_path(prefix.clone(), glob.star_token.span())? {
+                includes.push((to_path(&segments), None));
+            }
+            Ok(())
+        }
+        UseTree::Name(name) => {
+            if let Some(segments) = leaf(prefix, &name.ident)? {
+                includes.push((to_path(&segments), None));
+            }
+            Ok(())
         }
         UseTree::Rename(rename) => {
-            segments.push(rename.ident.clone());
-            Some(rename.rename.clone())
+            let Some(segments) = leaf(prefix, &rename.ident)? else {
+                return Ok(());
+            };
+            if rename.rename == "_" {
+                return Err(syn::Error::new(
+                    rename.rename.span(),
+                    format!(
+                        "a copy of a group needs a name: `{} as heartbeat` includes \
+                         it under `heartbeat`, and `{0}` alone merges it",
+                        rename.ident
+                    ),
+                ));
+            }
+            includes.push((to_path(&segments), Some(rename.rename.clone())));
+            Ok(())
         }
-        _ => return None,
+    }
+}
+
+/// The path a named leaf imports: `prefix` and the name, or `prefix` itself
+/// for `self` in braces.
+fn leaf(prefix: &[Ident], name: &Ident) -> syn::Result<Option<Vec<Ident>>> {
+    let mut segments = prefix.to_vec();
+    if name != "self" {
+        segments.push(name.clone());
+    }
+    group_path(segments, name.span())
+}
+
+/// The path of the group an import names, or none for a type, whose name
+/// starts in uppercase. A path ending in `self`, `super` or `crate`, or in
+/// nothing, says where a module is but not what it is called, so it is
+/// refused at `span`: the group there has a name, and the import must use it.
+fn group_path(segments: Vec<Ident>, span: proc_macro2::Span) -> syn::Result<Option<Vec<Ident>>> {
+    let last = match segments.last() {
+        Some(last) if !["self", "super", "crate"].contains(&&*last.to_string()) => last,
+        last => {
+            let last = last.map_or_else(|| "self".to_owned(), Ident::to_string);
+            return Err(syn::Error::new(
+                span,
+                format!(
+                    "`{last}` names no group; include each task or group by its own \
+                     name, as `pub use super::light;`"
+                ),
+            ));
+        }
     };
-    let names_a_module = segments
-        .last()
-        .is_some_and(|last| !["self", "super", "crate"].contains(&&*last.to_string()));
-    names_a_module.then(|| (syn::parse_quote!(#(#segments)::*), copy))
+    // A task is a group of one, so naming one merges it. Only a lowercase
+    // name: a type re-exported beside the tasks is not a member.
+    let lowercase = last
+        .to_string()
+        .starts_with(|first: char| first.is_ascii_lowercase());
+    Ok(lowercase.then_some(segments))
 }
 
 /// What a group's macro appended: `@group <selection> { members }`.
@@ -1421,6 +1507,83 @@ mod tests {
             output.contains("use self :: __ff_include_1 as tx ;"),
             "{output}"
         );
+    }
+
+    /// What `define` adds to a module: the include aliases, the crate route
+    /// and the callback. The author's own items, `pub use`s included, come
+    /// before it and are left out, so two spellings of one group compare equal.
+    fn generated(output: &str) -> &str {
+        &output[output
+            .find("# [doc (hidden)]")
+            .expect("define adds hidden items")..]
+    }
+
+    /// A braced import includes each group it names, in order, as the same
+    /// imports one per line do: nested braces, `self`, renames, a type beside
+    /// the tasks and a leading `::` included.
+    #[test]
+    fn a_braced_import_is_the_same_group_as_one_import_per_line() {
+        for (braced, lines) in [
+            (
+                "pub use super::{a, b};",
+                "pub use super::a; pub use super::b;",
+            ),
+            (
+                "pub use super::{rx::*, tx::{on_tx, on_rx}};",
+                "pub use super::rx::*; pub use super::tx::on_tx; pub use super::tx::on_rx;",
+            ),
+            (
+                "pub use super::{rx::{self}, tx::{self as copy}};",
+                "pub use super::rx; pub use super::tx as copy;",
+            ),
+            (
+                "pub use super::{light as heartbeat, light as beacon, report};",
+                "pub use super::light as heartbeat; pub use super::light as beacon; \
+                 pub use super::report;",
+            ),
+            (
+                "pub use super::{Port, a, b::{Frame as F, c}};",
+                "pub use super::Port; pub use super::a; pub use super::b::Frame as F; \
+                 pub use super::b::c;",
+            ),
+            (
+                "pub use ::other::{a, b};",
+                "pub use ::other::a; pub use ::other::b;",
+            ),
+        ] {
+            let braced = defined("", &format!("pub mod g {{ {braced} }}")).unwrap();
+            let lines = defined("", &format!("pub mod g {{ {lines} }}")).unwrap();
+            assert!(generated(&lines).contains("__ff_include_1"), "{lines}");
+            assert_eq!(generated(&braced), generated(&lines));
+        }
+    }
+
+    /// A form that would include nothing the author can see is refused where
+    /// it is written, never turned into a group missing a member.
+    #[test]
+    fn an_import_that_names_no_group_is_refused() {
+        for (module, message) in [
+            (
+                "pub use super::blink as _;",
+                "a copy of a group needs a name",
+            ),
+            (
+                "pub use super::{on_tx, Port as _, blink as _};",
+                "a copy of a group needs a name",
+            ),
+            ("pub use super::{self as copy};", "`super` names no group"),
+            ("pub use crate::{self as copy};", "`crate` names no group"),
+            ("pub use super::{};", "`g` has no members"),
+            ("pub use super::{Port, Frame as F};", "`g` has no members"),
+            ("pub use super::*;", "`super` names no group"),
+            ("pub use self::*;", "`self` names no group"),
+            ("pub use super::Kind::*;", "`g` has no members"),
+        ] {
+            let error = defined("", &format!("pub mod g {{ {module} }}"))
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(message), "{module}: {error}");
+        }
     }
 
     #[test]

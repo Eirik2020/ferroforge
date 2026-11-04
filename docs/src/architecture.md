@@ -268,6 +268,13 @@ everything else the firmware runs.
 
 - Every public task is also a group of one, so a group includes a single task
   by name.
+- A `pub use` may brace and nest its imports, with `self` and renames, and
+  includes what the same imports one per line would: `pub use super::{light
+  as heartbeat, report};` is two lines' worth. A name starting in uppercase is
+  a type beside the tasks, not a member. An import that names no group - one
+  ending in `self`, `super` or `crate`, such as `pub use super::*;`, or a copy
+  renamed `_` - is refused on its line, and so is a group with no members, so
+  no member goes missing without an error.
 - A group may include another more than once as named copies, `pub use
   super::light as heartbeat`. Every name a copy has is prefixed with the copy's
   name - `heartbeat_led`, `heartbeat_period_ms` - so copies bind different
