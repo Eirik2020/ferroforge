@@ -7,7 +7,7 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::{Command, Output},
+    process::{Command, Output, Stdio},
 };
 
 fn repository_root() -> &'static Path {
@@ -107,11 +107,7 @@ fn syncing_the_real_project_changes_nothing() {
 /// what was looked for.
 #[test]
 fn outside_a_project_the_error_says_what_was_looked_for() {
-    // Outside the repository: anywhere under it is legitimately inside a
-    // project, `target/` included, because recognition walks up.
-    let elsewhere = std::env::temp_dir().join("ferroforge-not-a-project");
-    let _ = fs::remove_dir_all(&elsewhere);
-    fs::create_dir_all(&elsewhere).unwrap();
+    let elsewhere = outside_any_project("not-a-project");
 
     let output = ferroforge_in(&elsewhere, &["sync"]);
     assert!(!output.status.success());
@@ -121,6 +117,53 @@ fn outside_a_project_the_error_says_what_was_looked_for() {
         "{message}"
     );
     assert!(message.contains("firmware"), "{message}");
+    let _ = fs::remove_dir_all(&elsewhere);
+}
+
+/// An empty directory outside every project, for the tests about being outside
+/// one.
+///
+/// Outside the repository, because anywhere under it is legitimately inside a
+/// project, `target/` included: recognition walks up. And this run's own,
+/// because the system temporary directory is shared by every checkout and
+/// every run on the machine: under a fixed name, another run removing and
+/// recreating it pulls the directory out from under a CLI standing in it.
+fn outside_any_project(name: &str) -> PathBuf {
+    let directory = std::env::temp_dir().join(format!("ferroforge-{name}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&directory);
+    fs::create_dir_all(&directory).unwrap();
+    directory
+}
+
+/// Two runs of this suite at once - from two checkouts, or two terminals - must
+/// not disturb each other's directories outside a project. Each runs the tests
+/// that use one, several times over, beside each other.
+#[test]
+fn runs_at_once_keep_their_own_directories_outside_a_project() {
+    let this = std::env::current_exe().unwrap();
+    for _ in 0..5 {
+        let runs = (0..4)
+            .map(|_| {
+                Command::new(&this)
+                    .args([
+                        "--exact",
+                        "outside_a_project_the_error_says_what_was_looked_for",
+                        "adding_outside_a_project_says_so",
+                    ])
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .expect("this test binary must run")
+            })
+            .collect::<Vec<_>>();
+        for run in runs {
+            let output = run.wait_with_output().unwrap();
+            let text = stdout(&output);
+            assert!(output.status.success(), "{text}");
+            // Not vacuous: a renamed test would leave nothing to run.
+            assert!(text.contains("2 passed"), "{text}");
+        }
+    }
 }
 
 /// A project is the nearest parent with a `firmware/`, so a command works from
@@ -426,9 +469,7 @@ fn a_refused_add_writes_nothing() {
 
 #[test]
 fn adding_outside_a_project_says_so() {
-    let elsewhere = std::env::temp_dir().join("ferroforge-add-not-a-project");
-    let _ = fs::remove_dir_all(&elsewhere);
-    fs::create_dir_all(&elsewhere).unwrap();
+    let elsewhere = outside_any_project("add-not-a-project");
     let output = ferroforge_in(&elsewhere, &["add", "board", "--chip", "stm32f401re"]);
     assert!(!output.status.success());
     assert!(
@@ -437,6 +478,7 @@ fn adding_outside_a_project_says_so() {
         stderr(&output)
     );
     assert!(!elsewhere.join("firmware").exists());
+    let _ = fs::remove_dir_all(&elsewhere);
 }
 
 /// The table is for a person choosing a chip, so it has to carry what they

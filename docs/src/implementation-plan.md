@@ -8,20 +8,6 @@ around it.
 [Current state](prototype.md) records what exists; this chapter records what
 does not, in the order that unblocks the rest.
 
-## Known Defects
-
-Each of these has been observed. None is a design question.
-
-- **One CLI test fails intermittently.** Seen once in
-  `ferroforge-cli/tests/project.rs`, not reproduced, and the name was not
-  captured. Fixture directories are uniquely named, the only cargo-invoking test
-  is `#[ignore]`d, and the derived files the idempotency test reads are
-  committed, so the three obvious causes are ruled out. The remaining suspect,
-  tests writing an executable and running it while other tests fork, is
-  removed, but a thousand local runs never failed, so that the cause is gone is
-  unconfirmed. CI's logs name a failing test, so the next one is caught
-  running. It guards the CLI's file-writing order, so it is worth pinning.
-
 ## OSD Hardware Validation
 
 `examples/tasks/msp-displayport` and its host tests say the frames are well formed. On
