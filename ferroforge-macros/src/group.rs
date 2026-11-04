@@ -501,8 +501,9 @@ pub(crate) fn solo(task: &TaskArguments, function: &syn::ItemFn) -> (TokenStream
 /// `pub use super::{uart_dma_rx::*, on_tx, blink as heartbeat};` includes what
 /// those three lines do, and `rx::{self}` names `rx` as `pub use rx;` would.
 ///
-/// A name starting in uppercase is a type re-exported beside the tasks, not a
-/// member. Anything else that cannot name a group is refused on the line that
+/// A name starting with an uppercase letter is a type re-exported beside the
+/// tasks, not a member; every other name is a task or group. A glob of a type
+/// is refused, as is anything else that cannot name a group, on the line that
 /// wrote it, so no member goes missing without a word.
 fn group_sources(item: &ItemUse) -> syn::Result<Vec<(Path, Option<Ident>)>> {
     let mut includes = Vec::new();
@@ -536,9 +537,20 @@ fn collect(
             .iter()
             .try_for_each(|tree| collect(tree, leading_colon, prefix, includes)),
         UseTree::Glob(glob) => {
-            if let Some(segments) = group_path(prefix.clone(), glob.star_token.span())? {
-                includes.push((to_path(&segments), None));
-            }
+            let span = glob.star_token.span();
+            let Some(segments) = group_path(prefix.clone(), span)? else {
+                // A glob is only ever a group's contents, so a type's - an
+                // enum's variants - is not dropped as a type name would be.
+                return Err(syn::Error::new(
+                    span,
+                    format!(
+                        "`{}` is a type, not a group; a glob includes a group's \
+                         tasks, as `pub use super::uart_dma_rx::*;`",
+                        prefix.last().expect("a type has a name")
+                    ),
+                ));
+            };
+            includes.push((to_path(&segments), None));
             Ok(())
         }
         UseTree::Name(name) => {
@@ -578,7 +590,7 @@ fn leaf(prefix: &[Ident], name: &Ident) -> syn::Result<Option<Vec<Ident>>> {
 }
 
 /// The path of the group an import names, or none for a type, whose name
-/// starts in uppercase. A path ending in `self`, `super` or `crate`, or in
+/// starts with an uppercase letter. A path ending in `self`, `super` or `crate`, or in
 /// nothing, says where a module is but not what it is called, so it is
 /// refused at `span`: the group there has a name, and the import must use it.
 fn group_path(segments: Vec<Ident>, span: proc_macro2::Span) -> syn::Result<Option<Vec<Ident>>> {
@@ -595,12 +607,11 @@ fn group_path(segments: Vec<Ident>, span: proc_macro2::Span) -> syn::Result<Opti
             ));
         }
     };
-    // A task is a group of one, so naming one merges it. Only a lowercase
-    // name: a type re-exported beside the tasks is not a member.
-    let lowercase = last
-        .to_string()
-        .starts_with(|first: char| first.is_ascii_lowercase());
-    Ok(lowercase.then_some(segments))
+    // A task is a group of one, so naming one merges it, whatever its name
+    // starts with - `_probe` too. Only a type re-exported beside the tasks,
+    // named in uppercase, is not a member.
+    let type_name = last.to_string().starts_with(char::is_uppercase);
+    Ok((!type_name).then_some(segments))
 }
 
 /// What a group's macro appended: `@group <selection> { members }`.
@@ -1460,6 +1471,24 @@ mod tests {
         assert!(!output.contains("as Port"), "{output}");
     }
 
+    /// Only an uppercase start makes a type: a task whose name starts with
+    /// `_` is still a member, alone, in braces or as a copy.
+    #[test]
+    fn a_task_named_with_a_leading_underscore_is_a_member() {
+        for (module, include) in [
+            ("pub use super::_probe;", "as _probe ;"),
+            ("pub use super::{_probe, Port};", "as _probe ;"),
+            ("pub use super::_probe as copy;", "as _probe in copy ;"),
+        ] {
+            let output = defined("", &format!("pub mod g {{ {module} }}")).unwrap();
+            assert!(
+                output.contains(&format!("use self :: __ff_include_0 {include}")),
+                "{module}: {output}"
+            );
+            assert!(!output.contains("__ff_include_1"), "{module}: {output}");
+        }
+    }
+
     #[test]
     fn a_public_task_is_a_group_of_one() {
         let task: TaskArguments =
@@ -1550,6 +1579,10 @@ mod tests {
                 "pub use ::other::{a, b};",
                 "pub use ::other::a; pub use ::other::b;",
             ),
+            (
+                "pub use super::{_probe, a as copy};",
+                "pub use super::_probe; pub use super::a as copy;",
+            ),
         ] {
             let braced = defined("", &format!("pub mod g {{ {braced} }}")).unwrap();
             let lines = defined("", &format!("pub mod g {{ {lines} }}")).unwrap();
@@ -1577,7 +1610,11 @@ mod tests {
             ("pub use super::{Port, Frame as F};", "`g` has no members"),
             ("pub use super::*;", "`super` names no group"),
             ("pub use self::*;", "`self` names no group"),
-            ("pub use super::Kind::*;", "`g` has no members"),
+            ("pub use super::Kind::*;", "`Kind` is a type, not a group"),
+            (
+                "pub use super::{on_tx, Kind::*};",
+                "`Kind` is a type, not a group",
+            ),
         ] {
             let error = defined("", &format!("pub mod g {{ {module} }}"))
                 .unwrap_err()
