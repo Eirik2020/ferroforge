@@ -8,6 +8,18 @@ around it.
 [Current state](prototype.md) records what exists; this chapter records what
 does not, in the order that unblocks the rest.
 
+## Known Defects
+
+Each of these has been observed. None is a design question.
+
+- **A CLI test failed once with no known cause.** Before the race below was
+  found, one test in `ferroforge-cli/tests/project.rs` failed once, and its name
+  was not captured. Later, `build_all_reports_every_firmware` failed once with
+  `no line for alpha`. Two suites in one checkout fail on every attempt, which
+  [Workflow](workflow.md) rules out, but neither failure is known to have run
+  beside another suite. Neither has been reproduced alone: CI's logs name a
+  failing test, so the next one is caught running.
+
 ## OSD Hardware Validation
 
 `examples/tasks/msp-displayport` and its host tests say the frames are well formed. On
