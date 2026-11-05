@@ -22,6 +22,12 @@ This covers task declaration parsing, macro expansion, and the backend data the
 CLI emits from, and holds every module to having documentation. It does not
 build any firmware.
 
+A checkout runs one suite at a time. The CLI tests keep their projects under
+`target/project-tests/` by name and re-sync `examples/` in place, so a second
+run in the same checkout removes directories the first is standing in.
+Separate checkouts do not disturb each other: what the tests put in the system
+temporary directory is named for the run.
+
 The documentation is built with rustdoc's warnings denied, so a broken link or
 unrendered markup fails it, the private modules included:
 
