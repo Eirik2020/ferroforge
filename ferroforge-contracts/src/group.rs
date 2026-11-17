@@ -22,7 +22,10 @@
 //!   constructor's type parameter that carries each one. A tool fills a slot
 //!   with the type the board and chip say serves that role.
 //! - `vectors` says which member serves the interrupt of which slot, so the
-//!   member's `binds` follows from the slot's type.
+//!   member's `binds` follows from the slot's type. `member = [a, b]` says
+//!   the member serves every vector the listed slots carry, one each: a slot
+//!   such as a set of DMA lanes carries one vector per lane, and the
+//!   firmware selects the member once per vector.
 //! - `shared` and `local` list every resource the members leave for the
 //!   firmware to bind, with its type, written over the slots' parameters.
 //! - `buffers` lists the memory the constructor is handed, each a slice of an
@@ -104,22 +107,61 @@ impl Parse for Slot {
     }
 }
 
-/// Which member serves which slot's interrupt, `on_rx_dma = rx_dma`.
+/// Which member serves which slot's interrupt, `on_rx_dma = rx_dma`, or
+/// every vector of a set of slots, `on_lane_dma = [first_lanes,
+/// second_lanes]`.
 #[derive(Clone, Debug)]
 pub struct VectorRole {
     /// The hardware member bound to the vector.
     pub member: Ident,
-    /// The slot whose interrupt it is.
+    /// The slot whose interrupt it is; in the bracketed form, the first slot
+    /// listed.
     pub slot: Ident,
+    /// The bracketed form's slots, `slot` first, each carrying any number of
+    /// vectors: the member serves every one of them, and the firmware
+    /// selects it once per vector, each with its own `binds`. Empty for the
+    /// plain form, whose member serves exactly one vector.
+    pub each: Vec<Ident>,
+}
+
+impl VectorRole {
+    /// Every slot this vector names: `slot` alone, or the bracketed list.
+    pub fn slots(&self) -> &[Ident] {
+        match self.each.is_empty() {
+            true => core::slice::from_ref(&self.slot),
+            false => &self.each,
+        }
+    }
+
+    /// Whether the member serves every vector of its slots, `member = [..]`.
+    pub fn is_repeated(&self) -> bool {
+        !self.each.is_empty()
+    }
 }
 
 impl Parse for VectorRole {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let member = input.parse()?;
         input.parse::<Token![=]>()?;
+        if input.peek(syn::token::Bracket) {
+            let content;
+            let brackets = syn::bracketed!(content in input);
+            let each: Vec<Ident> = content
+                .parse_terminated(Ident::parse, Token![,])?
+                .into_iter()
+                .collect();
+            let Some(slot) = each.first().cloned() else {
+                return Err(Error::new(
+                    brackets.span.join(),
+                    "list the slots whose vectors the member serves, `[lanes]`",
+                ));
+            };
+            return Ok(Self { member, slot, each });
+        }
         Ok(Self {
             member,
             slot: input.parse()?,
+            each: Vec::new(),
         })
     }
 }
@@ -423,15 +465,18 @@ impl GroupContract {
             }
         }
         for vector in &self.vectors {
-            if !self
-                .slots
-                .iter()
-                .any(|slot| identifier_key(&slot.role) == identifier_key(&vector.slot))
-            {
-                return Err(Error::new(
-                    vector.slot.span(),
-                    format!("`{}` is not one of this group's `slots`", vector.slot),
-                ));
+            unique(vector.slots().iter(), "a slot is listed once")?;
+            for named in vector.slots() {
+                if !self
+                    .slots
+                    .iter()
+                    .any(|slot| identifier_key(&slot.role) == identifier_key(named))
+                {
+                    return Err(Error::new(
+                        named.span(),
+                        format!("`{named}` is not one of this group's `slots`"),
+                    ));
+                }
             }
         }
         for resource in self.resources() {
@@ -816,6 +861,45 @@ mod tests {
         assert!(
             refused("slots = [instance: U], vectors = [on_uart = irq], constructor = new()")
                 .contains("`irq` is not one of this group's `slots`")
+        );
+    }
+
+    #[test]
+    fn a_member_may_serve_every_vector_of_its_slots() {
+        let arguments = contract(
+            "slots = [first: A, second: B, first_lanes: LA, second_lanes: LB], \
+             vectors = [on_lane_dma = [first_lanes, second_lanes]], \
+             constructor = new(first, second, first_lanes, second_lanes)",
+        )
+        .unwrap();
+        let vector = &arguments.contract.vectors[0];
+        assert!(vector.is_repeated());
+        assert_eq!(vector.slot, "first_lanes");
+        let slots: Vec<String> = vector.slots().iter().map(ToString::to_string).collect();
+        assert_eq!(slots, ["first_lanes", "second_lanes"]);
+
+        let plain =
+            contract("slots = [instance: U], vectors = [on_uart = instance], constructor = new()")
+                .unwrap();
+        assert!(!plain.contract.vectors[0].is_repeated());
+        assert_eq!(plain.contract.vectors[0].slots().len(), 1);
+    }
+
+    #[test]
+    fn a_repeated_vector_names_its_slots_once_and_at_least_one() {
+        assert!(
+            refused("slots = [lanes: L], vectors = [on_lane = [lanes, irq]], constructor = new()")
+                .contains("`irq` is not one of this group's `slots`")
+        );
+        assert!(
+            refused(
+                "slots = [lanes: L], vectors = [on_lane = [lanes, lanes]], constructor = new()"
+            )
+            .contains("a slot is listed once")
+        );
+        assert!(
+            refused("slots = [lanes: L], vectors = [on_lane = []], constructor = new()")
+                .contains("list the slots")
         );
     }
 

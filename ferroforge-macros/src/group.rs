@@ -77,6 +77,9 @@ pub(crate) struct Member {
     spawn: Vec<Rebind>,
     config: Vec<Rebind>,
     signature: Signature,
+    /// Its contract says it serves every vector of its slots, so a selection
+    /// may declare it once per vector.
+    repeated: bool,
 }
 
 impl Parse for Member {
@@ -90,6 +93,7 @@ impl Parse for Member {
             spawn: Vec::new(),
             config: Vec::new(),
             signature: parse_signature(input)?,
+            repeated: false,
         };
         for attribute in attributes {
             if attribute.path().is_ident("doc") {
@@ -120,6 +124,7 @@ impl Parse for Member {
                         "local" => member.local = bracketed_list(input)?,
                         "spawn" => member.spawn = bracketed_list(input)?,
                         "config" => member.config = bracketed_list(input)?,
+                        "repeated" => member.repeated = input.parse::<syn::LitBool>()?.value,
                         other => {
                             return Err(syn::Error::new(
                                 key.span(),
@@ -165,7 +170,10 @@ impl Member {
             spawn,
             config,
             signature,
+            repeated,
         } = self;
+        // Said only when set, so every other member reads as it always has.
+        let repeated = repeated.then(|| quote!(repeated = true,));
         let from = match from {
             Some(path) => quote!(#path),
             None => {
@@ -181,6 +189,7 @@ impl Member {
                 local = [#(#local),*],
                 spawn = [#(#spawn),*],
                 config = [#(#config),*],
+                #repeated
             )]
             #signature;
         }
@@ -311,6 +320,26 @@ pub fn define(arguments: GroupArguments, module: ItemMod) -> syn::Result<TokenSt
     }
 
     check_contract(contract, &members, &kinds, includes.is_empty())?;
+
+    // A member serving every vector of its slots is declared once per vector,
+    // so each declaration is its own task. A local the firmware binds belongs
+    // to one task, so such a member cannot need one.
+    for vector in contract.vectors.iter().filter(|v| v.is_repeated()) {
+        if let Some(member) = members.iter_mut().find(|m| m.name() == &vector.member) {
+            if let Some(local) = member.local.first() {
+                return Err(syn::Error::new(
+                    vector.member.span(),
+                    format!(
+                        "`{}` serves every vector of its slots, so a firmware declares \
+                         it once per vector, and the local `{}` would belong to each; \
+                         make it shared, or give it an initial value on the definition",
+                        vector.member, local.target
+                    ),
+                ));
+            }
+            member.repeated = true;
+        }
+    }
 
     let emitted = members.iter().map(Member::emit);
     let mut module = module.clone();
@@ -603,6 +632,7 @@ fn member(
             .collect(),
         config: bare(task.config.iter().map(|r| &r.name).collect()),
         signature,
+        repeated: false,
     }
 }
 
@@ -1369,13 +1399,21 @@ pub(crate) fn instances(
                 ),
             ));
         }
-        if group.tasks[..index]
+        let repeated = members
             .iter()
-            .any(|other| other.member == settings.member)
+            .any(|m| m.name() == &settings.member && m.repeated);
+        if !repeated
+            && group.tasks[..index]
+                .iter()
+                .any(|other| other.member == settings.member)
         {
             return Err(syn::Error::new(
                 settings.member.span(),
-                format!("`{}` is given settings twice", settings.member),
+                format!(
+                    "`{}` is given settings twice; it serves one vector, so select \
+                     the group again for another",
+                    settings.member
+                ),
             ));
         }
     }
@@ -1384,13 +1422,17 @@ pub(crate) fn instances(
     let rename = |member: &Ident| format_ident!("{}_{}", prefix, member, span = prefix.span());
 
     let mut instances = Vec::new();
+    // Each declared task, under the name the selection's module gives it.
+    let mut aliases = Vec::new();
     for member in members {
         let name = member.name();
-        let settings = group
+        let declared = group
             .tasks
             .iter()
-            .find(|settings| &settings.member == name)
-            .ok_or_else(|| {
+            .filter(|settings| &settings.member == name)
+            .collect::<Vec<_>>();
+        if declared.is_empty() {
+            return Err({
                 syn::Error::new(
                     group.from.span(),
                     format!(
@@ -1402,116 +1444,130 @@ pub(crate) fn instances(
                         }
                     ),
                 )
-            })?;
-        match (&member.signature.asyncness, &settings.asyncness) {
-            (Some(_), None) => {
+            });
+        }
+        // A member declared once keeps its name; one serving several vectors
+        // is numbered in the order its declarations appear.
+        for (copy, settings) in declared.iter().copied().enumerate() {
+            let (instance_name, alias) = match declared.len() {
+                1 => (rename(name), name.clone()),
+                _ => (
+                    format_ident!("{}_{}_{}", prefix, name, copy, span = prefix.span()),
+                    format_ident!("{}_{}", name, copy, span = name.span()),
+                ),
+            };
+            aliases.push(quote!(pub use super::#instance_name as #alias;));
+            match (&member.signature.asyncness, &settings.asyncness) {
+                (Some(_), None) => {
+                    return Err(syn::Error::new(
+                        settings.member.span(),
+                        format!("`{name}` is a software task: declare it `async fn {name};`"),
+                    ));
+                }
+                (None, Some(asyncness)) => {
+                    return Err(syn::Error::new(
+                        asyncness.span,
+                        format!("`{name}` is a hardware task: declare it `fn {name};`"),
+                    ));
+                }
+                _ => {}
+            }
+            if member.signature.asyncness.is_none() && settings.binds.is_none() {
                 return Err(syn::Error::new(
                     settings.member.span(),
-                    format!("`{name}` is a software task: declare it `async fn {name};`"),
+                    format!(
+                        "`{name}` is a hardware task; bind it: `#[task(binds = <interrupt>, ..)]`"
+                    ),
                 ));
             }
-            (None, Some(asyncness)) => {
-                return Err(syn::Error::new(
-                    asyncness.span,
-                    format!("`{name}` is a hardware task: declare it `fn {name};`"),
-                ));
-            }
-            _ => {}
-        }
-        if member.signature.asyncness.is_none() && settings.binds.is_none() {
-            return Err(syn::Error::new(
-                settings.member.span(),
-                format!("`{name}` is a hardware task; bind it: `#[task(binds = <interrupt>, ..)]`"),
-            ));
-        }
 
-        let shared = member
-            .shared
-            .iter()
-            .map(|r| {
-                let bound = group.shared.iter().find(|b| b.requirement == r.target);
-                Rebind {
-                    requirement: r.requirement.clone(),
-                    target: bound.expect("checked above").target.clone(),
-                }
-            })
-            .collect();
-        let local = member
-            .local
-            .iter()
-            .map(|r| {
-                let bound = group.local.iter().find(|b| b.names().0 == &r.target);
-                match bound.expect("checked above") {
-                    LocalBinding::Resource(rebind) => LocalBinding::Resource(Rebind {
-                        requirement: r.requirement.clone(),
-                        target: rebind.target.clone(),
-                    }),
-                    LocalBinding::TaskLocal {
-                        name, ty, value, ..
-                    } => LocalBinding::TaskLocal {
-                        requirement: r.requirement.clone(),
-                        name: name.clone(),
-                        ty: ty.clone(),
-                        value: value.clone(),
-                    },
-                }
-            })
-            .collect();
-        let spawn = member
-            .spawn
-            .iter()
-            .map(|r| Rebind {
-                requirement: r.requirement.clone(),
-                target: match names.contains(&&r.target) {
-                    true => rename(&r.target),
-                    false => group
-                        .spawn
-                        .iter()
-                        .find(|b| b.requirement == r.target)
-                        .expect("checked above")
-                        .target
-                        .clone(),
-                },
-            })
-            .collect();
-        let config = member
-            .config
-            .iter()
-            .map(|r| {
-                let value = group.config.iter().find(|c| c.name == r.target);
-                ConfigValue {
-                    name: r.requirement.clone(),
-                    ..value.expect("checked above").clone()
-                }
-            })
-            .collect();
-
-        let instance_name = rename(name);
-        let mut signature = member.signature.clone();
-        signature.ident = instance_name.clone();
-        let cx = format_ident!("cx");
-        signature
-            .inputs
-            .insert(0, syn::parse_quote!(#cx: #instance_name::Context));
-
-        instances.push(Instance {
-            attribute: TaskAttribute {
-                from: member.from.clone(),
-                priority: settings.priority.clone(),
-                binds: settings.binds.clone(),
-                local,
-                shared,
-                config,
-                spawn,
-            },
-            attributes: group
-                .attributes
+            let shared = member
+                .shared
                 .iter()
-                .chain(&settings.attributes)
-                .cloned()
-                .collect(),
-            signature,
-        });
+                .map(|r| {
+                    let bound = group.shared.iter().find(|b| b.requirement == r.target);
+                    Rebind {
+                        requirement: r.requirement.clone(),
+                        target: bound.expect("checked above").target.clone(),
+                    }
+                })
+                .collect();
+            let local = member
+                .local
+                .iter()
+                .map(|r| {
+                    let bound = group.local.iter().find(|b| b.names().0 == &r.target);
+                    match bound.expect("checked above") {
+                        LocalBinding::Resource(rebind) => LocalBinding::Resource(Rebind {
+                            requirement: r.requirement.clone(),
+                            target: rebind.target.clone(),
+                        }),
+                        LocalBinding::TaskLocal {
+                            name, ty, value, ..
+                        } => LocalBinding::TaskLocal {
+                            requirement: r.requirement.clone(),
+                            name: name.clone(),
+                            ty: ty.clone(),
+                            value: value.clone(),
+                        },
+                    }
+                })
+                .collect();
+            let spawn = member
+                .spawn
+                .iter()
+                .map(|r| Rebind {
+                    requirement: r.requirement.clone(),
+                    target: match names.contains(&&r.target) {
+                        true => rename(&r.target),
+                        false => group
+                            .spawn
+                            .iter()
+                            .find(|b| b.requirement == r.target)
+                            .expect("checked above")
+                            .target
+                            .clone(),
+                    },
+                })
+                .collect();
+            let config = member
+                .config
+                .iter()
+                .map(|r| {
+                    let value = group.config.iter().find(|c| c.name == r.target);
+                    ConfigValue {
+                        name: r.requirement.clone(),
+                        ..value.expect("checked above").clone()
+                    }
+                })
+                .collect();
+
+            let mut signature = member.signature.clone();
+            signature.ident = instance_name.clone();
+            let cx = format_ident!("cx");
+            signature
+                .inputs
+                .insert(0, syn::parse_quote!(#cx: #instance_name::Context));
+
+            instances.push(Instance {
+                attribute: TaskAttribute {
+                    from: member.from.clone(),
+                    priority: settings.priority.clone(),
+                    binds: settings.binds.clone(),
+                    local,
+                    shared,
+                    config,
+                    spawn,
+                },
+                attributes: group
+                    .attributes
+                    .iter()
+                    .chain(&settings.attributes)
+                    .cloned()
+                    .collect(),
+                signature,
+            });
+        }
     }
 
     // The selection is a real module, so a member is named as it was declared:
@@ -1520,10 +1576,6 @@ pub(crate) fn instances(
         .attributes
         .iter()
         .filter(|attribute| attribute.path().is_ident("cfg"));
-    let aliases = members.iter().map(|member| {
-        let (member, task) = (member.name(), rename(member.name()));
-        quote!(pub use super::#task as #member;)
-    });
     // Nothing else in the expansion names `from`, so this keeps an import
     // that exists only to spell it from being reported as unused.
     // Each pend is a function in the selection's module that pends the
@@ -1938,6 +1990,89 @@ mod tests {
         .to_string();
         assert!(
             error.contains("no member needs the shared resource `spare`"),
+            "{error}"
+        );
+    }
+
+    const LANES: &str = "pub mod lanes {
+        #[ferroforge::task(shared = [generator], bounds = [generator: Service])]
+        pub fn on_lane_dma(cx: on_lane_dma::Context) {}
+    }";
+    const LANES_CONTRACT: &str = "slots = [timer: T, lanes: L],
+        vectors = [on_lane_dma = [lanes]],
+        shared = [generator: Generator<T, L>], constructor = new()";
+    /// What `lanes`' macro appends, as its group hands it to `app!`.
+    const LANES_MEMBERS: &str = "@group motors from lanes {
+        spawn = [];
+        #[task(from = self::on_lane_dma, shared = [generator = generator], local = [],
+               spawn = [], config = [], repeated = true,)] fn on_lane_dma();
+    }";
+
+    #[test]
+    fn a_member_serving_every_vector_of_its_slots_is_marked_for_app() {
+        let output = defined(LANES_CONTRACT, LANES).unwrap();
+        assert!(output.contains("repeated = true"), "{output}");
+        // A member serving one vector reads as it always has.
+        let output = defined(PORT_CONTRACT, PORT).unwrap();
+        assert!(!output.contains("repeated"), "{output}");
+    }
+
+    #[test]
+    fn a_member_serving_every_vector_cannot_need_a_local() {
+        let error = defined(
+            &LANES_CONTRACT.replace("shared = [generator", "local = [generator"),
+            &LANES.replace("shared = [generator]", "local = [generator]"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("the local `generator` would belong to each"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_selection_declares_a_repeated_member_once_per_vector() {
+        let selection = "#[group(from = lib::lanes, shared = [generator = motors])]
+            mod motors {
+                #[task(binds = DMA2_STREAM1, priority = 5)] fn on_lane_dma;
+                #[task(binds = DMA2_STREAM7, priority = 5)] fn on_lane_dma;
+            }";
+        let output = application(selection, LANES_MEMBERS).unwrap();
+        for (task, vector) in [
+            ("motors_on_lane_dma_0", "DMA2_STREAM1"),
+            ("motors_on_lane_dma_1", "DMA2_STREAM7"),
+        ] {
+            assert!(output.contains(&format!("fn {task} (")), "{task}: {output}");
+            assert!(
+                output.contains(&format!("binds = {vector}")),
+                "{vector}: {output}"
+            );
+        }
+        assert!(
+            output.contains("pub use super :: motors_on_lane_dma_1 as on_lane_dma_1 ;"),
+            "{output}"
+        );
+        // Declared once, it keeps its plain name.
+        let once = "#[group(from = lib::lanes, shared = [generator = motors])]
+            mod motors { #[task(binds = DMA2_STREAM1, priority = 5)] fn on_lane_dma; }";
+        let output = application(once, LANES_MEMBERS).unwrap();
+        assert!(output.contains("fn motors_on_lane_dma ("), "{output}");
+        assert!(!output.contains("motors_on_lane_dma_0"), "{output}");
+    }
+
+    #[test]
+    fn a_member_serving_one_vector_is_declared_once() {
+        let selection = "#[group(from = lib::lanes, shared = [generator = motors])]
+            mod motors {
+                #[task(binds = DMA2_STREAM1, priority = 5)] fn on_lane_dma;
+                #[task(binds = DMA2_STREAM7, priority = 5)] fn on_lane_dma;
+            }";
+        let error = application(selection, &LANES_MEMBERS.replace("repeated = true,", ""))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("given settings twice; it serves one vector"),
             "{error}"
         );
     }
