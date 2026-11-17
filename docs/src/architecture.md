@@ -270,7 +270,9 @@ by member, because which priorities fit and which interrupts are free depend on
 everything else the firmware runs.
 
 - Every public task is also a group of one, so a group includes a single task
-  by name.
+  by name. A task's or group's name is unique within its crate: each
+  exports its callback at the crate's root, and a proc macro cannot learn its
+  own module, so two of one name collide, with a callback name that says so.
 - A `pub use` may brace and nest its imports, with `self` and renames, and
   includes what the same imports one per line would: `pub use super::{light
   as heartbeat, report};` is two lines' worth. A name starting with an
@@ -304,7 +306,9 @@ its type; and the function that builds them.
     slots = [instance: U, tx: Tx, rx: Rx, tx_dma: TxD, rx_dma: RxD],
     vectors = [on_uart = instance, on_rx_dma = rx_dma, on_tx_dma = tx_dma],
     shared = [uart: Uart<Wiring<U, Tx, Rx, TxD, RxD>>],
-    constructor = new,
+    buffers = [#[dma] tx_buf: [u8], #[dma] rx_buf: [u8]],
+    config = [config: Config @ platform],
+    constructor = new(rcc, wiring, config, tx_buf, rx_buf),
 )]
 pub mod uart_port { .. }
 ```
@@ -318,12 +322,22 @@ pub mod uart_port { .. }
 - `shared` and `local` list resources as a task lists them, typed, with no
   initial value: the constructor builds them. It returns a struct with one
   public field per resource, of the same name.
+- A buffer is a slice of an integer type. Whoever selects the group sets its
+  length, and a tool emits it as a zeroed array in `init(local = [..])`.
+  `#[dma]` marks one that must sit in memory the DMA can reach.
+- A configuration field is a typed constructor input with the layer that
+  supplies its value: `board`, `profile`, `software` or `platform`.
+- The constructor lists its arguments in order, each `rcc`, a slot passed on
+  its own (a part the HAL's wiring does not hold, such as a chip-select pin),
+  `wiring` (every other slot, as the HAL's wiring), a buffer or a
+  configuration field, every buffer and field exactly once. Slots, buffers
+  and fields share one set of names, so an argument names one thing.
 
 The contract is checked where the group is written. On its own: each slot,
 parameter and resource once, a vector naming a slot, a type on every resource,
-and a constructor. Against the members defined in the module: a vector served by
-a hardware member, and every resource a member leaves to the firmware listed in
-its category; with nothing included, nothing listed that no member needs. The
+a constructor, and its arguments matching the buffers and fields. Against
+the members defined in the module: a vector served by a hardware member, and
+every resource a member leaves to the firmware listed in its category; with nothing included, nothing listed that no member needs. The
 module imports the constructor, so a contract naming a missing function does not
 compile. A group without these arguments means what it always did, and `app!`
 binds a selection the same way either way.

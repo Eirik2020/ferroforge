@@ -31,11 +31,10 @@ connected from one that is being talked to wrongly.
 ## Group Contracts
 
 A [group contract](architecture.md#group-contracts) lists slots, vectors,
-resources and the constructor. The FerroSmith design record (v3, 6.1) also puts
-three things in it that the first cut leaves out: buffers, whose sizes are Rust
-expressions a tool emits verbatim; configuration fields and the layer that
-supplies each; and optional members behind a feature. `app!` reads none of the
-contract yet, and checks a selection as it always has.
+resources, buffers, configuration fields and the constructor's arguments. The
+FerroSmith design record (v3, 6.1) also puts optional members behind a feature
+in it, which waits for a group that has one. `app!` reads none of the contract
+yet, and checks a selection as it always has.
 
 ## FerroForge 0.5
 

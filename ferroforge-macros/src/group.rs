@@ -18,9 +18,9 @@
 //!
 //! ```text
 //! app! { .. #[group(from = lib::serial::g)] mod x { .. } .. }
-//!   -> lib::serial::g::__ff_crate::__ff_group_g! { x ; .. }
+//!   -> lib::serial::g::__ff_crate::__ferroforge_..._names__g! { x ; .. }
 //!   -> app! { .. @group x from g { use self::__ff_include_0 as rx; members } }
-//!   -> lib::serial::g::__ff_include_0::__ff_crate::__ff_group_rx! { x ; .. }
+//!   -> lib::serial::g::__ff_include_0::__ff_crate::__ferroforge_..._names__rx! { x ; .. }
 //!   -> #[rtic::app] mod app { .. x_member_a .. x_member_b .. mod x { .. } }
 //! ```
 //!
@@ -341,7 +341,7 @@ pub fn define(arguments: GroupArguments, module: ItemMod) -> syn::Result<TokenSt
     });
     // The constructor must exist where the contract says, so a tool reading
     // the contract never names a function that is not there.
-    if let Some(constructor) = &contract.constructor {
+    if let Some(constructor) = contract.constructor.as_ref().map(|c| &c.path) {
         aliases.push(quote! {
             #[doc(hidden)]
             #[allow(unused_imports)]
@@ -453,6 +453,18 @@ fn check_contract(
     Ok(())
 }
 
+/// The name of a group's exported callback. `#[macro_export]` puts every
+/// callback at its crate's root, whatever module the group or task is in, and a
+/// proc macro cannot learn that module, so a task or group name is unique
+/// within its crate. The name says so, because it is what rustc reports when
+/// two collide.
+pub(crate) fn callback_name(name: impl quote::IdentFragment) -> Ident {
+    format_ident!(
+        "__ferroforge_tasks_and_groups_need_crate_unique_names__{}",
+        name
+    )
+}
+
 /// The exported `macro_rules!` that hands a group's members to `app!`.
 fn callback(
     name: &Ident,
@@ -460,7 +472,7 @@ fn callback(
     wires: &[Rebind],
     members: TokenStream,
 ) -> TokenStream {
-    let macro_name = format_ident!("__ff_group_{}", name);
+    let macro_name = callback_name(name);
     quote! {
         #[doc(hidden)]
         #[macro_export]
@@ -1099,7 +1111,7 @@ pub(crate) fn next_callback(
         .find(|reached| !mine.iter().any(|d| last(&d.from) == reached.name))
         .map(|reached| {
             let path = &reached.path;
-            let group = format_ident!("__ff_group_{}", reached.name);
+            let group = callback_name(&reached.name);
             quote!(#path::__ff_crate::#group! { #name ; #original })
         })
 }
@@ -1506,7 +1518,12 @@ mod tests {
     fn a_group_reads_its_members_from_the_definitions() {
         let output = defined("spawn = [frame = parse]", RX).unwrap();
         assert!(output.contains("pub mod rx"), "the module stays: {output}");
-        assert!(output.contains("macro_rules ! __ff_group_rx"), "{output}");
+        assert!(
+            output.contains(
+                "macro_rules ! __ferroforge_tasks_and_groups_need_crate_unique_names__rx"
+            ),
+            "{output}"
+        );
         assert!(output.contains("pub use crate as __ff_crate ;"), "{output}");
         assert!(output.contains("from = self :: on_uart"), "{output}");
         assert!(output.contains("frame = parse"), "wired inside: {output}");
@@ -1590,7 +1607,9 @@ mod tests {
             "{inside}"
         );
         assert!(
-            beside.contains("macro_rules ! __ff_group_blink"),
+            beside.contains(
+                "macro_rules ! __ferroforge_tasks_and_groups_need_crate_unique_names__blink"
+            ),
             "{beside}"
         );
         assert!(
@@ -1729,7 +1748,7 @@ mod tests {
     }";
     const PORT_CONTRACT: &str = "slots = [instance: U, rx_dma: RxD],
         vectors = [on_uart = instance, on_rx_dma = rx_dma],
-        shared = [uart: Uart<U, RxD>], constructor = new";
+        shared = [uart: Uart<U, RxD>], constructor = new()";
 
     #[test]
     fn a_contract_is_accepted_and_its_constructor_must_exist() {
@@ -1789,14 +1808,14 @@ mod tests {
     fn a_selection_asks_each_group_it_names_or_includes_in_turn() {
         let output = application(SELECTION, "").unwrap();
         assert!(
-            output.starts_with("my_lib :: both :: __ff_crate :: __ff_group_both ! { link ;"),
+            output.starts_with("my_lib :: both :: __ff_crate :: __ferroforge_tasks_and_groups_need_crate_unique_names__both ! { link ;"),
             "{output}"
         );
         // An included group is asked at its crate's root, by name.
         let output = application(SELECTION, BOTH).unwrap();
         assert!(
             output.starts_with(
-                "my_lib :: both :: __ff_include_1 :: __ff_crate :: __ff_group_tx ! { link ;"
+                "my_lib :: both :: __ff_include_1 :: __ff_crate :: __ferroforge_tasks_and_groups_need_crate_unique_names__tx ! { link ;"
             ),
             "{output}"
         );
@@ -1902,7 +1921,7 @@ mod tests {
         let output = application(&selection, BOTH).unwrap();
         assert!(
             output.starts_with(
-                "my_lib :: serial :: both :: __ff_include_1 :: __ff_crate :: __ff_group_tx ! { link ;"
+                "my_lib :: serial :: both :: __ff_include_1 :: __ff_crate :: __ferroforge_tasks_and_groups_need_crate_unique_names__tx ! { link ;"
             ),
             "{output}"
         );
@@ -1982,7 +2001,10 @@ mod tests {
         // Asked once, though reached twice.
         let first = definitions.split("@group two from light {").next().unwrap();
         let output = application(selection, first).unwrap();
-        assert!(output.contains("__ff_group_light !"), "{output}");
+        assert!(
+            output.contains("__ferroforge_tasks_and_groups_need_crate_unique_names__light !"),
+            "{output}"
+        );
 
         let output = application(selection, definitions).unwrap();
         for task in ["async fn two_heartbeat_blink", "async fn two_beacon_blink"] {
