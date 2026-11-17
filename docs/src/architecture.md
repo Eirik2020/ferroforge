@@ -117,10 +117,10 @@ HAL rather than across HALs, which is what G1 asks of it.
 
 Portability has a second, sharper limit, and it is the ecosystem's rather than
 this design's: a bound is only as portable as the HALs implementing it.
-`examples/tasks/blinky` bounds on `embedded-hal` 1.0, and `stm32h7xx-hal` 0.16 still
-implements only 0.2, so that task cannot be selected on an STM32H7 at all - while
-a task naming no HAL, like `report`, is selected there unchanged. "Portable
-across all hardware" means across the hardware whose HALs have migrated.
+`examples/tasks/blinky` bounds on `embedded-hal` 1.0, which FerroHAL's pins
+implement on every chip, so `blink` drives an F4's LED and an H7's unchanged; a
+HAL still on 0.2 could not be selected with it at all. "Portable across all
+hardware" means across the hardware whose HALs implement the bound.
 
 Bounds earn their place when a definition must serve resources of different
 types. They are not free: a bound has to be nameable and satisfiable by the type
@@ -236,11 +236,11 @@ on the group wires one member's call to another where both are known, so no
 firmware has to:
 
 ```rust,ignore
-/// SBUS: another crate's DMA UART receive group, and a decoder behind it.
-#[ferroforge::group(spawn = [decoded = decode])]
-pub mod sbus_rx {
-    pub use ferroforge_task_stm32f4_uart_dma::uart_dma_rx::*;
-    pub use super::decode;
+/// Another crate's light group, and a hardware task wired to its announcer.
+#[ferroforge::group(spawn = [pulse = announce])]
+pub mod pulse_light {
+    pub use super::on_pulse;
+    pub use ferroforge_task_blinky::light::*;
 }
 ```
 
@@ -249,16 +249,19 @@ A firmware selects the set inside `app!` with `#[group(from = ..)] mod name
 outgoing calls once, and declares each member as RTIC declares a task:
 
 ```rust,ignore
-#[group(from = sbus::sbus_rx, shared = [port = uart], local = [uart = usart], spawn = [channels = show])]
-mod sbus {
-    #[task(binds = USART1, priority = 12)]
-    fn on_uart;
-    #[task(binds = DMA2_STREAM2, priority = 12)]
-    fn on_rx;
+#[group(
+    from = pulse_light,
+    local = [led = pulse_led, count = pulse_blinks, pulses = pulse_count],
+    shared = [enabled = beacon_enabled],
+    config = [period_ms: u32 = 100, label: &'static str = "pulse"],
+)]
+mod pulse {
+    #[task(binds = TIM3, priority = 3)]
+    fn on_pulse;
     #[task(priority = 1)]
-    async fn parse;
-    #[task(priority = 1)]
-    async fn decode;
+    async fn blink;
+    #[task(priority = 2)]
+    async fn announce;
 }
 ```
 

@@ -1,0 +1,56 @@
+# Chip-family data for the STM32F407VG, as on the STM32F4DISCOVERY.
+# The F405's die with Ethernet and the camera interface, and the same memory.
+#
+# Per G2a this is the minimum FerroForge needs before a build, and it is read by
+# the CLI rather than depended on by any firmware. It deliberately does not name
+# interrupts: per G4 the device's own enum is the only interrupt list.
+
+[chip]
+name = "STM32F407VG"
+rust-target = "thumbv7em-none-eabihf"
+# probe-rs matches this against its full part name, `STM32F407VGTx`.
+probe-rs-chip = "STM32F407VG"
+# The device module FerroHAL hands RTIC, the same path on every chip: the chip
+# feature decides what is behind it, so this is a property of the HAL.
+device = "ferrohal_stm32::device"
+
+[memory]
+flash-origin = 0x08000000
+flash-size = 1048576
+# SRAM1 and SRAM2, contiguous from 0x20000000 (DS8626 section 3.6). The
+# 64 KiB of CCM at 0x10000000 is deliberately not described: this model carries
+# one RAM region, and CCM is not reachable by DMA, so it is not a drop-in
+# extension of this one.
+ram-origin = 0x20000000
+ram-size = 131072
+# The vector table's length is the PAC's `__INTERRUPTS` array, here
+# stm32-metapac's at FerroHAL's pin, and was confirmed against the
+# `.vector_table` section of a linked binary. The `Interrupt` enum's highest
+# variant is not the same thing: it can exceed the array.
+# (16 exceptions + 82 interrupts) * 4 = 0x188, already 8-byte aligned.
+text-offset = 0x188
+
+# Crates a firmware for this chip cannot build without. Features here are
+# chip- or architecture-derived, so they belong to the target rather than to
+# the application. Logging and panic backends are the firmware's choice and are
+# deliberately absent.
+[platform-dependencies]
+# Every part here is a single-core Cortex-M, so the core's own critical section
+# fits all of them. FerroHAL leaves that choice to the firmware, and it is the
+# chip's rather than the application's, so the backend makes it.
+cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
+cortex-m-rt = { version = "0.7.6" }
+rtic = { version = "2.3.1", default-features = false, features = ["thumbv7-backend"] }
+rtic-monotonics = { version = "2.2.1", default-features = false, features = ["cortex-m-systick", "systick-64bit"] }
+# FerroHAL's chip features are metapac's chip names. `rtic` gives RTIC the
+# vector table and the `Peripherals::steal` that `peripherals = true` names,
+# and turns on `rt`.
+ferrohal-stm32 = { version = "0.1.0", default-features = false, features = ["stm32f407vg", "rtic"] }
+
+# A monotonic on a hardware timer rather than SysTick, for a firmware that sets
+# `monotonic-timer`. rtic-monotonics names the chip once for all its timers, and
+# that pulls in stm32-metapac, so none of this is added unless a firmware asks.
+[timer-monotonic]
+crate = "rtic-monotonics"
+chip-feature = "stm32f407vg"
+timers = { TIM2 = "stm32_tim2", TIM3 = "stm32_tim3", TIM4 = "stm32_tim4", TIM5 = "stm32_tim5" }
