@@ -8,26 +8,26 @@
 [chip]
 name = "STM32F405RG"
 rust-target = "thumbv7em-none-eabihf"
-# Verified against `probe-rs chip list`.
+# probe-rs matches this against its full part name, `STM32F405RGTx`.
 probe-rs-chip = "STM32F405RG"
-# The same path as every other STM32F4: the HAL aliases `pac` to the selected
-# chip's module, so this is a property of the HAL rather than of the chip.
-device = "stm32f4xx_hal::pac"
+# The device module FerroHAL hands RTIC, the same path on every chip: the chip
+# feature decides what is behind it, so this is a property of the HAL.
+device = "ferrohal_stm32::device"
 
 [memory]
 flash-origin = 0x08000000
 flash-size = 1048576
-# SRAM1 and SRAM2, contiguous from 0x20000000. The 64 KiB of CCM at 0x10000000
-# is deliberately not described: this model carries one RAM region, and CCM is
-# not reachable by DMA, so it is not a drop-in extension of this one.
+# SRAM1 and SRAM2, contiguous from 0x20000000 (DS8626 section 3.6). The
+# 64 KiB of CCM at 0x10000000 is deliberately not described: this model carries
+# one RAM region, and CCM is not reachable by DMA, so it is not a drop-in
+# extension of this one.
 ram-origin = 0x20000000
 ram-size = 131072
+# The vector table's length is the PAC's `__INTERRUPTS` array, here
+# stm32-metapac's at FerroHAL's pin, and was confirmed against the
+# `.vector_table` section of a linked binary. The `Interrupt` enum's highest
+# variant is not the same thing: it can exceed the array.
 # (16 exceptions + 82 interrupts) * 4 = 0x188, already 8-byte aligned.
-#
-# Taken from the PAC's `__INTERRUPTS` array, which is what sizes the vector
-# table, and confirmed against the linked binary. The `Interrupt` enum's highest
-# variant is not the same thing - it can exceed the array - and a released PAC
-# can differ from its `-staging` sibling, as this chip does.
 text-offset = 0x188
 
 # Crates a firmware for this chip cannot build without. Features here are
@@ -35,11 +35,17 @@ text-offset = 0x188
 # the application. Logging and panic backends are the firmware's choice and are
 # deliberately absent.
 [platform-dependencies]
-cortex-m = { version = "0.7.7" }
+# Every part here is a single-core Cortex-M, so the core's own critical section
+# fits all of them. FerroHAL leaves that choice to the firmware, and it is the
+# chip's rather than the application's, so the backend makes it.
+cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
 cortex-m-rt = { version = "0.7.6" }
 rtic = { version = "2.3.1", default-features = false, features = ["thumbv7-backend"] }
 rtic-monotonics = { version = "2.2.1", default-features = false, features = ["cortex-m-systick", "systick-64bit"] }
-stm32f4xx-hal = { version = "0.23.0", default-features = false, features = ["stm32f405"] }
+# FerroHAL's chip features are metapac's chip names. `rtic` gives RTIC the
+# vector table and the `Peripherals::steal` that `peripherals = true` names,
+# and turns on `rt`.
+ferrohal-stm32 = { version = "0.1.0", default-features = false, features = ["stm32f405rg", "rtic"] }
 
 # A monotonic on a hardware timer rather than SysTick, for a firmware that sets
 # `monotonic-timer`. rtic-monotonics names the chip once for all its timers, and

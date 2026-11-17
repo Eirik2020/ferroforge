@@ -65,10 +65,7 @@ jobs:
             examples/firmware/nucleo-h753zi -> target
             examples/tasks/blinky -> target
             examples/tasks/msp-displayport -> target
-            examples/tasks/stm32f4-sbus -> target
-            examples/tasks/stm32f4-timer -> target
-            examples/tasks/stm32f4-uart-dma -> target
-            examples/tasks/stm32h7-timer -> target
+            examples/tasks/pulse -> target
       # Cross-compiles every firmware and task crate, plants the defects the
-      # compile-fail harness expects, and scaffolds a project per HAL family.
+      # compile-fail harness expects, and scaffolds a project per chip family.
       - run: cargo test --workspace --locked -- --ignored

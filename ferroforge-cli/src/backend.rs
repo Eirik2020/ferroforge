@@ -29,8 +29,12 @@ const BUILTIN: &[(&str, &str)] = &[
         include_str!("../backends/stm32f4/stm32f405rg.toml"),
     ),
     (
-        "stm32f411re",
-        include_str!("../backends/stm32f4/stm32f411re.toml"),
+        "stm32f407vg",
+        include_str!("../backends/stm32f4/stm32f407vg.toml"),
+    ),
+    (
+        "stm32h743vi",
+        include_str!("../backends/stm32h7/stm32h743vi.toml"),
     ),
     (
         "stm32h753zi",
@@ -58,7 +62,7 @@ pub fn chip_table() -> Result<String, Error> {
         let hal = backend
             .platform_dependencies
             .keys()
-            .find(|name| name.ends_with("-hal"))
+            .find(|name| name.contains("hal"))
             .cloned()
             .unwrap_or_else(|| "-".to_owned());
         rows.push([
@@ -854,7 +858,7 @@ mod tests {
     #[test]
     fn a_comment_about_interrupts_is_not_interrupt_data() {
         let backend = Backend::for_chip("stm32f401re").expect("the shipped backend must parse");
-        assert!(backend.platform_dependencies.contains_key("stm32f4xx-hal"));
+        assert!(backend.platform_dependencies.contains_key("ferrohal-stm32"));
         // Logging and panic backends are the firmware's choice, not the chip's.
         assert!(!backend.platform_dependencies.contains_key("defmt-rtt"));
         assert!(!backend.platform_dependencies.contains_key("panic-probe"));
@@ -1054,35 +1058,36 @@ mod derivation {
     fn a_source_replaces_the_version_and_keeps_the_chip_feature() {
         let backend = Backend::for_chip("stm32f405rg").expect("a shipped backend");
         let settings = declared(
-            "[platform.stm32f4xx-hal]\n\
-             git = \"https://github.com/stm32-rs/stm32f4xx-hal.git\"\n\
-             rev = \"78d79609137d5c380320f7bf1a9120967babc61d\"\n\
-             features = [\"uart4\"]\n",
+            "[platform.ferrohal-stm32]\n\
+             git = \"https://github.com/Eirik2020/ferrohal-stm32\"\n\
+             rev = \"d9ddc472eae17a335dd6fdd217af3c4dc4050d1b\"\n\
+             features = [\"usb\"]\n",
         );
         let block = backend.manifest_platform_block(&settings);
 
         let line = block
             .lines()
-            .find(|line| line.starts_with("stm32f4xx-hal"))
+            .find(|line| line.starts_with("ferrohal-stm32"))
             .expect("the HAL must be in the block");
         assert!(
-            line.contains("git = \"https://github.com/stm32-rs/stm32f4xx-hal.git\""),
+            line.contains("git = \"https://github.com/Eirik2020/ferrohal-stm32\""),
             "{line}"
         );
         assert!(
-            line.contains("rev = \"78d79609137d5c380320f7bf1a9120967babc61d\""),
+            line.contains("rev = \"d9ddc472eae17a335dd6fdd217af3c4dc4050d1b\""),
             "{line}"
         );
         assert!(!line.contains("version ="), "{line}");
         assert!(
-            line.contains("\"stm32f405\""),
+            line.contains("\"stm32f405rg\""),
             "the chip feature stays: {line}"
         );
-        assert!(line.contains("\"uart4\""), "{line}");
+        assert!(line.contains("\"usb\""), "{line}");
 
         assert!(
-            block
-                .contains("# source for stm32f4xx-hal from [package.metadata.ferroforge.platform]"),
+            block.contains(
+                "# source for ferrohal-stm32 from [package.metadata.ferroforge.platform]"
+            ),
             "the block must say where the source was written: {block}"
         );
 
@@ -1100,13 +1105,13 @@ mod derivation {
     #[test]
     fn a_source_for_an_unselected_crate_is_refused() {
         let backend = Backend::for_chip("stm32f405rg").expect("a shipped backend");
-        let settings = declared("[platform.stm32f4x-hal]\nversion = \"0.23.0\"\n");
+        let settings = declared("[platform.ferrohal-stm23]\nversion = \"0.1.0\"\n");
         let error = backend
             .check_sources("under test", &settings)
             .expect_err("a crate the backend does not select must be refused");
         let message = error.to_string();
-        assert!(message.contains("stm32f4x-hal"), "{message}");
-        assert!(message.contains("stm32f4xx-hal"), "{message}");
+        assert!(message.contains("ferrohal-stm23"), "{message}");
+        assert!(message.contains("ferrohal-stm32"), "{message}");
     }
 
     /// The chip is named once, by `chip`. A chip feature on a source would name
@@ -1115,13 +1120,13 @@ mod derivation {
     fn a_chip_feature_on_a_source_is_refused() {
         let backend = Backend::for_chip("stm32f405rg").expect("a shipped backend");
         let settings = declared(
-            "[platform.stm32f4xx-hal]\nversion = \"0.23.0\"\nfeatures = [\"stm32f401\"]\n",
+            "[platform.ferrohal-stm32]\nversion = \"0.1.0\"\nfeatures = [\"stm32f401re\"]\n",
         );
         let message = backend
             .check_sources("under test", &settings)
             .expect_err("a chip feature must be refused")
             .to_string();
-        assert!(message.contains("stm32f401"), "{message}");
+        assert!(message.contains("stm32f401re"), "{message}");
         assert!(message.contains("`chip`"), "{message}");
     }
 

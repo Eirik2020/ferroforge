@@ -48,15 +48,13 @@ None remain. Three were settled, all specified in
 
 None of these block using the macros alone, and none of them is now undecided.
 
-- **HAL source.** ferro-wasp pins `stm32f4xx-hal` to a git revision that is
-  version 0.22.1, and the F405 backend selects 0.23.0 from crates.io.
-  `[patch.crates-io]` cannot bridge a semver-incompatible version, so a firmware
-  says where a platform crate comes from, specified in [where a platform crate
-  comes from](workflow.md#where-a-platform-crate-comes-from). ferro-wasp keeps
-  its revision and does not have to move to 0.23.0 to adopt the CLI. The HAL
-  features it enables (`rtic2`, `defmt`, `usb_fs`, `uart4`) were never the
-  problem: `ferrowasp-stm32f4` already enables them, Cargo unifies features, and
-  a source may add features of its own besides.
+- **HAL.** From 0.5 the backends select FerroHAL, not `stm32f4xx-hal`, which
+  the Foxeer app is still built on. So the CLI follows ferro-wasp's move to
+  FerroHAL and `ferroforge-stm32`, rather than leading it; the macros do not
+  depend on the HAL and are unaffected. A firmware says where FerroHAL comes
+  from, specified in [where a platform crate comes
+  from](workflow.md#where-a-platform-crate-comes-from), and a source may add
+  features of its own, such as `usb`.
 - **Probe and environment settings.** `sync` rewrites `.cargo/config.toml`, so
   the firmware declares what goes in it: `probe-command`, `probe-args` and `env`,
   specified with the other settings in [the CLI](workflow.md#the-cli), with an
@@ -77,9 +75,9 @@ flight.
 
 1. **The last two tasks.** `usb_fs` and `flash_manager_task` become definitions,
    as [kept in the app](#kept-in-the-app) describes.
-2. **CLI adoption.** Adopt `ferroforge sync` and `run`, and retire ferro-wasp's
-   `tools/rtic-app-builder`, which overlaps with FerroForge, so the two do not
-   drift.
+2. **CLI adoption.** Once the Foxeer app is on FerroHAL, adopt `ferroforge
+   sync` and `run`, and retire ferro-wasp's `tools/rtic-app-builder`, which
+   overlaps with FerroForge, so the two do not drift.
 
 ## Kept in the App
 

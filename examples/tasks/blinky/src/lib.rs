@@ -1,6 +1,6 @@
 //! Portable task definitions: nothing here names a HAL or a chip, only
-//! `embedded-hal` traits and the bounds each task declares. Contrast
-//! `tasks/stm32f4-timer`, which needs its HAL and says so.
+//! `embedded-hal` traits and the bounds each task declares. A task that needs
+//! its HAL lives in a HAL helper crate such as `ferroforge-stm32`.
 //!
 //! That this checks standalone for ARM is the evidence that the call-through
 //! expansion preserves the authored model - `cx.local`, `cx.shared.lock`,
