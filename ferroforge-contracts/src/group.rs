@@ -6,7 +6,7 @@
 //! group's contract: what a firmware, or a tool writing one, must supply to
 //! select the group without knowing which group it is.
 //!
-//! ```rust,ignore
+//! ```text
 //! #[ferroforge::group(
 //!     slots = [instance: U, tx: Tx, rx: Rx, tx_dma: TxD, rx_dma: RxD],
 //!     vectors = [on_uart = instance, on_rx_dma = rx_dma, on_tx_dma = tx_dma],
