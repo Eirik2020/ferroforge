@@ -1,0 +1,96 @@
+# Chip-family data for the STM32H743VI, as on most H743 flight controllers.
+# The H753's die without the crypto and hash units, and the same memory.
+#
+# The first family here with more memory than the FLASH/RAM pair `cortex-m-rt`
+# needs. Per G2a this is still only build-time data read by the CLI, and per G4
+# it names no interrupts.
+
+[chip]
+name = "STM32H743VI"
+# Cortex-M7 with a double-precision FPU; this triple is the hard-float ARMv7E-M
+# one, as for the M4F parts.
+rust-target = "thumbv7em-none-eabihf"
+# probe-rs matches this against its full part name, `STM32H743VITx`.
+probe-rs-chip = "STM32H743VI"
+# The device module FerroHAL hands RTIC, the same path on every chip: the chip
+# feature decides what is behind it, so this is a property of the HAL.
+device = "ferrohal_stm32::device"
+
+[memory]
+flash-origin = 0x08000000
+flash-size = 2097152
+# DTCM. `cortex-m-rt` puts .data, .bss and the stack in RAM, and DTCM is the
+# lowest-latency choice for them. AXISRAM is larger but further away, so it is
+# offered below rather than chosen.
+ram-origin = 0x20000000
+ram-size = 131072
+# The vector table's length is the PAC's `__INTERRUPTS` array, here
+# stm32-metapac's at FerroHAL's pin, and was confirmed against the
+# `.vector_table` section of a linked binary. The `Interrupt` enum's highest
+# variant is not the same thing: it can exceed the array.
+# (16 exceptions + 150 interrupts) * 4 = 0x298, already 8-byte aligned.
+text-offset = 0x298
+
+# The rest of what this part offers (RM0433 section 2.3, the memory map).
+# Emitted so a firmware can place sections here; nothing is put in them
+# automatically, because which memory suits which data is the application's
+# decision.
+[[memory.region]]
+name = "AXISRAM"
+origin = 0x24000000
+size = 524288
+
+[[memory.region]]
+name = "SRAM1"
+origin = 0x30000000
+size = 131072
+
+[[memory.region]]
+name = "SRAM2"
+origin = 0x30020000
+size = 131072
+
+[[memory.region]]
+name = "SRAM3"
+origin = 0x30040000
+size = 32768
+
+[[memory.region]]
+name = "SRAM4"
+origin = 0x38000000
+size = 65536
+
+[[memory.region]]
+name = "BSRAM"
+origin = 0x38800000
+size = 4096
+
+[[memory.region]]
+name = "ITCM"
+origin = 0x00000000
+size = 65536
+
+# Crates a firmware for this chip cannot build without. Features here are
+# chip- or architecture-derived, so they belong to the target rather than to
+# the application. Logging and panic backends are the firmware's choice and are
+# deliberately absent.
+[platform-dependencies]
+# Every part here is a single-core Cortex-M, so the core's own critical section
+# fits all of them. FerroHAL leaves that choice to the firmware, and it is the
+# chip's rather than the application's, so the backend makes it.
+cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
+cortex-m-rt = { version = "0.7.6" }
+rtic = { version = "2.3.1", default-features = false, features = ["thumbv7-backend"] }
+rtic-monotonics = { version = "2.2.1", default-features = false, features = ["cortex-m-systick", "systick-64bit"] }
+# FerroHAL's chip features are metapac's chip names. `rtic` gives RTIC the
+# vector table and the `Peripherals::steal` that `peripherals = true` names,
+# and turns on `rt`.
+ferrohal-stm32 = { version = "0.1.0", default-features = false, features = ["stm32h743vi", "rtic"] }
+
+# A monotonic on a hardware timer rather than SysTick, for a firmware that sets
+# `monotonic-timer`. rtic-monotonics names the chip once for all its timers, and
+# that pulls in stm32-metapac, so none of this is added unless a firmware asks.
+[timer-monotonic]
+crate = "rtic-monotonics"
+chip-feature = "stm32h743vi"
+timers = { TIM2 = "stm32_tim2", TIM3 = "stm32_tim3", TIM4 = "stm32_tim4", TIM5 = "stm32_tim5", TIM15 = "stm32_tim15" }

@@ -28,16 +28,6 @@ no firmware selects it now. A firmware that does should report how many of the
 transmitter's requests were answered: that separates a transmitter that is not
 connected from one that is being talked to wrongly.
 
-## A DMA UART That Transmits
-
-The receive half of `examples/tasks/stm32f4-uart-dma` has been driven by real SBUS
-traffic, which is what settled whether its four tasks divide the work correctly.
-`on_tx` has had no such test: nothing starts a transmit, so it counts
-completions that never happen, and it is the one member of the beacon's groups
-that only compiles. The open question is whether a transmitting
-firmware needs anything from these tasks that the receive side did not already
-force into `Port`.
-
 ## Group Contracts
 
 A [group contract](architecture.md#group-contracts) lists slots, vectors,
@@ -49,11 +39,11 @@ once per vector; otherwise it checks a selection as it always has.
 
 ## FerroForge 0.5
 
-[G2b](governing-requirements.md)'s helper, `ferroforge-stm32`, exists, on
-FerroHAL. The backends still name `stm32f4xx-hal` and `stm32h7xx-hal`; 0.5
-moves them to FerroHAL (chips f401re, f405rg, f407vg, h743vi and h753zi; f411re
-drops) and the STM32 examples to `ferroforge-stm32`. FerroHAL and
-`ferroforge-stm32` are published to crates.io before that release.
+What is left for 0.5 is the release itself: FerroHAL and
+`ferroforge-stm32` are published to crates.io first, then the scaffold's
+FerroHAL source (`UNPUBLISHED` in `ferroforge-cli`) is emptied, so a new
+firmware takes FerroHAL by version like every other platform crate, and the
+example firmwares drop their `platform` tables.
 
 ## ferro-wasp Adoption
 

@@ -20,7 +20,7 @@ Each is required only by the declaration that needs it. Every task does carry a
 monotonic slot whether or not its body uses a clock, so that the adapter stays
 inferable, but the slot alone is an unbounded type parameter and costs nothing: a
 task crate that declares no shared resources and no monotonic needs neither
-crate. `examples/tasks/stm32f4-timer` is one, and depends on nothing but its HAL.
+crate. `examples/tasks/blinky`'s `on_tick` is such a task.
 
 The cost that remains is narrower than it looks: a task declaring shared
 resources is tied to RTIC, not only to `embedded-hal`.
@@ -33,7 +33,7 @@ decision instead:
 
 ```toml
 [features]
-stm32f401 = ["stm32f4xx-hal/stm32f401"]
+stm32f401re = ["ferrohal-stm32/stm32f401re"]
 ```
 
 That feature exists for one purpose: letting the crate be checked on its own,
@@ -49,13 +49,12 @@ reports that from a build script, as a panic with no cause, so `sync` refuses it
 first and says which dependency and which feature.
 
 Such a crate usually needs no bound at all. A resource may carry a concrete
-inline type, so `local = [timer: CounterUs<TIM3>]` names what the firmware will
-hold and the body is ordinary HAL code. Reach for a bound only when a definition
-must serve several peripherals, and weigh it: making the timer generic means
-bounding on what it can do, and the HAL puts its flag traits on `Timer`/`FTimer`
-while a firmware holds a `Counter`, so such a bound has to carry a `Deref` step
-and a trait to name it. One concrete definition per peripheral type is the
-cheaper default.
+inline type, so `local = [tick: Tick<TIM3>]` names what the firmware will hold
+and the body is ordinary HAL code. Reach for a bound when a definition must
+serve several peripherals: FerroHAL's drivers share one `Service` trait, so
+`ferroforge-stm32`'s `uart_port` bounds its one resource on `Service<Event =
+Events>` and serves every USART with the same members. Where no shared trait
+exists, one concrete definition per peripheral type is the cheaper default.
 
 ## Check-Only Dependencies
 

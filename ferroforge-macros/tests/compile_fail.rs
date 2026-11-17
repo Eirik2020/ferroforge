@@ -70,16 +70,15 @@ const CASES: &[Case] = &[
         to: "local = [led = status_led, count = no_such_resource],",
         expected: "this local resource has NOT been declared",
     },
-    // A HAL-specific task names the concrete type it needs, so a firmware whose
-    // resource is something else fails as ordinary Rust, at the line in `init`
-    // that produced the wrong thing.
+    // A firmware's resource is ordinary Rust, so one whose declared type is
+    // not what `init` produces fails at the line in `init` that produced it.
     Case {
-        name: "resource-type-disagrees-with-the-hal-definition",
+        name: "resource-type-disagrees-with-what-init-builds",
         firmware: BEACON,
         file: MAIN,
-        from: "pulse_timer: CounterUs<TIM3>,",
-        to: "pulse_timer: u32,",
-        expected: "expected `u32`, found `Counter",
+        from: "pulse_led: Pin<'A', 6, Output>,",
+        to: "pulse_led: u32,",
+        expected: "expected `u32`, found `Pin",
     },
     // A task that needs a clock, in an application that declares no monotonic.
     // The slot is filled with a stand-in named for exactly that. `Mono` still
@@ -132,33 +131,33 @@ const CASES: &[Case] = &[
         name: "group-member-left-out",
         firmware: BEACON,
         file: MAIN,
-        from: "#[task(priority = 1)]\n        async fn decode;",
+        from: "#[task(priority = 2)]\n        async fn announce;",
         to: "",
-        expected: "add `#[task(priority = ..)] async fn decode;` to the module",
+        expected: "add `#[task(priority = ..)] async fn announce;` to the module",
     },
     Case {
         name: "group-member-of-the-wrong-kind",
         firmware: BEACON,
         file: MAIN,
-        from: "        fn on_uart;",
-        to: "        async fn on_uart;",
-        expected: "`on_uart` is a hardware task: declare it `fn on_uart;`",
+        from: "        fn on_pulse;",
+        to: "        async fn on_pulse;",
+        expected: "`on_pulse` is a hardware task: declare it `fn on_pulse;`",
     },
     Case {
         name: "group-hardware-member-unbound",
         firmware: BEACON,
         file: MAIN,
-        from: "#[task(binds = USART1, priority = 12)]",
-        to: "#[task(priority = 12)]",
-        expected: "`on_uart` is a hardware task; bind it",
+        from: "#[task(binds = TIM3, priority = 3)]",
+        to: "#[task(priority = 3)]",
+        expected: "`on_pulse` is a hardware task; bind it",
     },
     Case {
         name: "group-resource-it-does-not-need",
         firmware: BEACON,
         file: MAIN,
         from: "local = [heartbeat_led, heartbeat_count, beacon_led, beacon_count],",
-        to: "local = [heartbeat_led, heartbeat_count, beacon_led, beacon_count, sbus_out],",
-        expected: "`sbus_out` is not a local name of this group",
+        to: "local = [heartbeat_led, heartbeat_count, beacon_led, beacon_count, spare_count],",
+        expected: "`spare_count` is not a local name of this group",
     },
     Case {
         name: "group-resource-left-unbound",

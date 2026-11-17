@@ -11,7 +11,7 @@ use defmt_rtt as _;
 use panic_probe as _;
 
 ferroforge::app! {
-    device = stm32f4xx_hal::pac,
+    device = ferrohal_stm32::device,
     dispatchers = [USART1],
 
     use rtic_monotonics::systick::prelude::*;
@@ -22,9 +22,8 @@ ferroforge::app! {
     systick_monotonic!(Mono, 1000);
 
     use ferroforge_task_blinky::{blink, on_tick, report};
-    use stm32f4xx_hal::{
-        gpio::{Output, PA5, PushPull},
-        prelude::*,
+    use ferrohal_stm32::{
+        gpio::{Output, Pin},
         rcc::Config,
     };
 
@@ -35,17 +34,22 @@ ferroforge::app! {
 
     #[local]
     struct Local {
-        status_led: PA5<Output<PushPull>>,
+        status_led: Pin<'A', 5, Output>,
         blink_count: u32,
         tick_count: u32,
     }
 
     #[init]
     fn init(cx: init::Context) -> (Shared, Local) {
-        let mut rcc = cx.device.RCC.freeze(Config::hsi().sysclk(84.MHz()));
-        Mono::start(cx.core.SYST, rcc.clocks.sysclk().raw());
-        let gpioa = cx.device.GPIOA.split(&mut rcc);
-        let mut status_led = gpioa.pa5.into_push_pull_output();
+        // The reset clock tree, 16 MHz from the internal oscillator: a light
+        // needs nothing faster.
+        let Ok(mut rcc) = cx.device.RCC.freeze(&Config::hsi()) else {
+            defmt::panic!("the clock configuration was refused");
+        };
+        Mono::start(cx.core.SYST, rcc.clocks().cpu.0);
+        // LD2, the Nucleo-64's green user LED (UM1724 section 6.4).
+        let mut gpioa = cx.device.GPIOA.split(&mut rcc);
+        let mut status_led = gpioa.p5.into_push_pull_output(&mut gpioa.ctrl);
         status_led.set_low();
         status_blink::spawn().unwrap();
         (
