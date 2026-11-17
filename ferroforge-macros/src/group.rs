@@ -341,7 +341,7 @@ pub fn define(arguments: GroupArguments, module: ItemMod) -> syn::Result<TokenSt
     });
     // The constructor must exist where the contract says, so a tool reading
     // the contract never names a function that is not there.
-    if let Some(constructor) = &contract.constructor {
+    if let Some(constructor) = contract.constructor.as_ref().map(|c| &c.path) {
         aliases.push(quote! {
             #[doc(hidden)]
             #[allow(unused_imports)]
@@ -1729,7 +1729,7 @@ mod tests {
     }";
     const PORT_CONTRACT: &str = "slots = [instance: U, rx_dma: RxD],
         vectors = [on_uart = instance, on_rx_dma = rx_dma],
-        shared = [uart: Uart<U, RxD>], constructor = new";
+        shared = [uart: Uart<U, RxD>], constructor = new()";
 
     #[test]
     fn a_contract_is_accepted_and_its_constructor_must_exist() {

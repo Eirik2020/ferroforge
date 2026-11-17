@@ -13,7 +13,8 @@
 mod group;
 
 pub use group::{
-    GroupArguments, GroupContract, GroupDeclaration, GroupMember, Slot, VectorRole, Wire, groups,
+    Buffer, ConfigField, Constructor, GroupArguments, GroupContract, GroupDeclaration, GroupMember,
+    Layer, Slot, VectorRole, Wire, groups,
 };
 
 use std::collections::BTreeSet;

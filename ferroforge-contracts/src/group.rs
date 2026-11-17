@@ -11,7 +11,9 @@
 //!     slots = [instance: U, tx: Tx, rx: Rx, tx_dma: TxD, rx_dma: RxD],
 //!     vectors = [on_uart = instance, on_rx_dma = rx_dma, on_tx_dma = tx_dma],
 //!     shared = [uart: Uart<Wiring<U, Tx, Rx, TxD, RxD>>],
-//!     constructor = new,
+//!     buffers = [#[dma] tx: [u8], #[dma] rx: [u8]],
+//!     config = [config: Config @ platform],
+//!     constructor = new(rcc, wiring, config, tx, rx),
 //! )]
 //! pub mod uart_port { .. }
 //! ```
@@ -23,8 +25,17 @@
 //!   member's `binds` follows from the slot's type.
 //! - `shared` and `local` list every resource the members leave for the
 //!   firmware to bind, with its type, written over the slots' parameters.
-//! - `constructor` is the function that builds those resources. It returns
-//!   them as one struct with a public field per resource, of the same name.
+//! - `buffers` lists the memory the constructor is handed, each a slice of an
+//!   integer type. The selection sets each one's length; a tool emits it as a
+//!   zeroed array in `init(local = [..])`. `#[dma]` marks a buffer that must
+//!   sit in memory the DMA can reach.
+//! - `config` lists the constructor's other inputs, each typed and tagged with
+//!   the input layer that supplies its value: `board`, `profile`, `software`
+//!   or `platform`.
+//! - `constructor` is the function that builds those resources, with its
+//!   arguments in order. Each argument is `rcc`, `wiring` (the slots, as the
+//!   HAL's wiring), a config field or a buffer. It returns the resources as one
+//!   struct with a public field per resource, of the same name.
 //!
 //! Nothing here reads a function body, and nothing depends on a HAL: the
 //! contract is read from source, by the macro and by any host tool, through
@@ -101,6 +112,158 @@ impl Parse for VectorRole {
     }
 }
 
+/// Memory a group's constructor is handed, `#[dma] rx: [u8]`: a slice of an
+/// integer type, whose length the selection sets. A tool emits it as a zeroed
+/// array in `init(local = [..])` and passes it by name to the constructor.
+#[derive(Clone, Debug)]
+pub struct Buffer {
+    /// Its name, as the constructor's argument list uses it.
+    pub name: Ident,
+    /// The element type, an integer primitive: `u8`, `u16`.
+    pub element: Ident,
+    /// `#[dma]`: it must sit in memory the DMA can reach.
+    pub dma: bool,
+    /// Its documentation.
+    pub docs: Vec<Attribute>,
+}
+
+/// The element types a buffer may have: those a tool can zero with `0`.
+const BUFFER_ELEMENTS: [&str; 8] = ["u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64"];
+
+impl Parse for Buffer {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let mut dma = false;
+        let mut docs = Vec::new();
+        for attribute in input.call(Attribute::parse_outer)? {
+            match &attribute.meta {
+                syn::Meta::Path(path) if path.is_ident("dma") => dma = true,
+                syn::Meta::NameValue(meta) if meta.path.is_ident("doc") => docs.push(attribute),
+                _ => {
+                    return Err(Error::new(
+                        attribute.span(),
+                        "a buffer takes `#[dma]` and documentation, nothing else",
+                    ));
+                }
+            }
+        }
+        let name = input.parse()?;
+        input.parse::<Token![:]>()?;
+        let ty: syn::Type = input.parse()?;
+        let element = match &ty {
+            syn::Type::Slice(slice) => match &*slice.elem {
+                syn::Type::Path(path) if path.qself.is_none() => path.path.get_ident().cloned(),
+                _ => None,
+            },
+            _ => None,
+        }
+        .filter(|element| BUFFER_ELEMENTS.contains(&element.to_string().as_str()))
+        .ok_or_else(|| {
+            Error::new(
+                ty.span(),
+                "a buffer is a slice of an integer type, `[u8]`: the selection \
+                 sets its length, and a tool fills it with zeros",
+            )
+        })?;
+        Ok(Self {
+            name,
+            element,
+            dma,
+            docs,
+        })
+    }
+}
+
+/// The input layer that supplies a config field's value (FerroSmith design
+/// record v3, section 2). Live configuration is set at run time, after every
+/// constructor has run, so it supplies none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Layer {
+    /// The board file: what the board's hardware fixes.
+    Board,
+    /// The MCU profile: what the chip and its clock tree fix.
+    Profile,
+    /// The software configuration, chosen when the firmware is built.
+    Software,
+    /// The platform configuration, read at boot.
+    Platform,
+}
+
+impl Parse for Layer {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let layer: Ident = input.parse()?;
+        match layer.to_string().as_str() {
+            "board" => Ok(Self::Board),
+            "profile" => Ok(Self::Profile),
+            "software" => Ok(Self::Software),
+            "platform" => Ok(Self::Platform),
+            other => Err(Error::new(
+                layer.span(),
+                format!(
+                    "`{other}` is not an input layer; a constructor's config comes from \
+                     `board`, `profile`, `software` or `platform`"
+                ),
+            )),
+        }
+    }
+}
+
+/// A constructor input besides the wiring and buffers, `config: Config @ board`.
+#[derive(Clone, Debug)]
+pub struct ConfigField {
+    /// Its name, as the constructor's argument list uses it.
+    pub name: Ident,
+    /// Its type, written as the constructor takes it.
+    pub ty: syn::Type,
+    /// The input layer that supplies its value.
+    pub layer: Layer,
+}
+
+impl Parse for ConfigField {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let name = input.parse()?;
+        input.parse::<Token![:]>()?;
+        let ty = input.parse()?;
+        input.parse::<Token![@]>()?;
+        Ok(Self {
+            name,
+            ty,
+            layer: input.parse()?,
+        })
+    }
+}
+
+/// The function that builds a group's resources, and its arguments in order,
+/// `new(rcc, wiring, config, tx, rx)`.
+#[derive(Clone, Debug)]
+pub struct Constructor {
+    /// Its path, relative to the group's module.
+    pub path: Path,
+    /// Its arguments, each `rcc`, `wiring`, a config field or a buffer.
+    pub arguments: Vec<Ident>,
+}
+
+/// The constructor arguments that are neither a config field nor a buffer.
+const FIXED_ARGUMENTS: [&str; 2] = ["rcc", "wiring"];
+
+impl Parse for Constructor {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let path: Path = input.parse()?;
+        if !input.peek(syn::token::Paren) {
+            return Err(Error::new(
+                path.span(),
+                "a constructor lists its arguments in order, `new(rcc, wiring, ..)`, \
+                 so a tool can call it without knowing which group it is",
+            ));
+        }
+        let body;
+        syn::parenthesized!(body in input);
+        let arguments = syn::punctuated::Punctuated::<Ident, Token![,]>::parse_terminated(&body)?
+            .into_iter()
+            .collect();
+        Ok(Self { path, arguments })
+    }
+}
+
 /// What a group needs from whoever selects it: its slots, the vectors its
 /// members serve, the resources it leaves to the firmware, and the function
 /// that builds them.
@@ -114,8 +277,13 @@ pub struct GroupContract {
     pub shared: Vec<Resource>,
     /// `local = [..]`: the locals the firmware binds, typed.
     pub local: Vec<Resource>,
-    /// `constructor = ..`: what builds the resources, relative to the group.
-    pub constructor: Option<Path>,
+    /// `buffers = [..]`: the memory the constructor is handed.
+    pub buffers: Vec<Buffer>,
+    /// `config = [..]`: the constructor's other inputs, with their layers.
+    pub config: Vec<ConfigField>,
+    /// `constructor = ..(..)`: what builds the resources, relative to the
+    /// group, and its arguments in order.
+    pub constructor: Option<Constructor>,
 }
 
 impl GroupContract {
@@ -126,6 +294,8 @@ impl GroupContract {
             && self.vectors.is_empty()
             && self.shared.is_empty()
             && self.local.is_empty()
+            && self.buffers.is_empty()
+            && self.config.is_empty()
             && self.constructor.is_none()
     }
 
@@ -195,12 +365,68 @@ impl GroupContract {
                 ));
             }
         }
-        if self.constructor.is_none() {
+        let Some(constructor) = &self.constructor else {
             return Err(Error::new(
                 span,
                 "a group with a contract names its `constructor`, the function \
                  that builds its resources",
             ));
+        };
+        self.validate_inputs(constructor)
+    }
+
+    /// The buffers and config fields against the constructor's arguments:
+    /// each input named once, and each argument a known input.
+    fn validate_inputs(&self, constructor: &Constructor) -> syn::Result<()> {
+        let inputs: Vec<&Ident> = self
+            .buffers
+            .iter()
+            .map(|b| &b.name)
+            .chain(self.config.iter().map(|c| &c.name))
+            .collect();
+        unique(
+            inputs.iter().copied(),
+            "duplicate input; a name is a buffer or a config field, once",
+        )?;
+        for input in &inputs {
+            if FIXED_ARGUMENTS.contains(&identifier_key(input).as_str()) {
+                return Err(Error::new(
+                    input.span(),
+                    format!(
+                        "`{input}` is the constructor's own argument; name the input otherwise"
+                    ),
+                ));
+            }
+        }
+        unique(
+            constructor.arguments.iter(),
+            "the constructor takes each argument once",
+        )?;
+        for argument in &constructor.arguments {
+            let key = identifier_key(argument);
+            if !FIXED_ARGUMENTS.contains(&key.as_str())
+                && !inputs.iter().any(|input| identifier_key(input) == key)
+            {
+                return Err(Error::new(
+                    argument.span(),
+                    format!(
+                        "`{argument}` is not `rcc`, `wiring`, nor one of this group's \
+                         `buffers` or `config`"
+                    ),
+                ));
+            }
+        }
+        for input in &inputs {
+            if !constructor
+                .arguments
+                .iter()
+                .any(|argument| identifier_key(argument) == identifier_key(input))
+            {
+                return Err(Error::new(
+                    input.span(),
+                    format!("the constructor's arguments leave out `{input}`"),
+                ));
+            }
         }
         Ok(())
     }
@@ -235,6 +461,8 @@ impl Parse for GroupArguments {
                 "vectors" => contract.vectors = list(input)?,
                 "shared" => contract.shared = list(input)?,
                 "local" => contract.local = list(input)?,
+                "buffers" => contract.buffers = list(input)?,
+                "config" => contract.config = list(input)?,
                 "constructor" => contract.constructor = Some(input.parse()?),
                 other => {
                     return Err(Error::new(
@@ -242,8 +470,8 @@ impl Parse for GroupArguments {
                         format!(
                             "unknown group argument `{other}`; a group wires `spawn` \
                              between its members and may state its contract - \
-                             `slots`, `vectors`, `shared`, `local` and `constructor` - \
-                             and the firmware sets the rest"
+                             `slots`, `vectors`, `shared`, `local`, `buffers`, `config` \
+                             and `constructor` - and the firmware sets the rest"
                         ),
                     ));
                 }
@@ -378,7 +606,9 @@ mod tests {
                 slots = [instance: U, tx: Tx, rx: Rx, tx_dma: TxD, rx_dma: RxD],
                 vectors = [on_uart = instance, on_rx_dma = rx_dma, on_tx_dma = tx_dma],
                 shared = [uart: Uart<Wiring<U, Tx, Rx, TxD, RxD>>],
-                constructor = new,
+                buffers = [#[dma] tx: [u8], #[dma] rx: [u8]],
+                config = [config: Config @ platform],
+                constructor = new(rcc, wiring, config, tx, rx),
             )]
             pub mod uart_port {
                 #[ferroforge::task(shared = [uart], bounds = [uart: Service])]
@@ -420,7 +650,28 @@ mod tests {
         assert_eq!(contract.vectors[1].member, "on_rx_dma");
         assert_eq!(contract.vectors[1].slot, "rx_dma");
         assert_eq!(contract.shared[0].name, "uart");
-        assert!(contract.constructor.as_ref().unwrap().is_ident("new"));
+        let constructor = contract.constructor.as_ref().unwrap();
+        assert!(constructor.path.is_ident("new"));
+        let arguments: Vec<String> = constructor
+            .arguments
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(arguments, ["rcc", "wiring", "config", "tx", "rx"]);
+        let buffers: Vec<(String, String, bool)> = contract
+            .buffers
+            .iter()
+            .map(|b| (b.name.to_string(), b.element.to_string(), b.dma))
+            .collect();
+        assert_eq!(
+            buffers,
+            [
+                ("tx".to_string(), "u8".to_string(), true),
+                ("rx".to_string(), "u8".to_string(), true),
+            ]
+        );
+        assert_eq!(contract.config[0].name, "config");
+        assert_eq!(contract.config[0].layer, Layer::Platform);
         let members: Vec<String> = group.members.iter().map(|m| m.name.to_string()).collect();
         assert_eq!(members, ["on_uart", "on_rx_dma", "on_tx_dma"]);
         assert!(
@@ -447,38 +698,38 @@ mod tests {
     #[test]
     fn a_vector_names_a_slot() {
         assert!(
-            refused("slots = [instance: U], vectors = [on_uart = irq], constructor = new")
+            refused("slots = [instance: U], vectors = [on_uart = irq], constructor = new()")
                 .contains("`irq` is not one of this group's `slots`")
         );
     }
 
     #[test]
     fn a_contract_resource_states_its_type() {
-        assert!(refused("shared = [uart], constructor = new").contains("states its type"));
+        assert!(refused("shared = [uart], constructor = new()").contains("states its type"));
     }
 
     #[test]
     fn a_contract_resource_has_no_initial_value() {
-        assert!(refused("local = [n: u32 = 0], constructor = new").contains("no initial value"));
+        assert!(refused("local = [n: u32 = 0], constructor = new()").contains("no initial value"));
     }
 
     #[test]
     fn a_resource_is_listed_once() {
         assert!(
-            refused("shared = [a: u8], local = [a: u8], constructor = new")
+            refused("shared = [a: u8], local = [a: u8], constructor = new()")
                 .contains("duplicate resource")
         );
     }
 
     #[test]
     fn slots_are_distinct() {
-        assert!(refused("slots = [a: U, b: U], constructor = new").contains("type parameter"));
-        assert!(refused("slots = [a: U, a: V], constructor = new").contains("duplicate slot"));
+        assert!(refused("slots = [a: U, b: U], constructor = new()").contains("type parameter"));
+        assert!(refused("slots = [a: U, a: V], constructor = new()").contains("duplicate slot"));
     }
 
     #[test]
     fn a_local_is_never_lock_free() {
-        assert!(refused("local = [#[lock_free] a: u8], constructor = new").contains("lock_free"));
+        assert!(refused("local = [#[lock_free] a: u8], constructor = new()").contains("lock_free"));
     }
 
     #[test]
@@ -487,6 +738,63 @@ mod tests {
             .err()
             .unwrap()
             .to_string();
-        assert!(error.contains("`slots`, `vectors`, `shared`, `local` and `constructor`"));
+        assert!(error.contains(
+            "`slots`, `vectors`, `shared`, `local`, `buffers`, `config` and `constructor`"
+        ));
+    }
+
+    #[test]
+    fn a_constructor_lists_its_arguments() {
+        assert!(refused("shared = [a: u8], constructor = new").contains("lists its arguments"));
+    }
+
+    #[test]
+    fn every_input_is_an_argument_and_every_argument_an_input() {
+        assert!(
+            refused("buffers = [rx: [u8]], constructor = new(rcc, wiring)")
+                .contains("leave out `rx`")
+        );
+        assert!(
+            refused("constructor = new(rcc, frame)").contains("`frame` is not `rcc`, `wiring`")
+        );
+        assert!(
+            refused("buffers = [rx: [u8]], constructor = new(rx, rx)")
+                .contains("each argument once")
+        );
+        assert!(
+            refused("buffers = [rx: [u8]], config = [rx: u32 @ board], constructor = new(rx)")
+                .contains("duplicate input")
+        );
+        assert!(
+            refused("config = [rcc: u32 @ board], constructor = new(rcc)")
+                .contains("the constructor's own argument")
+        );
+    }
+
+    #[test]
+    fn a_buffer_is_a_slice_of_integers() {
+        assert!(
+            refused("buffers = [rx: [u8; 64]], constructor = new(rx)")
+                .contains("slice of an integer")
+        );
+        assert!(
+            refused("buffers = [rx: [f32]], constructor = new(rx)").contains("slice of an integer")
+        );
+        assert!(
+            refused("buffers = [#[link_section] rx: [u8]], constructor = new(rx)")
+                .contains("`#[dma]` and documentation")
+        );
+        let arguments = contract("buffers = [samples: [u16]], constructor = new(samples)").unwrap();
+        assert!(!arguments.contract.buffers[0].dma);
+    }
+
+    #[test]
+    fn a_config_field_names_its_layer() {
+        assert!(
+            refused("config = [baud: u32 @ live], constructor = new(baud)")
+                .contains("`live` is not an input layer")
+        );
+        let arguments = contract("config = [mode: Mode @ board], constructor = new(mode)").unwrap();
+        assert_eq!(arguments.contract.config[0].layer, Layer::Board);
     }
 }

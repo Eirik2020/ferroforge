@@ -63,14 +63,14 @@ links there instead of restating it.
 | ferro-wasp adoption: its gaps and migration order | `ferro-wasp-adoption.md` |
 | What was decided, and where it is specified | `review.md` (index only) |
 
-The whole book is 1716 lines, so read a chapter when a section is not enough:
+The whole book is 1738 lines, so read a chapter when a section is not enough:
 
 - `governing-requirements.md` (66) - G1-G7. Loaded at launch for Claude.
-- `architecture.md` (367) - the agreed call-through model. Owns the canonical
+- `architecture.md` (377) - the agreed call-through model. Owns the canonical
   authoring design; other chapters link here rather than restate it.
-- `review.md` (291) - current decisions, the next open point, an index of
+- `review.md` (304) - current decisions, the next open point, an index of
   older decisions still in force, and what the call-through model superseded.
-- `implementation-plan.md` (79) - known defects, and what is left, in unblocking
+- `implementation-plan.md` (78) - known defects, and what is left, in unblocking
   order.
 - `ferro-wasp-adoption.md` (106) - what ferro-wasp needs, and the migration
   order.

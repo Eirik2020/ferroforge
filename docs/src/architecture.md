@@ -301,7 +301,9 @@ its type; and the function that builds them.
     slots = [instance: U, tx: Tx, rx: Rx, tx_dma: TxD, rx_dma: RxD],
     vectors = [on_uart = instance, on_rx_dma = rx_dma, on_tx_dma = tx_dma],
     shared = [uart: Uart<Wiring<U, Tx, Rx, TxD, RxD>>],
-    constructor = new,
+    buffers = [#[dma] tx: [u8], #[dma] rx: [u8]],
+    config = [config: Config @ platform],
+    constructor = new(rcc, wiring, config, tx, rx),
 )]
 pub mod uart_port { .. }
 ```
@@ -315,12 +317,20 @@ pub mod uart_port { .. }
 - `shared` and `local` list resources as a task lists them, typed, with no
   initial value: the constructor builds them. It returns a struct with one
   public field per resource, of the same name.
+- A buffer is a slice of an integer type. Whoever selects the group sets its
+  length, and a tool emits it as a zeroed array in `init(local = [..])`.
+  `#[dma]` marks one that must sit in memory the DMA can reach.
+- A configuration field is a typed constructor input with the layer that
+  supplies its value: `board`, `profile`, `software` or `platform`.
+- The constructor lists its arguments in order, each `rcc`, `wiring` (the
+  slots, as the HAL's wiring), a buffer or a configuration field, every
+  buffer and field exactly once.
 
 The contract is checked where the group is written. On its own: each slot,
 parameter and resource once, a vector naming a slot, a type on every resource,
-and a constructor. Against the members defined in the module: a vector served by
-a hardware member, and every resource a member leaves to the firmware listed in
-its category; with nothing included, nothing listed that no member needs. The
+a constructor, and its arguments matching the buffers and fields. Against
+the members defined in the module: a vector served by a hardware member, and
+every resource a member leaves to the firmware listed in its category; with nothing included, nothing listed that no member needs. The
 module imports the constructor, so a contract naming a missing function does not
 compile. A group without these arguments means what it always did, and `app!`
 binds a selection the same way either way.

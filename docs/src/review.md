@@ -6,6 +6,20 @@ what is left to build is in [remaining work](implementation-plan.md).
 
 ## Current Decisions
 
+**A group contract states its buffers, configuration and constructor arguments,
+2026-11-17.** Settled on `ferroforge-stm32`'s SPI port. A buffer is a slice of
+an integer type, `#[dma] rx: [u8]`: its length belongs to whoever selects the
+group, because the device on the bus sets it, not the port, so the contract
+gives no default. `#[dma]` marks memory a tool must place where the DMA reaches.
+A configuration field is typed and names the input layer that supplies it,
+`config: Config @ board`; live configuration supplies none, since it changes
+after the constructors run. The constructor lists its arguments in order, each
+`rcc`, `wiring`, a buffer or a field, so a tool calls any group alike. A group
+default for buffer sizes was proposed and dropped once a real firmware showed
+its frame is the device's. Optional members stay open until a group has one,
+rather than fixing a syntax with nothing to prove it on. Specified in [group
+contracts](architecture.md#group-contracts).
+
 **Task groups select tasks that only work as a set, 2026-09-29.** This reverses the
 removal of groups on 2026-09-18. That removal rested on three limits of the
 first design: a group named concrete peripherals and so could be selected only
@@ -236,9 +250,8 @@ receive task on `DMA2_STREAM3`, the `TIM3` timer task on `TIM2` - and that is
 not a gap, because plain RTIC accepts it too. Specified in
 [architecture](architecture.md#what-checking-guarantees).
 
-**Next open point:** the rest of a group contract - buffers, configuration
-fields and optional members - to be settled on the next port group
-([remaining work](implementation-plan.md#group-contracts)).
+**Next open point:** optional members in a group contract, to be settled on
+the first group that has one ([remaining work](implementation-plan.md#group-contracts)).
 
 ## Binding Decisions Carried Forward
 
