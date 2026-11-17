@@ -303,9 +303,9 @@ its type; and the function that builds them.
     slots = [instance: U, tx: Tx, rx: Rx, tx_dma: TxD, rx_dma: RxD],
     vectors = [on_uart = instance, on_rx_dma = rx_dma, on_tx_dma = tx_dma],
     shared = [uart: Uart<Wiring<U, Tx, Rx, TxD, RxD>>],
-    buffers = [#[dma] tx: [u8], #[dma] rx: [u8]],
+    buffers = [#[dma] tx_buf: [u8], #[dma] rx_buf: [u8]],
     config = [config: Config @ platform],
-    constructor = new(rcc, wiring, config, tx, rx),
+    constructor = new(rcc, wiring, config, tx_buf, rx_buf),
 )]
 pub mod uart_port { .. }
 ```
@@ -324,9 +324,11 @@ pub mod uart_port { .. }
   `#[dma]` marks one that must sit in memory the DMA can reach.
 - A configuration field is a typed constructor input with the layer that
   supplies its value: `board`, `profile`, `software` or `platform`.
-- The constructor lists its arguments in order, each `rcc`, `wiring` (the
-  slots, as the HAL's wiring), a buffer or a configuration field, every
-  buffer and field exactly once.
+- The constructor lists its arguments in order, each `rcc`, a slot passed on
+  its own (a part the HAL's wiring does not hold, such as a chip-select pin),
+  `wiring` (every other slot, as the HAL's wiring), a buffer or a
+  configuration field, every buffer and field exactly once. Slots, buffers
+  and fields share one set of names, so an argument names one thing.
 
 The contract is checked where the group is written. On its own: each slot,
 parameter and resource once, a vector naming a slot, a type on every resource,

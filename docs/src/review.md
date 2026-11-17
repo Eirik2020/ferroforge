@@ -14,7 +14,8 @@ gives no default. `#[dma]` marks memory a tool must place where the DMA reaches.
 A configuration field is typed and names the input layer that supplies it,
 `config: Config @ board`; live configuration supplies none, since it changes
 after the constructors run. The constructor lists its arguments in order, each
-`rcc`, `wiring`, a buffer or a field, so a tool calls any group alike. A group
+`rcc`, `wiring`, a slot the HAL's wiring does not hold (a chip select), a
+buffer or a field, so a tool calls any group alike. A group
 default for buffer sizes was proposed and dropped once a real firmware showed
 its frame is the device's. Optional members stay open until a group has one,
 rather than fixing a syntax with nothing to prove it on. Specified in [group

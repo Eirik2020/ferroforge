@@ -11,9 +11,9 @@
 //!     slots = [instance: U, tx: Tx, rx: Rx, tx_dma: TxD, rx_dma: RxD],
 //!     vectors = [on_uart = instance, on_rx_dma = rx_dma, on_tx_dma = tx_dma],
 //!     shared = [uart: Uart<Wiring<U, Tx, Rx, TxD, RxD>>],
-//!     buffers = [#[dma] tx: [u8], #[dma] rx: [u8]],
+//!     buffers = [#[dma] tx_buf: [u8], #[dma] rx_buf: [u8]],
 //!     config = [config: Config @ platform],
-//!     constructor = new(rcc, wiring, config, tx, rx),
+//!     constructor = new(rcc, wiring, config, tx_buf, rx_buf),
 //! )]
 //! pub mod uart_port { .. }
 //! ```
@@ -33,8 +33,10 @@
 //!   the input layer that supplies its value: `board`, `profile`, `software`
 //!   or `platform`.
 //! - `constructor` is the function that builds those resources, with its
-//!   arguments in order. Each argument is `rcc`, `wiring` (the slots, as the
-//!   HAL's wiring), a config field or a buffer. It returns the resources as one
+//!   arguments in order. Each argument is `rcc`, a slot passed on its own (a
+//!   part the HAL's wiring does not hold, such as a chip-select pin),
+//!   `wiring` (every other slot, as the HAL's wiring), a config field or a
+//!   buffer. It returns the resources as one
 //!   struct with a public field per resource, of the same name.
 //!
 //! Nothing here reads a function body, and nothing depends on a HAL: the
@@ -233,12 +235,13 @@ impl Parse for ConfigField {
 }
 
 /// The function that builds a group's resources, and its arguments in order,
-/// `new(rcc, wiring, config, tx, rx)`.
+/// `new(rcc, wiring, config, tx_buf, rx_buf)`.
 #[derive(Clone, Debug)]
 pub struct Constructor {
     /// Its path, relative to the group's module.
     pub path: Path,
-    /// Its arguments, each `rcc`, `wiring`, a config field or a buffer.
+    /// Its arguments, each `rcc`, `wiring`, a slot, a config field or a
+    /// buffer.
     pub arguments: Vec<Ident>,
 }
 
@@ -385,10 +388,17 @@ impl GroupContract {
             .chain(self.config.iter().map(|c| &c.name))
             .collect();
         unique(
-            inputs.iter().copied(),
-            "duplicate input; a name is a buffer or a config field, once",
+            inputs
+                .iter()
+                .copied()
+                .chain(self.slots.iter().map(|slot| &slot.role)),
+            "duplicate input; a name is a slot, a buffer or a config field, once",
         )?;
-        for input in &inputs {
+        for input in inputs
+            .iter()
+            .copied()
+            .chain(self.slots.iter().map(|slot| &slot.role))
+        {
             if FIXED_ARGUMENTS.contains(&identifier_key(input).as_str()) {
                 return Err(Error::new(
                     input.span(),
@@ -406,12 +416,16 @@ impl GroupContract {
             let key = identifier_key(argument);
             if !FIXED_ARGUMENTS.contains(&key.as_str())
                 && !inputs.iter().any(|input| identifier_key(input) == key)
+                && !self
+                    .slots
+                    .iter()
+                    .any(|slot| identifier_key(&slot.role) == key)
             {
                 return Err(Error::new(
                     argument.span(),
                     format!(
-                        "`{argument}` is not `rcc`, `wiring`, nor one of this group's \
-                         `buffers` or `config`"
+                        "`{argument}` is not `rcc`, `wiring`, one of this group's \
+                         `slots`, nor one of its `buffers` or `config`"
                     ),
                 ));
             }
@@ -606,9 +620,9 @@ mod tests {
                 slots = [instance: U, tx: Tx, rx: Rx, tx_dma: TxD, rx_dma: RxD],
                 vectors = [on_uart = instance, on_rx_dma = rx_dma, on_tx_dma = tx_dma],
                 shared = [uart: Uart<Wiring<U, Tx, Rx, TxD, RxD>>],
-                buffers = [#[dma] tx: [u8], #[dma] rx: [u8]],
+                buffers = [#[dma] tx_buf: [u8], #[dma] rx_buf: [u8]],
                 config = [config: Config @ platform],
-                constructor = new(rcc, wiring, config, tx, rx),
+                constructor = new(rcc, wiring, config, tx_buf, rx_buf),
             )]
             pub mod uart_port {
                 #[ferroforge::task(shared = [uart], bounds = [uart: Service])]
@@ -657,7 +671,7 @@ mod tests {
             .iter()
             .map(ToString::to_string)
             .collect();
-        assert_eq!(arguments, ["rcc", "wiring", "config", "tx", "rx"]);
+        assert_eq!(arguments, ["rcc", "wiring", "config", "tx_buf", "rx_buf"]);
         let buffers: Vec<(String, String, bool)> = contract
             .buffers
             .iter()
@@ -666,8 +680,8 @@ mod tests {
         assert_eq!(
             buffers,
             [
-                ("tx".to_string(), "u8".to_string(), true),
-                ("rx".to_string(), "u8".to_string(), true),
+                ("tx_buf".to_string(), "u8".to_string(), true),
+                ("rx_buf".to_string(), "u8".to_string(), true),
             ]
         );
         assert_eq!(contract.config[0].name, "config");
@@ -757,6 +771,17 @@ mod tests {
         assert!(
             refused("constructor = new(rcc, frame)").contains("`frame` is not `rcc`, `wiring`")
         );
+        assert!(
+            refused("slots = [rx: Rx], buffers = [rx: [u8]], constructor = new(rx)")
+                .contains("duplicate input")
+        );
+        assert!(
+            refused("slots = [wiring: W], constructor = new(wiring)")
+                .contains("the constructor's own argument")
+        );
+        let arguments =
+            contract("slots = [instance: U, cs: Cs], constructor = new(rcc, wiring, cs)").unwrap();
+        assert_eq!(arguments.contract.constructor.unwrap().arguments[2], "cs");
         assert!(
             refused("buffers = [rx: [u8]], constructor = new(rx, rx)")
                 .contains("each argument once")
