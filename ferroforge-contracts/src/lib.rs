@@ -14,7 +14,7 @@ mod group;
 
 pub use group::{
     Buffer, ConfigField, Constructor, GroupArguments, GroupContract, GroupDeclaration, GroupMember,
-    Layer, Slot, VectorRole, Wire, groups,
+    Layer, Pend, Slot, Typed, VectorRole, Wire, groups,
 };
 
 use std::collections::BTreeSet;

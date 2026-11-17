@@ -327,10 +327,22 @@ pub mod uart_port { .. }
   `#[dma]` marks one that must sit in memory the DMA can reach.
 - A configuration field is a typed constructor input with the layer that
   supplies its value: `board`, `profile`, `software` or `platform`.
+- `memory = [queues: Queues]` is typed static memory the constructor takes
+  as `&'static mut`. The selection writes the type's generic arguments,
+  which size it, and a tool emits it in `init(local = [..])` built by the
+  type's `const fn new()`.
+- `handles = [handle: Handle]` is what the constructor builds for a task
+  outside the group. The constructor's result has a public field for it;
+  the firmware moves it into whichever task it chooses, at boot. No member
+  may name a handle.
+- `pends = [kick = on_tx_dma]` asks FerroForge to generate, per selection,
+  a function that pends the vector the firmware bound that member to. It is
+  a constructor input of type `fn()`; the firmware passes
+  `<selection>::kick`, so the interrupt is written once, on the member.
 - The constructor lists its arguments in order, each `rcc`, a slot passed on
   its own (a part the HAL's wiring does not hold, such as a chip-select pin),
   `wiring` (every other slot, as the HAL's wiring), a buffer or a
-  configuration field, every buffer and field exactly once. Slots, buffers
+  configuration field, memory or a pend, every input exactly once. Slots, buffers
   and fields share one set of names, so an argument names one thing.
 
 The contract is checked where the group is written. On its own: each slot,
