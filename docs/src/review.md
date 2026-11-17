@@ -52,8 +52,10 @@ knowing which group it is. The content is the FerroSmith design record's
 its feature, and the device path is `ferrohal_stm32::device` on every chip;
 f407vg and h743vi join, and f411re drops. The STM32 examples move to
 `ferroforge-stm32` as groups with requirements and benches - a
-receive-only port and a timer tick - rather than being ported in place, and
-the DMA UART example retires, `uart_port` having replaced it. FerroForge's own
+receive-only port - rather than being ported in place; the DMA UART example
+retires, `uart_port` having replaced it, and so does the timer example, since
+a firmware's periodic work runs in the timer's own interrupt on FerroHAL's
+`Tick`, where a group's spawn hop would only add latency. FerroForge's own
 examples and macro tests name no HAL-specific task: cross-crate group nesting
 is tested on `examples/tasks/pulse`, which nests `blinky`'s `light`.
 Protocols are not hardware, so a decoder such as SBUS goes to the application
