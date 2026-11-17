@@ -289,6 +289,46 @@ everything else the firmware runs.
   undeclared, one of the wrong kind or without `binds`, and a resource the
   group does not need or one left unbound.
 
+### Group Contracts
+
+A group that a tool should be able to select on its own states its contract
+beside `spawn`: the hardware it is built from, by role; which member serves
+which role's interrupt; every resource its members leave to the firmware, with
+its type; and the function that builds them.
+
+```rust,ignore
+#[ferroforge::group(
+    slots = [instance: U, tx: Tx, rx: Rx, tx_dma: TxD, rx_dma: RxD],
+    vectors = [on_uart = instance, on_rx_dma = rx_dma, on_tx_dma = tx_dma],
+    shared = [uart: Uart<Wiring<U, Tx, Rx, TxD, RxD>>],
+    constructor = new,
+)]
+pub mod uart_port { .. }
+```
+
+- A slot names a role and the constructor's type parameter that carries it.
+  Resource types are written over those parameters, so filling the slots with a
+  board's types gives the firmware's field types.
+- A vector names a hardware member and the slot whose interrupt it serves.
+  The interrupt's name and the member's priority remain the firmware's, as for
+  any member.
+- `shared` and `local` list resources as a task lists them, typed, with no
+  initial value: the constructor builds them. It returns a struct with one
+  public field per resource, of the same name.
+
+The contract is checked where the group is written. On its own: each slot,
+parameter and resource once, a vector naming a slot, a type on every resource,
+and a constructor. Against the members defined in the module: a vector served by
+a hardware member, and every resource a member leaves to the firmware listed in
+its category; with nothing included, nothing listed that no member needs. The
+module imports the constructor, so a contract naming a missing function does not
+compile. A group without these arguments means what it always did, and `app!`
+binds a selection the same way either way.
+
+`ferroforge-contracts` parses the contract for the macro, and `groups` reads
+every group in a source file, with its contract and members, for a host tool.
+Nothing here reads a body or depends on a HAL.
+
 The members reach RTIC as tokens, which is the only way it sees a task. Each
 group is also a `macro_rules!` holding its members; `app!`, meeting a group
 it has no members for, hands the application to that macro, which appends

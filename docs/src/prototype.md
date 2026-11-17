@@ -7,7 +7,7 @@ What exists today, as distinct from the agreed design in
 
 | Crate | Role |
 | --- | --- |
-| `ferroforge-contracts` | Task declaration parsing and structural validation. No HAL dependency. |
+| `ferroforge-contracts` | Task and group declaration parsing and structural validation, for the macros and for host tools reading groups from source. No HAL dependency. |
 | `ferroforge-macros` | `task`, `group` and `app!`, and nothing else. |
 | `ferroforge` | Facade. Re-exports the three macros; no runtime types. |
 | `ferroforge-cli` | The `ferroforge` binary. Carries the chip data, recognizes projects, and delegates to Cargo. |

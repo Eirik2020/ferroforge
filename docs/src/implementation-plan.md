@@ -38,13 +38,22 @@ that only compiles. The open question is whether a transmitting
 firmware needs anything from these tasks that the receive side did not already
 force into `Port`.
 
-## The STM32F4 Helper
+## Group Contracts
 
-[G2b](governing-requirements.md) names `ferroforge-stm32f4` as the
-FerroForge-oriented STM32F4 helper sharing helpers and types between init and
-hardware tasks. No such crate exists, and building it is deferred. G2b stands
-as the goal, but nothing waits on it: ferro-wasp uses its own equivalent,
-`ferrowasp-stm32f4`, and is not moving to a FerroForge helper.
+A [group contract](architecture.md#group-contracts) lists slots, vectors,
+resources and the constructor. The FerroSmith design record (v3, 6.1) also puts
+three things in it that the first cut leaves out: buffers, whose sizes are Rust
+expressions a tool emits verbatim; configuration fields and the layer that
+supplies each; and optional members behind a feature. `app!` reads none of the
+contract yet, and checks a selection as it always has.
+
+## FerroForge 0.5
+
+[G2b](governing-requirements.md)'s helper, `ferroforge-stm32`, exists, on
+FerroHAL. The backends still name `stm32f4xx-hal` and `stm32h7xx-hal`; 0.5
+moves them to FerroHAL (chips f401re, f405rg, f407vg, h743vi and h753zi; f411re
+drops) and the STM32 examples to `ferroforge-stm32`. FerroHAL and
+`ferroforge-stm32` are published to crates.io before that release.
 
 ## ferro-wasp Adoption
 
