@@ -61,7 +61,7 @@ names its source through `[package.metadata.ferroforge.platform]` at the
 revision `ferroforge-stm32` pins.
 
 No task crate here names a HAL. HAL-specific tasks and groups - the hardware
-ports, a timer tick, SBUS - are in `ferroforge-stm32`, the helper
+ports and a timer tick - are in `ferroforge-stm32`, the helper
 [G2b](governing-requirements.md) names, with their requirements and benches.
 
 `examples/tasks/msp-displayport` is the OSD, and the portable case on something larger

@@ -12,8 +12,7 @@ first design: a group named concrete peripherals and so could be selected only
 once, a protocol that did not own its transport did not fit, and the block
 saved only a repeated `from`, `shared` and priority. The new design answers
 each: a group may be copied and selected any number of times; groups nest
-across crates, so SBUS is the DMA UART's receive group with a decoder behind
-it; and a group wires its members' calls and binds the union of their
+across crates, so a group can build on another crate's group; and a group wires its members' calls and binds the union of their
 resources once. What still bound of the removal stands: priorities and
 interrupt bindings are the firmware's, declared member by member as RTIC
 declares a task. The name is AADL's thread group, taken where RTIC has no
@@ -52,12 +51,14 @@ knowing which group it is. The content is the FerroSmith design record's
 2026-11-17.** Every backend names `ferrohal-stm32` with metapac's chip name as
 its feature, and the device path is `ferrohal_stm32::device` on every chip;
 f407vg and h743vi join, and f411re drops. The STM32 examples move to
-`ferroforge-stm32` as groups with requirements and benches - SBUS on a
-receive-only port, and a timer tick - rather than being ported in place, and
+`ferroforge-stm32` as groups with requirements and benches - a
+receive-only port and a timer tick - rather than being ported in place, and
 the DMA UART example retires, `uart_port` having replaced it. FerroForge's own
 examples and macro tests name no HAL-specific task: cross-crate group nesting
-is tested on `examples/tasks/pulse`, which nests `blinky`'s `light`. Porting in
-place was weighed, to keep a HAL-specific fixture in FerroForge, and lost to
+is tested on `examples/tasks/pulse`, which nests `blinky`'s `light`.
+Protocols are not hardware, so a decoder such as SBUS goes to the application
+or a protocol crate, never into a hardware port group. Porting in place was
+weighed, to keep a HAL-specific fixture in FerroForge, and lost to
 one home per hardware task. Until FerroHAL is on crates.io, a firmware names
 its source through the existing `platform` setting at `ferroforge-stm32`'s
 pin, as the 2026-09-26 decision below provides. Specified in
