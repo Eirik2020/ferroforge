@@ -48,8 +48,8 @@ cargo test --workspace --locked -- --ignored
 That checks every task crate on its own, links every firmware, and plants
 seventeen defects in copies of them - a hardware task given inputs, an `async`
 task given an interrupt, a configuration type disagreeing with its definition,
-a binding naming a resource that does not exist, a resource whose type is not
-what a HAL-specific task declares, a task needing a monotonic the application
+a binding naming a resource that does not exist, a resource whose declared type is
+not what `init` builds, a task needing a monotonic the application
 lacks, a monotonic counting in `u32`, a spawn alias bound to a task with other
 inputs, a dispatcher that is also bound, too few dispatchers, a group import
 naming no group, and six ways of selecting a group wrongly: a misspelt member,
@@ -60,7 +60,7 @@ the authored binding. Each unmutated copy is checked first, so a broken
 harness cannot pass as a rejection. It compiles spawn aliases of zero, one
 and two inputs and a task reading `Mono::now()`, shapes the example firmware
 does not use. It also runs `ferroforge new` and then
-`ferroforge build` for one chip per HAL family, then `ferroforge add` and
+`ferroforge build` for one chip per family, then `ferroforge add` and
 `build` for each family into one project, and moves a new project per family to
 a TIM2 monotonic at 1 MHz and builds it; each fails on any warning, because that
 is the first thing a new user sees.
@@ -262,11 +262,16 @@ they carry. A firmware may say where one of them is fetched from, which is a
 property of a project's supply chain rather than of a chip family:
 
 ```toml
-[package.metadata.ferroforge.platform.stm32f4xx-hal]
-git = "https://github.com/stm32-rs/stm32f4xx-hal.git"
-rev = "78d79609137d5c380320f7bf1a9120967babc61d"
-features = ["uart4"]
+[package.metadata.ferroforge.platform.ferrohal-stm32]
+git = "https://github.com/Eirik2020/ferrohal-stm32"
+rev = "d9ddc472eae17a335dd6fdd217af3c4dc4050d1b"
+features = ["usb"]
 ```
+
+Until FerroHAL is on crates.io this is how every firmware gets it: `new` and
+`add` write this table, without `features`, at the revision `ferroforge-stm32`
+pins, so a firmware selecting that crate's groups resolves one FerroHAL. The
+firmware owns the table once written.
 
 Any source Cargo accepts: `version`, `path`, or `git` with at most one of `rev`,
 `branch` and `tag`. It replaces the version the backend would have written, and
@@ -305,12 +310,11 @@ cargo check --lib --target thumbv7em-none-eabihf --locked
 
 A failure here is a fault in the task, not in a composition that selects it.
 
-A HAL-specific crate needs a chip to compile at all, so name one of its
-forwarding features:
+A HAL-specific crate, such as `ferroforge-stm32`, needs a chip to compile at
+all, so name one of its forwarding features:
 
 ```text
-cd examples/tasks/stm32f4-timer
-cargo check --lib --target thumbv7em-none-eabihf --features stm32f401
+cargo check --lib --target thumbv7em-none-eabihf --features stm32f401re
 ```
 
 That choice is the check's, not the crate's: a firmware selecting this crate

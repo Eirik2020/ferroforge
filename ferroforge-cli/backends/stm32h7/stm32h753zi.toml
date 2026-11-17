@@ -1,35 +1,39 @@
 # Chip-family data for the STM32H753ZI, as on the Nucleo-H753ZI.
 #
-# The first chip here from a different HAL, and the first with more memory than
-# the FLASH/RAM pair `cortex-m-rt` needs. Per G2a this is still only build-time
-# data read by the CLI, and per G4 it names no interrupts.
+# The first family here with more memory than the FLASH/RAM pair `cortex-m-rt`
+# needs. Per G2a this is still only build-time data read by the CLI, and per G4
+# it names no interrupts.
 
 [chip]
 name = "STM32H753ZI"
 # Cortex-M7 with a double-precision FPU; this triple is the hard-float ARMv7E-M
 # one, as for the M4F parts.
 rust-target = "thumbv7em-none-eabihf"
-# Verified against `probe-rs chip list`.
+# probe-rs matches this against its full part name, `STM32H753ZITx`.
 probe-rs-chip = "STM32H753ZI"
-# Not `stm32f4xx_hal::pac`: a different HAL, so a different path. This is what
-# makes `device` a property of the HAL rather than a constant.
-device = "stm32h7xx_hal::pac"
+# The device module FerroHAL hands RTIC, the same path on every chip: the chip
+# feature decides what is behind it, so this is a property of the HAL.
+device = "ferrohal_stm32::device"
 
 [memory]
 flash-origin = 0x08000000
 flash-size = 2097152
 # DTCM. `cortex-m-rt` puts .data, .bss and the stack in RAM, and DTCM is the
-# lowest-latency choice for them; the HAL's own reference memory.x does the same.
-# AXISRAM is larger but further away, so it is offered below rather than chosen.
+# lowest-latency choice for them. AXISRAM is larger but further away, so it is
+# offered below rather than chosen.
 ram-origin = 0x20000000
 ram-size = 131072
-# (16 exceptions + 150 interrupts) * 4 = 0x298, already 8-byte aligned. Taken
-# from the PAC's `__INTERRUPTS` array and confirmed against a linked binary.
+# The vector table's length is the PAC's `__INTERRUPTS` array, here
+# stm32-metapac's at FerroHAL's pin, and was confirmed against the
+# `.vector_table` section of a linked binary. The `Interrupt` enum's highest
+# variant is not the same thing: it can exceed the array.
+# (16 exceptions + 150 interrupts) * 4 = 0x298, already 8-byte aligned.
 text-offset = 0x298
 
-# The rest of what this part offers. Emitted so a firmware can place sections
-# here; nothing is put in them automatically, because which memory suits which
-# data is the application's decision. Addresses follow the HAL's own memory.x.
+# The rest of what this part offers (RM0433 section 2.3, the memory map).
+# Emitted so a firmware can place sections here; nothing is put in them
+# automatically, because which memory suits which data is the application's
+# decision.
 [[memory.region]]
 name = "AXISRAM"
 origin = 0x24000000
@@ -70,11 +74,17 @@ size = 65536
 # the application. Logging and panic backends are the firmware's choice and are
 # deliberately absent.
 [platform-dependencies]
-cortex-m = { version = "0.7.7" }
+# Every part here is a single-core Cortex-M, so the core's own critical section
+# fits all of them. FerroHAL leaves that choice to the firmware, and it is the
+# chip's rather than the application's, so the backend makes it.
+cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
 cortex-m-rt = { version = "0.7.6" }
 rtic = { version = "2.3.1", default-features = false, features = ["thumbv7-backend"] }
 rtic-monotonics = { version = "2.2.1", default-features = false, features = ["cortex-m-systick", "systick-64bit"] }
-stm32h7xx-hal = { version = "0.16.0", default-features = false, features = ["stm32h753v", "rt"] }
+# FerroHAL's chip features are metapac's chip names. `rtic` gives RTIC the
+# vector table and the `Peripherals::steal` that `peripherals = true` names,
+# and turns on `rt`.
+ferrohal-stm32 = { version = "0.1.0", default-features = false, features = ["stm32h753zi", "rtic"] }
 
 # A monotonic on a hardware timer rather than SysTick, for a firmware that sets
 # `monotonic-timer`. rtic-monotonics names the chip once for all its timers, and

@@ -41,35 +41,28 @@ same target with no FerroForge machinery beyond the `#[task]` attribute.
 selecting the same definitions with none of the same bindings, and the one that
 exercises groups. It selects `blinky`'s `lights` group - two named copies of the
 `light` group, each a light and the announcer it is wired to - and `light` a
-third time on its own, each copy logging under its own label, plus the
-HAL-specific `on_timer` against `TIM3`. Only PA5 carries an LED; the other
-copies' pins are bare header pins, so they are observed through their log lines.
+third time on its own, each copy logging under its own label. Only PA5 carries
+an LED; the other copies' pins are bare header pins, so they are observed
+through their log lines.
 
-It also receives SBUS through `stm32f4-sbus`'s `sbus_link`, a group of groups
-across two crates, and carries a stand-in receiver that sends frames with known
-channels out of USART6, so one wire to PA10 runs the whole receive path on a
-bare board. The wiring is in its own module documentation, where someone about
-to connect a cable will look.
+It also selects `examples/tasks/pulse`'s `pulse_light`, a group of groups
+across two crates: `blinky`'s `light` with a hardware task wired to its
+announcer, bound to `TIM3` here. A software task pends that vector once a
+second, so the hardware member runs on a bare board with no timer started.
 
-`examples/firmware/nucleo-h753zi` is a Cortex-M7 on a different HAL, with a part whose
-memory is more than the pair `cortex-m-rt` needs. It reuses `report` from the
-portable crate unchanged and pairs it with `examples/tasks/stm32h7-timer`, the F4 timer
-task's counterpart. It does **not** use `blink`: that bounds on `embedded-hal`
-1.0 and `stm32h7xx-hal` 0.16 implements only 0.2, so the LED is driven by a task
-in the firmware instead.
+`examples/firmware/nucleo-h753zi` is a Cortex-M7, another chip family under the
+same HAL, with a part whose memory is more than the pair `cortex-m-rt` needs. It
+selects `blink` and `report` from the portable crate unchanged: FerroHAL's pins
+implement `embedded-hal` 1.0 on every chip, so one definition drives both
+boards' LEDs. Only its `init` differs.
 
-`examples/tasks/stm32f4-uart-dma` is four tasks that only work as a set, sharing one
-`Port`: the receive three as the `uart_dma_rx` group, and `on_tx`. It names
-USART1 and its streams as concrete types. `examples/tasks/stm32f4-sbus` puts a
-decoder behind the receive group as `sbus_rx`, and `sbus_link` adds `on_tx`;
-`nucleo-f401re-beacon` selects that and configures the circular receive.
+Every firmware here starts on FerroHAL, which is not on crates.io yet, so each
+names its source through `[package.metadata.ferroforge.platform]` at the
+revision `ferroforge-stm32` pins.
 
-Two constraints the tasks exist to hold. Delivery happens on the idle line and
-nowhere else: in circular mode a transfer-complete means the buffer filled, not
-that a frame ended, so delivering there cuts whichever frame is in flight into
-two short ones. And the USART's error flags are the receive path's business, not
-diagnostics - an uncleared overrun stops the peripheral requesting DMA at all,
-so a handler that ignores them wedges reception rather than degrading it.
+No task crate here names a HAL. HAL-specific tasks and groups - the hardware
+ports, a timer tick, SBUS - are in `ferroforge-stm32`, the helper
+[G2b](governing-requirements.md) names, with their requirements and benches.
 
 `examples/tasks/msp-displayport` is the OSD, and the portable case on something larger
 than an LED: it names no HAL and no chip, takes no forwarding feature, and
@@ -82,12 +75,6 @@ owns the port and already holds the shared state to drain the outgoing queue, so
 a parser step costs it nothing, where a task spawned per received byte would
 drop bytes whenever the previous one had not finished. What the library keeps is
 the half that is genuinely periodic: the picture, pushed out on a timer.
-
-`examples/tasks/stm32f4-timer` is the HAL-specific case. Reading and clearing a timer's
-update flag cannot be written against `embedded-hal`, so the task names the HAL
-type its resource has - `CounterUs<TIM3>` - and its body is the handler anyone
-would write by hand. It declares no bounds and depends on `stm32f4xx-hal` and
-nothing else but the check-only `ferroforge`.
 
 Every one of these sits in the layout G5 requires, and opt-in tests in
 `ferroforge-macros` assert it rather than leaving it to be run by hand: each
@@ -151,8 +138,8 @@ asserting nothing. See [workflow](workflow.md) for how to run them.
   `dispatchers` and `peripherals` optional and defaulting to RTIC's own
   behaviour. The firmware declares its monotonic inside `app!`, as in ordinary
   RTIC, and `app!` takes the type tasks are handed from that declaration.
-- Four chips are known, across two HAL families, and switching one line of a
-  firmware's `Cargo.toml` rewrites every derived artifact. A part with more
+- Five chips are known, across two families under one HAL, and switching one
+  line of a firmware's `Cargo.toml` rewrites every derived artifact. A part with more
   memory than the `FLASH`/`RAM` pair lists the rest as extra regions, which
   reach the linker script and nothing else.
 - A chip feature enabled outside the generated block is refused, because the HAL

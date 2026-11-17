@@ -380,7 +380,7 @@ fn an_added_firmware_reuses_the_projects_task() {
 
     let manifest = fs::read_to_string(firmware.join("Cargo.toml")).unwrap();
     assert!(manifest.contains("chip = \"stm32h753zi\""), "{manifest}");
-    assert!(manifest.contains("\"stm32h753v\""), "{manifest}");
+    assert!(manifest.contains("\"stm32h753zi\", \"rtic\""), "{manifest}");
     assert!(
         manifest.contains("heartbeat = { path = \"../../tasks/heartbeat\" }"),
         "{manifest}"
@@ -388,7 +388,7 @@ fn an_added_firmware_reuses_the_projects_task() {
     assert!(manifest.contains("ferroforge = \"0.4\""), "{manifest}");
     let main = fs::read_to_string(firmware.join("src/main.rs")).unwrap();
     assert!(main.contains("use heartbeat::heartbeat;"), "{main}");
-    assert!(main.contains("stm32h7xx_hal::pac"), "{main}");
+    assert!(main.contains("ferrohal_stm32::device"), "{main}");
 
     // Already in the state `sync` would leave it.
     let before = fs::read_to_string(firmware.join("memory.x")).unwrap();
@@ -405,7 +405,7 @@ fn an_added_firmware_reuses_the_projects_task() {
 #[test]
 fn an_added_firmware_depends_on_ferroforge_as_the_project_does() {
     let root = created("added-checkout", &["--ferroforge", "/some/checkout"]);
-    let output = ferroforge_in(&root, &["add", "second", "--chip", "stm32f411re"]);
+    let output = ferroforge_in(&root, &["add", "second", "--chip", "stm32f407vg"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let manifest = fs::read_to_string(root.join("firmware/second/Cargo.toml")).unwrap();
     assert!(
@@ -420,7 +420,7 @@ fn an_added_firmware_depends_on_ferroforge_as_the_project_does() {
             "add",
             "third",
             "--chip",
-            "stm32f411re",
+            "stm32f407vg",
             "--ferroforge",
             "/other",
         ],
@@ -495,7 +495,10 @@ fn the_chip_table_describes_every_chip() {
         .lines()
         .find(|line| line.starts_with("stm32h753zi"))
         .unwrap();
-    assert!(h7.contains("stm32h7xx-hal") && h7.contains("2048K"), "{h7}");
+    assert!(
+        h7.contains("ferrohal-stm32") && h7.contains("2048K"),
+        "{h7}"
+    );
 }
 
 /// The task crate is always `tasks/heartbeat`, so a project of that name would
@@ -553,7 +556,7 @@ fn build_all_reports_every_firmware() {
         &[
             ("alpha", Some("stm32f401re")),
             ("bad", Some("stm32f401re")),
-            ("noisy", Some("stm32f411re")),
+            ("noisy", Some("stm32f407vg")),
         ],
     );
     let output = ferroforge_with_cargo(&root, &["build", "--all", "--", "--locked"]);
@@ -1007,7 +1010,7 @@ fn a_refused_sync_leaves_the_firmware_untouched() {
             firmware.join("Cargo.toml"),
             "[package]\nname = \"board\"\nversion = \"0.1.0\"\n\n\
              [package.metadata.ferroforge]\nchip = \"stm32f401re\"\n\n\
-             [dependencies]\nstm32f4xx-hal = { git = \"https://example.invalid\" }\n",
+             [dependencies]\nferrohal-stm32 = { git = \"https://example.invalid\" }\n",
         ),
         (
             firmware.join(".cargo/config.toml"),
@@ -1053,9 +1056,9 @@ fn a_chip_feature_outside_the_generated_block_is_refused() {
     let firmware = root.join("firmware/board");
     fs::create_dir_all(&firmware).unwrap();
     let authored = "[package]\nname = \"board\"\nversion = \"0.1.0\"\n\n\
-         [package.metadata.ferroforge]\nchip = \"stm32f411re\"\n\n\
+         [package.metadata.ferroforge]\nchip = \"stm32f407vg\"\n\n\
          [dependencies]\n\
-         some-task-crate = { path = \"../x\", features = [\"stm32f401\"] }\n\
+         some-task-crate = { path = \"../x\", features = [\"stm32f401re\"] }\n\
          # ferroforge:platform-dependencies\n# ferroforge:end\n";
     fs::write(firmware.join("Cargo.toml"), authored).unwrap();
 
@@ -1064,7 +1067,7 @@ fn a_chip_feature_outside_the_generated_block_is_refused() {
     let message = stderr(&output);
     assert!(message.contains("stm32f401"), "{message}");
     assert!(message.contains("some-task-crate"), "{message}");
-    assert!(message.contains("STM32F411RE"), "{message}");
+    assert!(message.contains("STM32F407VG"), "{message}");
     assert!(
         !message.contains(r"\?\"),
         "a verbatim path is not something to print: {message}"
@@ -1095,7 +1098,7 @@ fn the_selected_chips_own_feature_is_not_a_conflict() {
     let output = ferroforge_in(&root, &["sync"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let written = fs::read_to_string(firmware.join("Cargo.toml")).unwrap();
-    assert!(written.contains("\"stm32f401\""), "{written}");
+    assert!(written.contains("\"stm32f401re\""), "{written}");
 }
 
 /// Both chips must be reachable, or the registry is a list of one with extra
@@ -1157,10 +1160,10 @@ fn a_firmware_can_change_its_chip() {
     let first = ferroforge_in(&root, &["sync"]);
     assert!(first.status.success(), "{}", stderr(&first));
     let after_first = fs::read_to_string(&manifest).unwrap();
-    assert!(after_first.contains("\"stm32f401\""), "{after_first}");
+    assert!(after_first.contains("\"stm32f401re\""), "{after_first}");
 
     // Now the only edit a person makes: one line.
-    let switched = after_first.replace("chip = \"stm32f401re\"", "chip = \"stm32f411re\"");
+    let switched = after_first.replace("chip = \"stm32f401re\"", "chip = \"stm32f407vg\"");
     fs::write(&manifest, switched).unwrap();
 
     let second = ferroforge_in(&root, &["sync"]);
@@ -1170,9 +1173,9 @@ fn a_firmware_can_change_its_chip() {
         stderr(&second)
     );
     let after_second = fs::read_to_string(&manifest).unwrap();
-    assert!(after_second.contains("\"stm32f411\""), "{after_second}");
+    assert!(after_second.contains("\"stm32f407vg\""), "{after_second}");
     assert!(
-        !after_second.contains("\"stm32f401\""),
+        !after_second.contains("\"stm32f401re\""),
         "the previous chip's feature must be gone:\n{after_second}"
     );
 
@@ -1180,7 +1183,7 @@ fn a_firmware_can_change_its_chip() {
     let memory = fs::read_to_string(firmware.join("memory.x")).unwrap();
     assert!(memory.contains("128K"), "F411 has 128K of RAM:\n{memory}");
     let embed = fs::read_to_string(firmware.join("Embed.toml")).unwrap();
-    assert!(embed.contains("STM32F411RE"), "{embed}");
+    assert!(embed.contains("STM32F407VG"), "{embed}");
 }
 
 /// A part with more memory than the FLASH/RAM pair must have all of it in the
@@ -1402,10 +1405,10 @@ fn a_firmware_may_say_where_a_platform_crate_comes_from() {
         firmware.join("Cargo.toml"),
         manifest.replace(
             "chip = \"stm32f405rg\"",
-            "chip = \"stm32f405rg\"\n\n             [package.metadata.ferroforge.platform.stm32f4xx-hal]\n\
-             git = \"https://github.com/stm32-rs/stm32f4xx-hal.git\"\n\
-             rev = \"78d79609137d5c380320f7bf1a9120967babc61d\"\n\
-             features = [\"uart4\"]",
+            "chip = \"stm32f405rg\"\n\n             [package.metadata.ferroforge.platform.ferrohal-stm32]\n\
+             git = \"https://github.com/Eirik2020/ferrohal-stm32\"\n\
+             rev = \"d9ddc472eae17a335dd6fdd217af3c4dc4050d1b\"\n\
+             features = [\"usb\"]",
         ),
     )
     .unwrap();
@@ -1415,13 +1418,13 @@ fn a_firmware_may_say_where_a_platform_crate_comes_from() {
     let synced = fs::read_to_string(firmware.join("Cargo.toml")).unwrap();
     let line = synced
         .lines()
-        .find(|line| line.starts_with("stm32f4xx-hal"))
+        .find(|line| line.starts_with("ferrohal-stm32"))
         .unwrap_or_else(|| panic!("{synced}"));
     assert!(line.contains("git = "), "{line}");
     assert!(line.contains("rev = "), "{line}");
     assert!(!line.contains("version = "), "{line}");
-    assert!(line.contains("\"stm32f405\""), "{line}");
-    assert!(line.contains("\"uart4\""), "{line}");
+    assert!(line.contains("\"stm32f405rg\""), "{line}");
+    assert!(line.contains("\"usb\""), "{line}");
 }
 
 /// On by default, as probe-rs has it.
@@ -1498,13 +1501,13 @@ fn a_firmware_on_a_hardware_timer_builds_on_every_hal_family() {
     let starts = [
         (
             "stm32f401re",
-            "Mono::start(cx.core.SYST, rcc.clocks.sysclk().raw());",
-            "Mono::start(rcc.clocks.timclk1().raw());",
+            "Mono::start(cx.core.SYST, rcc.clocks().cpu.0);",
+            "Mono::start(rcc.clocks().timclk1.0);",
         ),
         (
             "stm32h753zi",
-            "Mono::start(cx.core.SYST, ccdr.clocks.sys_ck().raw());",
-            "Mono::start(ccdr.clocks.timx_ker_ck().raw());",
+            "Mono::start(cx.core.SYST, rcc.clocks().cpu.0);",
+            "Mono::start(rcc.clocks().timclk1.0);",
         ),
     ];
     for (chip, systick_start, timer_start) in starts {
@@ -1585,7 +1588,7 @@ fn an_added_firmware_builds_on_every_hal_family() {
     );
     assert!(created.status.success(), "{}", stderr(&created));
 
-    for chip in ["stm32f411re", "stm32h753zi"] {
+    for chip in ["stm32f407vg", "stm32h743vi"] {
         let name = format!("on-{chip}");
         let added = ferroforge_in(&root, &["add", &name, "--chip", chip]);
         assert!(added.status.success(), "{chip}: {}", stderr(&added));

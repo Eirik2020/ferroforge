@@ -33,7 +33,7 @@ its needs to the firmware's own resources and values:
 
 ```rust,ignore
 ferroforge::app! {
-    device = stm32f4xx_hal::pac,
+    device = ferrohal_stm32::device,
     dispatchers = [SPI1],
 
     use rtic_monotonics::systick::prelude::*;

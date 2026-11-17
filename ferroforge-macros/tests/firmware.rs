@@ -69,21 +69,13 @@ fn a_portable_protocol_task_crate_checks_independently() {
     checks_standalone("examples/tasks/msp-displayport", &[]);
 }
 
-/// The HAL-specific case. It has to name a chip to compile at all - a HAL cannot
-/// be built without one - so the chip comes from a forwarding feature here, which
-/// a firmware's own selection unifies with rather than fights.
-#[test]
-#[ignore = "cross-compiles; run with --ignored"]
-fn a_hal_specific_task_crate_checks_independently() {
-    checks_standalone("examples/tasks/stm32f4-timer", &["--features", "stm32f401"]);
-}
-
-/// A group of groups across crates: the SBUS crate's groups include the DMA
-/// UART crate's, and still check on their own.
+/// A group of another crate's groups: the pulse crate's group includes
+/// `blinky`'s `light`, wires its own hardware task to it, and still checks on
+/// its own.
 #[test]
 #[ignore = "cross-compiles; run with --ignored"]
 fn a_group_of_another_crates_groups_checks_independently() {
-    checks_standalone("examples/tasks/stm32f4-sbus", &["--features", "stm32f401"]);
+    checks_standalone("examples/tasks/pulse", &[]);
 }
 
 /// The firmware crate is the binary, so one invocation proves the whole model:
@@ -126,23 +118,12 @@ fn a_second_firmware_reuses_the_same_definitions() {
     release_links("nucleo-f401re-beacon");
 }
 
-/// A second HAL, and a Cortex-M7. The task crate pattern is the same; the HAL's
-/// API is not, which is the point of a HAL-specific crate.
-#[test]
-#[ignore = "cross-compiles; run with --ignored"]
-fn a_task_crate_for_another_hal_checks_independently() {
-    checks_standalone(
-        "examples/tasks/stm32h7-timer",
-        &["--features", "stm32h753v"],
-    );
-}
-
-/// The first firmware here that is not an STM32F4: a different HAL, a different
-/// PAC path, and a part with more memory regions than the pair `cortex-m-rt`
-/// requires. It reuses `report` from the portable crate unchanged.
+/// The first firmware here that is not an STM32F4: another chip family, a
+/// Cortex-M7, and a part with more memory regions than the pair `cortex-m-rt`
+/// requires. It selects `blink` and `report` from the portable crate unchanged.
 #[test]
 #[ignore = "cross-compiles and links; run with --ignored"]
-fn a_firmware_on_another_hal_links() {
+fn a_firmware_on_another_family_links() {
     release_links("nucleo-h753zi");
 }
 
@@ -249,7 +230,7 @@ pub fn on_idle(cx: on_idle::Context) {
 }
 
 ferroforge::app! {
-    device = stm32f4xx_hal::pac,
+    device = ferrohal_stm32::device,
     dispatchers = [USART1],
 
     use rtic_monotonics::systick::prelude::*;
