@@ -187,38 +187,10 @@ impl Member {
     }
 }
 
-/// `#[ferroforge::group(spawn = [frame = parse])]`: which of the members'
-/// outgoing calls the group wires to another member. Every other call is left
-/// for the firmware to bind.
-pub struct GroupArguments {
-    spawn: Vec<Rebind>,
-}
-
-impl Parse for GroupArguments {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let mut spawn = Vec::new();
-        while !input.is_empty() {
-            let key: Ident = input.parse()?;
-            input.parse::<Token![=]>()?;
-            match key.to_string().as_str() {
-                "spawn" => spawn = bracketed_list(input)?,
-                other => {
-                    return Err(syn::Error::new(
-                        key.span(),
-                        format!(
-                            "unknown group argument `{other}`; a group wires `spawn` \
-                             between its members, and the firmware sets the rest"
-                        ),
-                    ));
-                }
-            }
-            if !input.is_empty() {
-                input.parse::<Token![,]>()?;
-            }
-        }
-        Ok(Self { spawn })
-    }
-}
+/// `#[ferroforge::group(..)]`'s arguments: the calls wired between members,
+/// and the group's contract, both parsed by `ferroforge-contracts` so a host
+/// tool reads them exactly as the macro does.
+pub use ferroforge_contracts::GroupArguments;
 
 /// `#[ferroforge::group]`: the module unchanged, plus an exported
 /// `macro_rules!` of the same name holding its members.
@@ -236,6 +208,18 @@ pub fn define(arguments: GroupArguments, module: ItemMod) -> syn::Result<TokenSt
         ));
     };
     let name = &module.ident;
+    arguments.contract.validate(name.span())?;
+    let contract = &arguments.contract;
+    let wires: Vec<Rebind> = arguments
+        .spawn
+        .iter()
+        .map(|wire| Rebind {
+            requirement: wire.call.clone(),
+            target: wire.task.clone(),
+        })
+        .collect();
+    // Each direct member's kind, for the contract's vector check.
+    let mut kinds: Vec<(Ident, bool)> = Vec::new();
 
     let mut members: Vec<Member> = Vec::new();
     // Where each included group is, and the name its copy goes under: none
@@ -262,11 +246,12 @@ pub fn define(arguments: GroupArguments, module: ItemMod) -> syn::Result<TokenSt
                     _ => attribute.parse_args()?,
                 };
                 let fn_name = &function.sig.ident;
+                kinds.push((fn_name.clone(), function.sig.asyncness.is_none()));
                 members.push(member(
                     &task,
                     &function.sig,
                     syn::parse_quote!(self::#fn_name),
-                    &arguments.spawn,
+                    &wires,
                     &mut aliases,
                 ));
             }
@@ -293,7 +278,7 @@ pub fn define(arguments: GroupArguments, module: ItemMod) -> syn::Result<TokenSt
 
     // A wire may name a member of an included group, which only `app!` sees;
     // with nothing included, every wire must land here.
-    for wire in &arguments.spawn {
+    for wire in &wires {
         if includes.is_empty() && !members.iter().any(|m| m.name() == &wire.target) {
             return Err(syn::Error::new(
                 wire.target.span(),
@@ -325,6 +310,8 @@ pub fn define(arguments: GroupArguments, module: ItemMod) -> syn::Result<TokenSt
         }
     }
 
+    check_contract(contract, &members, &kinds, includes.is_empty())?;
+
     let emitted = members.iter().map(Member::emit);
     let mut module = module.clone();
 
@@ -352,21 +339,118 @@ pub fn define(arguments: GroupArguments, module: ItemMod) -> syn::Result<TokenSt
         #[doc(hidden)]
         pub use crate as __ff_crate;
     });
+    // The constructor must exist where the contract says, so a tool reading
+    // the contract never names a function that is not there.
+    if let Some(constructor) = &contract.constructor {
+        aliases.push(quote! {
+            #[doc(hidden)]
+            #[allow(unused_imports)]
+            use #constructor as _;
+        });
+    }
     if let Some((_, items)) = &mut module.content {
         for alias in aliases {
             items.push(syn::parse2(alias)?);
         }
     }
-    let callback = callback(
-        name,
-        quote!(#(#included)*),
-        &arguments.spawn,
-        quote!(#(#emitted)*),
-    );
+    let callback = callback(name, quote!(#(#included)*), &wires, quote!(#(#emitted)*));
     Ok(quote! {
         #module
         #callback
     })
+}
+
+/// The contract against the members defined here: each vector served by a
+/// hardware member, and each resource a member leaves to the firmware listed,
+/// in its category. With nothing included, the members here are all there
+/// are, so the contract must also list nothing more than they need.
+fn check_contract(
+    contract: &ferroforge_contracts::GroupContract,
+    members: &[Member],
+    kinds: &[(Ident, bool)],
+    complete: bool,
+) -> syn::Result<()> {
+    if contract.is_empty() {
+        return Ok(());
+    }
+    for vector in &contract.vectors {
+        match kinds.iter().find(|(name, _)| name == &vector.member) {
+            Some((_, true)) => {}
+            Some((_, false)) => {
+                return Err(syn::Error::new(
+                    vector.member.span(),
+                    format!(
+                        "`{}` is a software task; only a hardware task (`fn`) serves a vector",
+                        vector.member
+                    ),
+                ));
+            }
+            None if complete => {
+                return Err(syn::Error::new(
+                    vector.member.span(),
+                    format!("`{}` is not a task in this group", vector.member),
+                ));
+            }
+            None => {}
+        }
+    }
+    let category = |shared: bool| if shared { "shared" } else { "local" };
+    for member in members {
+        for (needed, shared) in member
+            .shared
+            .iter()
+            .map(|r| (r, true))
+            .chain(member.local.iter().map(|r| (r, false)))
+        {
+            let listed = if shared {
+                &contract.shared
+            } else {
+                &contract.local
+            };
+            if !listed.iter().any(|r| r.name == needed.target) {
+                return Err(syn::Error::new(
+                    member.name().span(),
+                    format!(
+                        "`{}` needs the {} resource `{}`, which the contract's `{}` \
+                         does not list; whoever selects the group declares only \
+                         what the contract lists",
+                        member.name(),
+                        category(shared),
+                        needed.target,
+                        category(shared),
+                    ),
+                ));
+            }
+        }
+    }
+    if complete {
+        for (resource, shared) in contract
+            .shared
+            .iter()
+            .map(|r| (r, true))
+            .chain(contract.local.iter().map(|r| (r, false)))
+        {
+            let used = members.iter().any(|member| {
+                let list = if shared {
+                    &member.shared
+                } else {
+                    &member.local
+                };
+                list.iter().any(|r| r.target == resource.name)
+            });
+            if !used {
+                return Err(syn::Error::new(
+                    resource.name.span(),
+                    format!(
+                        "no member needs the {} resource `{}`",
+                        category(shared),
+                        resource.name
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The exported `macro_rules!` that hands a group's members to `app!`.
@@ -1633,6 +1717,72 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(error.contains("both need a local called `uart`"), "{error}");
+    }
+
+    const PORT: &str = "pub mod port {
+        #[ferroforge::task(shared = [uart], bounds = [uart: Service])]
+        pub fn on_uart(cx: on_uart::Context) {}
+        #[ferroforge::task(shared = [uart], bounds = [uart: Service])]
+        pub fn on_rx_dma(cx: on_rx_dma::Context) {}
+        #[ferroforge::task(spawn = [])]
+        pub async fn reader(cx: reader::Context) {}
+    }";
+    const PORT_CONTRACT: &str = "slots = [instance: U, rx_dma: RxD],
+        vectors = [on_uart = instance, on_rx_dma = rx_dma],
+        shared = [uart: Uart<U, RxD>], constructor = new";
+
+    #[test]
+    fn a_contract_is_accepted_and_its_constructor_must_exist() {
+        let output = defined(PORT_CONTRACT, PORT).unwrap();
+        assert!(output.contains("use new as _ ;"), "{output}");
+    }
+
+    #[test]
+    fn a_contract_vector_is_served_by_a_hardware_member() {
+        let error = defined(
+            &PORT_CONTRACT.replace("on_rx_dma = rx_dma", "reader = rx_dma"),
+            PORT,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("`reader` is a software task"), "{error}");
+        let error = defined(
+            &PORT_CONTRACT.replace("on_rx_dma = rx_dma", "on_tx = rx_dma"),
+            PORT,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("`on_tx` is not a task in this group"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_contract_lists_every_resource_and_nothing_more() {
+        let error = defined(
+            &PORT_CONTRACT.replace(
+                "shared = [uart: Uart<U, RxD>]",
+                "local = [uart: Uart<U, RxD>]",
+            ),
+            PORT,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("needs the shared resource `uart`"),
+            "{error}"
+        );
+        let error = defined(
+            &PORT_CONTRACT.replace("Uart<U, RxD>]", "Uart<U, RxD>, spare: u8]"),
+            PORT,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("no member needs the shared resource `spare`"),
+            "{error}"
+        );
     }
 
     #[test]
