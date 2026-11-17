@@ -40,10 +40,18 @@ crates that read time. A firmware counts on SysTick, which every backend builds
 features the backend supplies. Specified in [task
 authoring](architecture.md#task-authoring) and [the CLI](workflow.md#the-cli).
 
-**`ferroforge-stm32f4` deferred, 2026-09-26.** ferro-wasp uses its own STM32F4
-helper, `ferrowasp-stm32f4`, not a FerroForge one. [G2b](governing-requirements.md)
-is unchanged and the crate it names is still owed, but no consumer is waiting
-for it ([the STM32F4 helper](implementation-plan.md#the-stm32f4-helper)).
+**A group states its contract, 2026-11-17.** A group may declare the slots it
+is built from by role, which member serves which slot's vector, the resources
+it leaves to the firmware with their types, and its constructor, so a tool can
+read it from source through `ferroforge-contracts` and select it without
+knowing which group it is. The content is the FerroSmith design record's
+(v3, 6.1); this syntax is the first cut, settled on `ferroforge-stm32`'s
+`uart_port`. Specified in [group contracts](architecture.md#group-contracts).
+
+**`ferroforge-stm32` replaces `ferroforge-stm32f4`, 2026-11-17.** The helper
+[G2b](governing-requirements.md) names is STM32-wide and built on FerroHAL, in
+its own repository, holding the hardware-port groups and their constructors.
+It supersedes the 2026-09-26 deferral of `ferroforge-stm32f4`.
 
 **The firmware owns what goes into the files the CLI writes, 2026-09-26.** The
 two open CLI decisions are settled the same way, because they were the same
@@ -228,9 +236,9 @@ receive task on `DMA2_STREAM3`, the `TIM3` timer task on `TIM2` - and that is
 not a gap, because plain RTIC accepts it too. Specified in
 [architecture](architecture.md#what-checking-guarantees).
 
-**Next open point:** none. [Remaining work](implementation-plan.md) holds no
-undecided design; the STM32F4 helper [G2b](governing-requirements.md) names is
-deferred, and nothing waits on it.
+**Next open point:** the rest of a group contract - buffers, configuration
+fields and optional members - to be settled on the next port group
+([remaining work](implementation-plan.md#group-contracts)).
 
 ## Binding Decisions Carried Forward
 
@@ -249,6 +257,7 @@ the rule.
 | Task kind follows the signature: `async fn` software, `fn` hardware with a composition-supplied interrupt | [architecture](architecture.md#task-authoring) |
 | Native HAL init, authored in the firmware and never moved | [architecture](architecture.md#firmware-composition) |
 | Task groups select tasks that only work as a set; priorities and interrupts stay the firmware's | [architecture](architecture.md#task-groups) |
+| A group may state its contract: slots, vectors, typed resources, constructor | [architecture](architecture.md#group-contracts) |
 | A published version never changes; a breaking change is a new minor version under 0.x | [workflow](workflow.md#release) |
 | Build only the coverage concrete uses need; the final target build remains the verification | [architecture](architecture.md#incremental-coverage) |
 | Cargo manifests are the source of dependency requirements | [dependencies](dependencies.md#where-requirements-live) |

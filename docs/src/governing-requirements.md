@@ -3,7 +3,7 @@
 FerroForge composes reusable RTIC tasks and project-owned initialization into a
 real RTIC firmware application.
 
-Agreed direction, updated 2026-09-29. This document is limited to two pages
+Agreed direction, updated 2026-11-17. This document is limited to two pages
 maximum.
 
 **Authority.** `AGENTS.md` in the repository root defines the authority order and
@@ -23,8 +23,9 @@ it. Implementation status does not change the requirements.
      CLI to emit target files and scaffold a firmware manifest, not a dependency
      of the firmware, and it is independent of project tasks.
    - **G2b:** HAL helper libraries are separate from backends.
-     `ferroforge-stm32f4` is the FerroForge-oriented STM32F4 helper, sharing
-     helpers/types between init and hardware tasks.
+     `ferroforge-stm32` is the FerroForge-oriented STM32 helper, built on
+     FerroHAL: it holds the hardware-port task groups and their constructors,
+     sharing helpers/types between init and hardware tasks.
 3. **G3 - One task model.** Hardware and software tasks share the same authoring
    and composition model. Hardware tasks require an interrupt binding;
    software tasks do not.

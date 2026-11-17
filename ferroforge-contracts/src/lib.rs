@@ -1,11 +1,20 @@
-//! What a task definition declares, parsed and checked for the macros.
+//! What a task definition and a task group declare, parsed and checked for
+//! the macros and for host tools.
 //!
 //! `#[task]` reads a definition's arguments and signature through this crate
 //! and checks their structure - duplicate names, a missing type, an attribute
-//! out of place - before anything is expanded. It reads declarations, never
-//! task bodies, and depends on no HAL.
+//! out of place - before anything is expanded. `#[group]` reads its arguments,
+//! the group's contract among them, the same way, and [`groups`] lets a host
+//! tool read every group in a source file. It reads declarations, never
+//! bodies, and depends on no HAL.
 
 #![deny(missing_docs)]
+
+mod group;
+
+pub use group::{
+    GroupArguments, GroupContract, GroupDeclaration, GroupMember, Slot, VectorRole, Wire, groups,
+};
 
 use std::collections::BTreeSet;
 
