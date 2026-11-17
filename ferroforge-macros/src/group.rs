@@ -353,7 +353,21 @@ pub fn define(arguments: GroupArguments, module: ItemMod) -> syn::Result<TokenSt
             items.push(syn::parse2(alias)?);
         }
     }
-    let callback = callback(name, quote!(#(#included)*), &wires, quote!(#(#emitted)*));
+    let pends: Vec<Rebind> = contract
+        .pends
+        .iter()
+        .map(|pend| Rebind {
+            requirement: pend.name.clone(),
+            target: pend.member.clone(),
+        })
+        .collect();
+    let callback = callback(
+        name,
+        quote!(#(#included)*),
+        &wires,
+        &pends,
+        quote!(#(#emitted)*),
+    );
     Ok(quote! {
         #module
         #callback
@@ -392,6 +406,42 @@ fn check_contract(
                 ));
             }
             None => {}
+        }
+    }
+    for pend in &contract.pends {
+        match kinds.iter().find(|(name, _)| name == &pend.member) {
+            Some((_, true)) => {}
+            Some((_, false)) => {
+                return Err(syn::Error::new(
+                    pend.member.span(),
+                    format!(
+                        "`{}` is a software task; a pend names a hardware task",
+                        pend.member
+                    ),
+                ));
+            }
+            None if complete => {
+                return Err(syn::Error::new(
+                    pend.member.span(),
+                    format!("`{}` is not a task in this group", pend.member),
+                ));
+            }
+            None => {}
+        }
+    }
+    for member in members {
+        for needed in member.shared.iter().chain(&member.local) {
+            if contract.handles.iter().any(|h| h.name == needed.target) {
+                return Err(syn::Error::new(
+                    member.name().span(),
+                    format!(
+                        "`{}` names the handle `{}`; a handle goes to a task outside \
+                         the group, which the firmware chooses",
+                        member.name(),
+                        needed.target
+                    ),
+                ));
+            }
         }
     }
     let category = |shared: bool| if shared { "shared" } else { "local" };
@@ -470,6 +520,7 @@ fn callback(
     name: &Ident,
     included: TokenStream,
     wires: &[Rebind],
+    pends: &[Rebind],
     members: TokenStream,
 ) -> TokenStream {
     let macro_name = callback_name(name);
@@ -483,6 +534,7 @@ fn callback(
                     @group $instance from #name {
                         #included
                         spawn = [#(#wires),*];
+                        pends = [#(#pends),*];
                         #members
                     }
                 }
@@ -583,7 +635,7 @@ pub(crate) fn solo(task: &TaskArguments, function: &syn::ItemFn) -> (TokenStream
         pub use crate as __ff_crate;
         #(#aliases)*
     };
-    let beside = callback(name, TokenStream::new(), &[], member.emit());
+    let beside = callback(name, TokenStream::new(), &[], &[], member.emit());
     (inside, beside)
 }
 
@@ -721,6 +773,8 @@ pub(crate) struct GroupDefinition {
     includes: Vec<(Path, Ident, Option<Ident>)>,
     /// Calls this group wires to a member, which may be an included group's.
     wires: Vec<Rebind>,
+    /// Functions to generate per selection, each pending a member's vector.
+    pends: Vec<Rebind>,
     members: Vec<Member>,
 }
 
@@ -762,6 +816,17 @@ impl Parse for GroupDefinition {
         content.parse::<Token![=]>()?;
         let wires = bracketed_list(&content)?;
         content.parse::<Token![;]>()?;
+        // Optional, so a callback from a crate built before pends reads.
+        let mut pends = Vec::new();
+        if content.peek(Ident) {
+            let keyword: Ident = content.parse()?;
+            if keyword != "pends" {
+                return Err(syn::Error::new(keyword.span(), "expected `pends`"));
+            }
+            content.parse::<Token![=]>()?;
+            pends = bracketed_list(&content)?;
+            content.parse::<Token![;]>()?;
+        }
         let mut members = Vec::new();
         while !content.is_empty() {
             members.push(content.parse()?);
@@ -771,6 +836,7 @@ impl Parse for GroupDefinition {
             from,
             includes,
             wires,
+            pends,
             members,
         })
     }
@@ -1190,12 +1256,14 @@ pub(crate) fn instances(
     group: &GroupInstance,
     definitions: &[&GroupDefinition],
     uses: &[&ItemUse],
+    device: &Path,
 ) -> syn::Result<(Vec<Instance>, TokenStream)> {
     // Each group reached contributes its members, with paths made absolute
     // against its module and every name prefixed with its copy names. The
     // same group merged twice at one level is still one set of members.
     let mut owned: Vec<Member> = Vec::new();
     let mut wires: Vec<Rebind> = Vec::new();
+    let mut pends: Vec<Rebind> = Vec::new();
     for reached in group_modules(group, definitions, uses) {
         let definition = definitions
             .iter()
@@ -1205,6 +1273,10 @@ pub(crate) fn instances(
         wires.extend(definition.wires.iter().map(|wire| Rebind {
             requirement: reached.prefixed(&wire.requirement),
             target: reached.prefixed(&wire.target),
+        }));
+        pends.extend(definition.pends.iter().map(|pend| Rebind {
+            requirement: reached.prefixed(&pend.requirement),
+            target: reached.prefixed(&pend.target),
         }));
         for member in &definition.members {
             let mut member = member.clone();
@@ -1454,6 +1526,34 @@ pub(crate) fn instances(
     });
     // Nothing else in the expansion names `from`, so this keeps an import
     // that exists only to spell it from being reported as unused.
+    // Each pend is a function in the selection's module that pends the
+    // vector the firmware bound its member to, so the constructor can be
+    // handed it without the firmware restating the interrupt.
+    let mut pend_fns = Vec::new();
+    for pend in &pends {
+        let Some(binds) = group
+            .tasks
+            .iter()
+            .find(|settings| settings.member == pend.target)
+            .and_then(|settings| settings.binds.as_ref())
+        else {
+            return Err(syn::Error::new(
+                group.from.span(),
+                format!(
+                    "this group's `{}` pends `{}`, which is not bound to a vector here",
+                    pend.requirement, pend.target
+                ),
+            ));
+        };
+        let name = &pend.requirement;
+        let interrupt = &binds.segments.last().expect("a vector has a name").ident;
+        pend_fns.push(quote! {
+            /// Pends this selection's vector, generated from the group's `pends`.
+            pub fn #name() {
+                ::rtic::pend(#device::Interrupt::#interrupt);
+            }
+        });
+    }
     let from = &group.from;
     let cfgs = cfgs.collect::<Vec<_>>();
     let module = quote! {
@@ -1462,6 +1562,7 @@ pub(crate) fn instances(
         #(#cfgs)*
         pub mod #prefix {
             #(#aliases)*
+            #(#pend_fns)*
         }
     };
     Ok((instances, module))
@@ -1754,6 +1855,43 @@ mod tests {
     fn a_contract_is_accepted_and_its_constructor_must_exist() {
         let output = defined(PORT_CONTRACT, PORT).unwrap();
         assert!(output.contains("use new as _ ;"), "{output}");
+    }
+
+    #[test]
+    fn a_pend_names_a_hardware_member_and_a_handle_no_member() {
+        let contract = format!("{PORT_CONTRACT}, pends = [kick = on_uart]")
+            .replace("constructor = new()", "constructor = new(kick)");
+        let output = defined(&contract, PORT).unwrap();
+        assert!(output.contains("pends = [kick = on_uart]"), "{output}");
+        let error = defined(&format!("{PORT_CONTRACT}, handles = [uart: Handle]"), PORT)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("duplicate output"), "{error}");
+        let error = defined(
+            &PORT_CONTRACT.replace("shared = [uart: Uart<U, RxD>]", "handles = [uart: Handle]"),
+            PORT,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("names the handle `uart`"), "{error}");
+    }
+
+    #[test]
+    fn a_selection_gets_a_function_for_each_pend() {
+        let definition = "@group link from port {
+            spawn = []; pends = [kick = on_uart];
+            #[task(from = self::on_uart, shared = [uart = uart], local = [], spawn = [],
+                   config = [])] fn on_uart();
+        }";
+        let selection = "#[group(from = lib::port, shared = [uart = usart1])]
+            mod link { #[task(binds = USART1, priority = 3)] fn on_uart; }";
+        let output = application(selection, definition).unwrap();
+        assert!(
+            output.contains(
+                "pub fn kick () { :: rtic :: pend (chip :: pac :: Interrupt :: USART1) ; }"
+            ),
+            "{output}"
+        );
     }
 
     #[test]
