@@ -44,7 +44,8 @@ A [group contract](architecture.md#group-contracts) lists slots, vectors,
 resources, buffers, configuration fields and the constructor's arguments. The
 FerroSmith design record (v3, 6.1) also puts optional members behind a feature
 in it, which waits for a group that has one. `app!` reads none of the contract
-yet, and checks a selection as it always has.
+but a member serving every vector of its slots, which a selection may declare
+once per vector; otherwise it checks a selection as it always has.
 
 ## FerroForge 0.5
 

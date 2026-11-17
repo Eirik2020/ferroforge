@@ -6,6 +6,16 @@ what is left to build is in [remaining work](implementation-plan.md).
 
 ## Current Decisions
 
+**A member may serve every vector of its slots, 2026-11-17.** The owner's
+choice for `ferroforge-stm32`'s timer lane groups: FerroHAL's waveform
+generator is one driver whose lanes each raise their own DMA vector, and a
+board wires as many lanes as it has. `vectors = [on_lane_dma = [lanes]]` lets
+a selection declare that member once per vector, so one group and one
+contract cover any lane count. Selecting only the first lane through the
+contract and the rest by task, and one group per lane layout, were rejected:
+the first leaves vectors out of the contract a tool reads, the second needs a
+group per board. Specified in [group contracts](architecture.md#group-contracts).
+
 **A group contract states its buffers, configuration and constructor arguments,
 2026-11-17.** Settled on `ferroforge-stm32`'s SPI port. A buffer is a slice of
 an integer type, `#[dma] rx: [u8]`: its length belongs to whoever selects the

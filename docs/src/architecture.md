@@ -316,6 +316,15 @@ pub mod uart_port { .. }
 - A vector names a hardware member and the slot whose interrupt it serves.
   The interrupt's name and the member's priority remain the firmware's, as for
   any member.
+- A slot may carry several interrupts, such as a timer's DMA lanes, one
+  stream each. `on_lane_dma = [lanes]` says the member serves every vector of
+  the listed slots, and the selection declares it once per vector, each with
+  its own `binds`: `motors_on_lane_dma_0`, `motors_on_lane_dma_1`, numbered in
+  declaration order, or plain `motors_on_lane_dma` when there is one. So one
+  group serves however many lanes a board wires, and its contract still names
+  every vector. The member must not need a local the firmware binds, because
+  each declaration is its own task; a member serving one vector stays declared
+  once, and another selection of the group serves another instance.
 - `shared` and `local` list resources as a task lists them, typed, with no
   initial value: the constructor builds them. It returns a struct with one
   public field per resource, of the same name.
@@ -331,7 +340,7 @@ pub mod uart_port { .. }
   and fields share one set of names, so an argument names one thing.
 
 The contract is checked where the group is written. On its own: each slot,
-parameter and resource once, a vector naming a slot, a type on every resource,
+parameter and resource once, a vector naming its slots, a type on every resource,
 a constructor, and its arguments matching the buffers and fields. Against
 the members defined in the module: a vector served by a hardware member, and
 every resource a member leaves to the firmware listed in its category; with nothing included, nothing listed that no member needs. The
