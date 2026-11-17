@@ -267,7 +267,9 @@ by member, because which priorities fit and which interrupts are free depend on
 everything else the firmware runs.
 
 - Every public task is also a group of one, so a group includes a single task
-  by name.
+  by name. A task's or group's name is unique within its crate: each
+  exports its callback at the crate's root, and a proc macro cannot learn its
+  own module, so two of one name collide, with a callback name that says so.
 - A `pub use` may brace and nest its imports, with `self` and renames, and
   includes what the same imports one per line would: `pub use super::{light
   as heartbeat, report};` is two lines' worth. A name starting with an

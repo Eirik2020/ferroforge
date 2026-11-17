@@ -20,6 +20,14 @@ its frame is the device's. Optional members stay open until a group has one,
 rather than fixing a syntax with nothing to prove it on. Specified in [group
 contracts](architecture.md#group-contracts).
 
+**Task and group names are unique within a crate, 2026-11-17.** Each task and
+group exports its callback at its crate's root, and a proc macro cannot learn
+the module it is in, so two of one name in one crate collide. Naming callbacks
+by module path was weighed and rejected for now: it needs a new way for `app!`
+to find members across crates, for a rule a crate author meets once. The
+callback's name says the rule, since it is what rustc reports. Specified in
+[task groups](architecture.md#task-groups).
+
 **Task groups select tasks that only work as a set, 2026-09-29.** This reverses the
 removal of groups on 2026-09-18. That removal rested on three limits of the
 first design: a group named concrete peripherals and so could be selected only
