@@ -22,7 +22,10 @@
 //!   constructor's type parameter that carries each one. A tool fills a slot
 //!   with the type the board and chip say serves that role.
 //! - `vectors` says which member serves the interrupt of which slot, so the
-//!   member's `binds` follows from the slot's type.
+//!   member's `binds` follows from the slot's type. `member = [a, b]` says
+//!   the member serves every vector the listed slots carry, one each: a slot
+//!   such as a set of DMA lanes carries one vector per lane, and the
+//!   firmware selects the member once per vector.
 //! - `shared` and `local` list every resource the members leave for the
 //!   firmware to bind, with its type, written over the slots' parameters.
 //! - `buffers` lists the memory the constructor is handed, each a slice of an
@@ -32,6 +35,16 @@
 //! - `config` lists the constructor's other inputs, each typed and tagged with
 //!   the input layer that supplies its value: `board`, `profile`, `software`
 //!   or `platform`.
+//! - `memory` lists typed static memory the constructor is handed as
+//!   `&'static mut`, `queues: Queues`: the selection writes the type's
+//!   generic arguments, which size it, and a tool emits it in
+//!   `init(local = [..])` built by the type's `const fn new()`.
+//! - `handles` lists what the constructor builds for a task outside the
+//!   group, `handle: Handle`: the firmware moves each into whichever task it
+//!   chooses, at boot. No member may name one.
+//! - `pends` names a function FerroForge generates per selection that pends
+//!   one member's vector, `kick = on_tx_dma`. It is a constructor input of
+//!   type `fn()`, written `<selection>::kick` in the firmware.
 //! - `constructor` is the function that builds those resources, with its
 //!   arguments in order. Each argument is `rcc`, a slot passed on its own (a
 //!   part the HAL's wiring does not hold, such as a chip-select pin),
@@ -94,22 +107,61 @@ impl Parse for Slot {
     }
 }
 
-/// Which member serves which slot's interrupt, `on_rx_dma = rx_dma`.
+/// Which member serves which slot's interrupt, `on_rx_dma = rx_dma`, or
+/// every vector of a set of slots, `on_lane_dma = [first_lanes,
+/// second_lanes]`.
 #[derive(Clone, Debug)]
 pub struct VectorRole {
     /// The hardware member bound to the vector.
     pub member: Ident,
-    /// The slot whose interrupt it is.
+    /// The slot whose interrupt it is; in the bracketed form, the first slot
+    /// listed.
     pub slot: Ident,
+    /// The bracketed form's slots, `slot` first, each carrying any number of
+    /// vectors: the member serves every one of them, and the firmware
+    /// selects it once per vector, each with its own `binds`. Empty for the
+    /// plain form, whose member serves exactly one vector.
+    pub each: Vec<Ident>,
+}
+
+impl VectorRole {
+    /// Every slot this vector names: `slot` alone, or the bracketed list.
+    pub fn slots(&self) -> &[Ident] {
+        match self.each.is_empty() {
+            true => core::slice::from_ref(&self.slot),
+            false => &self.each,
+        }
+    }
+
+    /// Whether the member serves every vector of its slots, `member = [..]`.
+    pub fn is_repeated(&self) -> bool {
+        !self.each.is_empty()
+    }
 }
 
 impl Parse for VectorRole {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let member = input.parse()?;
         input.parse::<Token![=]>()?;
+        if input.peek(syn::token::Bracket) {
+            let content;
+            let brackets = syn::bracketed!(content in input);
+            let each: Vec<Ident> = content
+                .parse_terminated(Ident::parse, Token![,])?
+                .into_iter()
+                .collect();
+            let Some(slot) = each.first().cloned() else {
+                return Err(Error::new(
+                    brackets.span.join(),
+                    "list the slots whose vectors the member serves, `[lanes]`",
+                ));
+            };
+            return Ok(Self { member, slot, each });
+        }
         Ok(Self {
             member,
             slot: input.parse()?,
+            each: Vec::new(),
         })
     }
 }
@@ -171,6 +223,65 @@ impl Parse for Buffer {
             element,
             dma,
             docs,
+        })
+    }
+}
+
+/// Typed memory or a handle, `queues: Queues`.
+#[derive(Clone, Debug)]
+pub struct Typed {
+    /// Its name, as the constructor's arguments or its result's fields use it.
+    pub name: Ident,
+    /// Its type, without the generic arguments a selection writes.
+    pub ty: syn::Type,
+    /// Its documentation.
+    pub docs: Vec<Attribute>,
+}
+
+impl Parse for Typed {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let mut docs = Vec::new();
+        for attribute in input.call(Attribute::parse_outer)? {
+            match &attribute.meta {
+                syn::Meta::NameValue(meta) if meta.path.is_ident("doc") => docs.push(attribute),
+                _ => {
+                    return Err(Error::new(
+                        attribute.span(),
+                        "memory and handles take documentation, nothing else",
+                    ));
+                }
+            }
+        }
+        let name = input.parse()?;
+        input.parse::<Token![:]>()?;
+        let ty: syn::Type = input.parse()?;
+        if !matches!(&ty, syn::Type::Path(path) if path.qself.is_none()) {
+            return Err(Error::new(
+                ty.span(),
+                "memory and handles are named types, `Queues`, so a tool can write them",
+            ));
+        }
+        Ok(Self { name, ty, docs })
+    }
+}
+
+/// A function FerroForge generates that pends one member's vector,
+/// `kick = on_tx_dma`.
+#[derive(Clone, Debug)]
+pub struct Pend {
+    /// Its name, as the constructor's arguments use it.
+    pub name: Ident,
+    /// The hardware member whose vector it pends.
+    pub member: Ident,
+}
+
+impl Parse for Pend {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let name = input.parse()?;
+        input.parse::<Token![=]>()?;
+        Ok(Self {
+            name,
+            member: input.parse()?,
         })
     }
 }
@@ -284,6 +395,12 @@ pub struct GroupContract {
     pub buffers: Vec<Buffer>,
     /// `config = [..]`: the constructor's other inputs, with their layers.
     pub config: Vec<ConfigField>,
+    /// `memory = [..]`: typed static memory the constructor is handed.
+    pub memory: Vec<Typed>,
+    /// `handles = [..]`: what the constructor builds for tasks outside it.
+    pub handles: Vec<Typed>,
+    /// `pends = [..]`: generated functions that pend a member's vector.
+    pub pends: Vec<Pend>,
     /// `constructor = ..(..)`: what builds the resources, relative to the
     /// group, and its arguments in order.
     pub constructor: Option<Constructor>,
@@ -299,6 +416,9 @@ impl GroupContract {
             && self.local.is_empty()
             && self.buffers.is_empty()
             && self.config.is_empty()
+            && self.memory.is_empty()
+            && self.handles.is_empty()
+            && self.pends.is_empty()
             && self.constructor.is_none()
     }
 
@@ -323,19 +443,55 @@ impl GroupContract {
             "a member serves one vector; select it again for another",
         )?;
         unique(
-            self.resources().map(|r| &r.name),
-            "duplicate resource; a resource is shared or local, once",
+            self.resources()
+                .map(|r| &r.name)
+                .chain(self.handles.iter().map(|h| &h.name)),
+            "duplicate output; a name is a shared or local resource or a handle, once",
         )?;
-        for vector in &self.vectors {
-            if !self
-                .slots
+        for pend in &self.pends {
+            let served = self
+                .vectors
                 .iter()
-                .any(|slot| identifier_key(&slot.role) == identifier_key(&vector.slot))
-            {
-                return Err(Error::new(
-                    vector.slot.span(),
-                    format!("`{}` is not one of this group's `slots`", vector.slot),
-                ));
+                .find(|v| identifier_key(&v.member) == identifier_key(&pend.member));
+            match served {
+                None => {
+                    return Err(Error::new(
+                        pend.member.span(),
+                        format!(
+                            "`{}` serves none of this group's `vectors`; a pend names a \
+                             member that does",
+                            pend.member
+                        ),
+                    ));
+                }
+                // A selection binds such a member to several vectors, so a
+                // pend naming it would not say which one to pend.
+                Some(vector) if vector.is_repeated() => {
+                    return Err(Error::new(
+                        pend.member.span(),
+                        format!(
+                            "`{}` serves every vector of its slots, so a pend naming it \
+                             names no one vector; a pend names a member serving one",
+                            pend.member
+                        ),
+                    ));
+                }
+                Some(_) => {}
+            }
+        }
+        for vector in &self.vectors {
+            unique(vector.slots().iter(), "a slot is listed once")?;
+            for named in vector.slots() {
+                if !self
+                    .slots
+                    .iter()
+                    .any(|slot| identifier_key(&slot.role) == identifier_key(named))
+                {
+                    return Err(Error::new(
+                        named.span(),
+                        format!("`{named}` is not one of this group's `slots`"),
+                    ));
+                }
             }
         }
         for resource in self.resources() {
@@ -386,13 +542,15 @@ impl GroupContract {
             .iter()
             .map(|b| &b.name)
             .chain(self.config.iter().map(|c| &c.name))
+            .chain(self.memory.iter().map(|m| &m.name))
+            .chain(self.pends.iter().map(|p| &p.name))
             .collect();
         unique(
             inputs
                 .iter()
                 .copied()
                 .chain(self.slots.iter().map(|slot| &slot.role)),
-            "duplicate input; a name is a slot, a buffer or a config field, once",
+            "duplicate input; a name is a slot, a buffer, a config field, memory or a pend, once",
         )?;
         for input in inputs
             .iter()
@@ -425,7 +583,7 @@ impl GroupContract {
                     argument.span(),
                     format!(
                         "`{argument}` is not `rcc`, `wiring`, one of this group's \
-                         `slots`, nor one of its `buffers` or `config`"
+                         `slots`, nor one of its `buffers`, `config`, `memory` or `pends`"
                     ),
                 ));
             }
@@ -477,6 +635,9 @@ impl Parse for GroupArguments {
                 "local" => contract.local = list(input)?,
                 "buffers" => contract.buffers = list(input)?,
                 "config" => contract.config = list(input)?,
+                "memory" => contract.memory = list(input)?,
+                "handles" => contract.handles = list(input)?,
+                "pends" => contract.pends = list(input)?,
                 "constructor" => contract.constructor = Some(input.parse()?),
                 other => {
                     return Err(Error::new(
@@ -484,8 +645,9 @@ impl Parse for GroupArguments {
                         format!(
                             "unknown group argument `{other}`; a group wires `spawn` \
                              between its members and may state its contract - \
-                             `slots`, `vectors`, `shared`, `local`, `buffers`, `config` \
-                             and `constructor` - and the firmware sets the rest"
+                             `slots`, `vectors`, `shared`, `local`, `buffers`, `config`, \
+                             `memory`, `handles`, `pends` and `constructor` - and the \
+                             firmware sets the rest"
                         ),
                     ));
                 }
@@ -718,6 +880,45 @@ mod tests {
     }
 
     #[test]
+    fn a_member_may_serve_every_vector_of_its_slots() {
+        let arguments = contract(
+            "slots = [first: A, second: B, first_lanes: LA, second_lanes: LB], \
+             vectors = [on_lane_dma = [first_lanes, second_lanes]], \
+             constructor = new(first, second, first_lanes, second_lanes)",
+        )
+        .unwrap();
+        let vector = &arguments.contract.vectors[0];
+        assert!(vector.is_repeated());
+        assert_eq!(vector.slot, "first_lanes");
+        let slots: Vec<String> = vector.slots().iter().map(ToString::to_string).collect();
+        assert_eq!(slots, ["first_lanes", "second_lanes"]);
+
+        let plain =
+            contract("slots = [instance: U], vectors = [on_uart = instance], constructor = new()")
+                .unwrap();
+        assert!(!plain.contract.vectors[0].is_repeated());
+        assert_eq!(plain.contract.vectors[0].slots().len(), 1);
+    }
+
+    #[test]
+    fn a_repeated_vector_names_its_slots_once_and_at_least_one() {
+        assert!(
+            refused("slots = [lanes: L], vectors = [on_lane = [lanes, irq]], constructor = new()")
+                .contains("`irq` is not one of this group's `slots`")
+        );
+        assert!(
+            refused(
+                "slots = [lanes: L], vectors = [on_lane = [lanes, lanes]], constructor = new()"
+            )
+            .contains("a slot is listed once")
+        );
+        assert!(
+            refused("slots = [lanes: L], vectors = [on_lane = []], constructor = new()")
+                .contains("list the slots")
+        );
+    }
+
+    #[test]
     fn a_contract_resource_states_its_type() {
         assert!(refused("shared = [uart], constructor = new()").contains("states its type"));
     }
@@ -731,7 +932,7 @@ mod tests {
     fn a_resource_is_listed_once() {
         assert!(
             refused("shared = [a: u8], local = [a: u8], constructor = new()")
-                .contains("duplicate resource")
+                .contains("duplicate output")
         );
     }
 
@@ -752,9 +953,7 @@ mod tests {
             .err()
             .unwrap()
             .to_string();
-        assert!(error.contains(
-            "`slots`, `vectors`, `shared`, `local`, `buffers`, `config` and `constructor`"
-        ));
+        assert!(error.contains("`slots`, `vectors`, `shared`, `local`, `buffers`, `config`,"));
     }
 
     #[test]
@@ -811,6 +1010,54 @@ mod tests {
         );
         let arguments = contract("buffers = [samples: [u16]], constructor = new(samples)").unwrap();
         assert!(!arguments.contract.buffers[0].dma);
+    }
+
+    #[test]
+    fn memory_handles_and_pends_are_read_and_checked() {
+        let arguments = contract(
+            "slots = [instance: U], vectors = [on_tx = instance], \
+             shared = [port: Port<U>], memory = [queues: Queues], \
+             handles = [handle: Handle], pends = [kick = on_tx], \
+             constructor = new(rcc, wiring, queues, kick)",
+        )
+        .unwrap();
+        let contract = arguments.contract;
+        assert_eq!(contract.memory[0].name, "queues");
+        assert_eq!(contract.handles[0].name, "handle");
+        assert_eq!(
+            (
+                contract.pends[0].name.to_string(),
+                contract.pends[0].member.to_string()
+            ),
+            ("kick".to_string(), "on_tx".to_string())
+        );
+        assert!(
+            refused("slots = [i: U], vectors = [on_tx = i], pends = [kick = on_rx], constructor = new(kick)")
+                .contains("`on_rx` serves none of this group's `vectors`")
+        );
+        assert!(
+            refused(
+                "slots = [l: L], vectors = [on_lane = [l]], pends = [kick = on_lane], \
+                 constructor = new(kick)"
+            )
+            .contains("names no one vector")
+        );
+        assert!(refused("memory = [q: Queues], constructor = new(rcc)").contains("leave out `q`"));
+        assert!(
+            refused(
+                "slots = [i: U], vectors = [on_tx = i], pends = [kick = on_tx], constructor = new()"
+            )
+            .contains("leave out `kick`")
+        );
+        assert!(
+            refused("shared = [h: u8], handles = [h: Handle], constructor = new()")
+                .contains("duplicate output")
+        );
+        assert!(refused("handles = [h: [u8; 4]], constructor = new()").contains("named types"));
+        assert!(
+            refused("memory = [q: Queues], config = [q: u8 @ board], constructor = new(q)")
+                .contains("duplicate input")
+        );
     }
 
     #[test]

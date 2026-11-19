@@ -319,6 +319,15 @@ pub mod uart_port { .. }
 - A vector names a hardware member and the slot whose interrupt it serves.
   The interrupt's name and the member's priority remain the firmware's, as for
   any member.
+- A slot may carry several interrupts, such as a timer's DMA lanes, one
+  stream each. `on_lane_dma = [lanes]` says the member serves every vector of
+  the listed slots, and the selection declares it once per vector, each with
+  its own `binds`: `motors_on_lane_dma_0`, `motors_on_lane_dma_1`, numbered in
+  declaration order, or plain `motors_on_lane_dma` when there is one. So one
+  group serves however many lanes a board wires, and its contract still names
+  every vector. The member must not need a local the firmware binds, because
+  each declaration is its own task; a member serving one vector stays declared
+  once, and another selection of the group serves another instance.
 - `shared` and `local` list resources as a task lists them, typed, with no
   initial value: the constructor builds them. It returns a struct with one
   public field per resource, of the same name.
@@ -327,16 +336,32 @@ pub mod uart_port { .. }
   `#[dma]` marks one that must sit in memory the DMA can reach.
 - A configuration field is a typed constructor input with the layer that
   supplies its value: `board`, `profile`, `software` or `platform`.
+- `memory = [queues: Queues]` is typed static memory the constructor takes
+  as `&'static mut`. The selection writes the type's generic arguments,
+  which size it, and a tool emits it in `init(local = [..])` built by the
+  type's `const fn new()`.
+- `handles = [handle: Handle]` is what the constructor builds for a task
+  outside the group. The constructor's result has a public field for it;
+  the firmware moves it into whichever task it chooses, at boot. No member
+  may name a handle.
+- `pends = [kick = on_tx_dma]` asks FerroForge to generate, per selection,
+  a function that pends the vector the firmware bound that member to. It is
+  a constructor input of type `fn()`; the firmware passes
+  `<selection>::kick`, so the interrupt is written once, on the member. A
+  pend names a member serving one vector: one serving every vector of its
+  slots is bound to several, and a pend would not say which.
 - The constructor lists its arguments in order, each `rcc`, a slot passed on
   its own (a part the HAL's wiring does not hold, such as a chip-select pin),
   `wiring` (every other slot, as the HAL's wiring), a buffer or a
-  configuration field, every buffer and field exactly once. Slots, buffers
+  configuration field, memory or a pend, every input exactly once. Slots, buffers
   and fields share one set of names, so an argument names one thing.
 
 The contract is checked where the group is written. On its own: each slot,
-parameter and resource once, a vector naming a slot, a type on every resource,
-a constructor, and its arguments matching the buffers and fields. Against
-the members defined in the module: a vector served by a hardware member, and
+parameter, resource and handle once, a vector naming its slots, a type on every
+resource, a pend naming a member that serves one vector, a constructor, and its
+arguments matching the buffers, fields, memory and pends. Against the members
+defined in the module: a vector and a pend served by a hardware member, no
+member naming a handle, and
 every resource a member leaves to the firmware listed in its category; with nothing included, nothing listed that no member needs. The
 module imports the constructor, so a contract naming a missing function does not
 compile. A group without these arguments means what it always did, and `app!`

@@ -6,6 +6,28 @@ what is left to build is in [remaining work](implementation-plan.md).
 
 ## Current Decisions
 
+**A group contract states memory, handles and pends, 2026-11-19.** Settled on
+`ferroforge-stm32`'s UART port, whose consumer owns handles (the owner's
+choice of that port's design, 2026-11-17): without these entries such a group
+could state no contract. `memory` is typed static memory the selection sizes,
+`handles` what the constructor builds for a task outside the group, and
+`pends` a function FerroForge generates per selection that pends one member's
+vector, so the firmware writes the interrupt once, on the member. The pend is
+`<device>::Interrupt::<vector>`, the enum RTIC itself unmasks through, so it
+assumes nothing RTIC does not. A pend names a member serving one vector,
+since a member serving every vector of its slots would leave it ambiguous.
+Specified in [group contracts](architecture.md#group-contracts).
+
+**A member may serve every vector of its slots, 2026-11-17.** The owner's
+choice for `ferroforge-stm32`'s timer lane groups: FerroHAL's waveform
+generator is one driver whose lanes each raise their own DMA vector, and a
+board wires as many lanes as it has. `vectors = [on_lane_dma = [lanes]]` lets
+a selection declare that member once per vector, so one group and one
+contract cover any lane count. Selecting only the first lane through the
+contract and the rest by task, and one group per lane layout, were rejected:
+the first leaves vectors out of the contract a tool reads, the second needs a
+group per board. Specified in [group contracts](architecture.md#group-contracts).
+
 **A group contract states its buffers, configuration and constructor arguments,
 2026-11-17.** Settled on `ferroforge-stm32`'s SPI port. A buffer is a slice of
 an integer type, `#[dma] rx: [u8]`: its length belongs to whoever selects the

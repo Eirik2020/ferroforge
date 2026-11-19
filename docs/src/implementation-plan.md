@@ -31,10 +31,17 @@ connected from one that is being talked to wrongly.
 ## Group Contracts
 
 A [group contract](architecture.md#group-contracts) lists slots, vectors,
-resources, buffers, configuration fields and the constructor's arguments. The
-FerroSmith design record (v3, 6.1) also puts optional members behind a feature
-in it, which waits for a group that has one. `app!` reads none of the contract
-yet, and checks a selection as it always has.
+resources, buffers, configuration fields, memory, handles, pends and the
+constructor's arguments. The FerroSmith design record (v3, 6.1) also puts
+optional members behind a feature in it, which waits for a group that has
+one. `app!` reads two parts of the contract: a member serving every vector of
+its slots, which a selection may declare once per vector, and the pends, for
+which it writes each selection's functions; otherwise it checks a selection as
+it always has.
+
+`memory` does not yet say which of its type's generic arguments size it, nor
+from which input, so a tool cannot write them; a firmware writes them by hand
+until a group shows what that form must hold.
 
 ## FerroForge 0.5
 
