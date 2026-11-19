@@ -1576,8 +1576,6 @@ pub(crate) fn instances(
         .attributes
         .iter()
         .filter(|attribute| attribute.path().is_ident("cfg"));
-    // Nothing else in the expansion names `from`, so this keeps an import
-    // that exists only to spell it from being reported as unused.
     // Each pend is a function in the selection's module that pends the
     // vector the firmware bound its member to, so the constructor can be
     // handed it without the firmware restating the interrupt.
@@ -1598,7 +1596,12 @@ pub(crate) fn instances(
             ));
         };
         let name = &pend.requirement;
-        let interrupt = &binds.segments.last().expect("a vector has a name").ident;
+        let Some(interrupt) = binds.segments.last().map(|segment| &segment.ident) else {
+            return Err(syn::Error::new(
+                binds.span(),
+                "a vector is named by an interrupt, `binds = USART1`",
+            ));
+        };
         pend_fns.push(quote! {
             /// Pends this selection's vector, generated from the group's `pends`.
             pub fn #name() {
@@ -1606,6 +1609,8 @@ pub(crate) fn instances(
             }
         });
     }
+    // Nothing else in the expansion names `from`, so this keeps an import
+    // that exists only to spell it from being reported as unused.
     let from = &group.from;
     let cfgs = cfgs.collect::<Vec<_>>();
     let module = quote! {

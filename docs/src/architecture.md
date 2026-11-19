@@ -347,7 +347,9 @@ pub mod uart_port { .. }
 - `pends = [kick = on_tx_dma]` asks FerroForge to generate, per selection,
   a function that pends the vector the firmware bound that member to. It is
   a constructor input of type `fn()`; the firmware passes
-  `<selection>::kick`, so the interrupt is written once, on the member.
+  `<selection>::kick`, so the interrupt is written once, on the member. A
+  pend names a member serving one vector: one serving every vector of its
+  slots is bound to several, and a pend would not say which.
 - The constructor lists its arguments in order, each `rcc`, a slot passed on
   its own (a part the HAL's wiring does not hold, such as a chip-select pin),
   `wiring` (every other slot, as the HAL's wiring), a buffer or a
@@ -355,9 +357,11 @@ pub mod uart_port { .. }
   and fields share one set of names, so an argument names one thing.
 
 The contract is checked where the group is written. On its own: each slot,
-parameter and resource once, a vector naming its slots, a type on every resource,
-a constructor, and its arguments matching the buffers and fields. Against
-the members defined in the module: a vector served by a hardware member, and
+parameter, resource and handle once, a vector naming its slots, a type on every
+resource, a pend naming a member that serves one vector, a constructor, and its
+arguments matching the buffers, fields, memory and pends. Against the members
+defined in the module: a vector and a pend served by a hardware member, no
+member naming a handle, and
 every resource a member leaves to the firmware listed in its category; with nothing included, nothing listed that no member needs. The
 module imports the constructor, so a contract naming a missing function does not
 compile. A group without these arguments means what it always did, and `app!`

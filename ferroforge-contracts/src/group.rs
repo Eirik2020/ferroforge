@@ -449,19 +449,34 @@ impl GroupContract {
             "duplicate output; a name is a shared or local resource or a handle, once",
         )?;
         for pend in &self.pends {
-            if !self
+            let served = self
                 .vectors
                 .iter()
-                .any(|v| identifier_key(&v.member) == identifier_key(&pend.member))
-            {
-                return Err(Error::new(
-                    pend.member.span(),
-                    format!(
-                        "`{}` serves none of this group's `vectors`; a pend names a \
-                         member that does",
-                        pend.member
-                    ),
-                ));
+                .find(|v| identifier_key(&v.member) == identifier_key(&pend.member));
+            match served {
+                None => {
+                    return Err(Error::new(
+                        pend.member.span(),
+                        format!(
+                            "`{}` serves none of this group's `vectors`; a pend names a \
+                             member that does",
+                            pend.member
+                        ),
+                    ));
+                }
+                // A selection binds such a member to several vectors, so a
+                // pend naming it would not say which one to pend.
+                Some(vector) if vector.is_repeated() => {
+                    return Err(Error::new(
+                        pend.member.span(),
+                        format!(
+                            "`{}` serves every vector of its slots, so a pend naming it \
+                             names no one vector; a pend names a member serving one",
+                            pend.member
+                        ),
+                    ));
+                }
+                Some(_) => {}
             }
         }
         for vector in &self.vectors {
@@ -1019,6 +1034,13 @@ mod tests {
         assert!(
             refused("slots = [i: U], vectors = [on_tx = i], pends = [kick = on_rx], constructor = new(kick)")
                 .contains("`on_rx` serves none of this group's `vectors`")
+        );
+        assert!(
+            refused(
+                "slots = [l: L], vectors = [on_lane = [l]], pends = [kick = on_lane], \
+                 constructor = new(kick)"
+            )
+            .contains("names no one vector")
         );
         assert!(refused("memory = [q: Queues], constructor = new(rcc)").contains("leave out `q`"));
         assert!(
